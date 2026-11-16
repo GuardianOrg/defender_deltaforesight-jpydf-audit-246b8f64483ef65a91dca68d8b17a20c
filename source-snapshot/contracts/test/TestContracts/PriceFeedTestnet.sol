@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.24;
+
+import "./Interfaces/IPriceFeedTestnet.sol";
+import "./FreshJpyProvenance.sol";
+
+/*
+* PriceFeed placeholder for testnet and development. The price is simply set manually and saved in a state
+* variable. The contract does not connect to a live Chainlink price feed.
+*/
+contract PriceFeedTestnet is IPriceFeedTestnet, FreshJpyProvenance {
+    event LastGoodPriceUpdated(uint256 _lastGoodPrice);
+
+    uint256 private _price = 200 * 1e18;
+    uint256 private _urgentRedemptionPrice;
+    bool private _oracleFailure;
+    bool private _redemptionOracleFailure;
+
+    // --- Functions ---
+
+    // View price getter for simplicity in tests
+    function getPrice() external view override returns (uint256) {
+        return _price;
+    }
+
+    function lastGoodPrice() external view returns (uint256) {
+        return _price;
+    }
+
+    function fetchPrice() external override returns (uint256, bool) {
+        // Fire an event just like the mainnet version would.
+        // This lets the subgraph rely on events to get the latest price even when developing locally.
+        emit LastGoodPriceUpdated(_price);
+        return (_price, _oracleFailure);
+    }
+
+    function fetchRedemptionPrice() external override returns (uint256, bool) {
+        // Fire an event just like the mainnet version would.
+        // This lets the subgraph rely on events to get the latest price even when developing locally.
+        emit LastGoodPriceUpdated(_price);
+        return (_price, _oracleFailure || _redemptionOracleFailure);
+    }
+
+    function fetchUrgentRedemptionPrice() external override returns (uint256, bool) {
+        emit LastGoodPriceUpdated(_price);
+        return (_urgentRedemptionPrice == 0 ? _price : _urgentRedemptionPrice, _oracleFailure);
+    }
+
+    // Manual external price setter.
+    function setPrice(uint256 price) external returns (bool) {
+        _price = price;
+        return true;
+    }
+
+    function setUrgentRedemptionPrice(uint256 price) external {
+        _urgentRedemptionPrice = price;
+    }
+
+    function setOracleFailure(bool oracleFailure_) external {
+        _oracleFailure = oracleFailure_;
+    }
+
+    function setRedemptionOracleFailure(bool oracleFailure_) external {
+        _redemptionOracleFailure = oracleFailure_;
+    }
+}

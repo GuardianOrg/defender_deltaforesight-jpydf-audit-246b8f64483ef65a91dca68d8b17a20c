@@ -1,0 +1,20 @@
+{
+  "blockNumber": 25992608,
+  "vault": "0x133614490896bc02C774bc3399E4Db1B6D05a2CA",
+  "fields": {
+    "decimals": "18",
+    "virtualShares": "1000000000000 [1e12]",
+    "totalSupply": "300116927825392583453388 [3.001e23]",
+    "totalAssets": "301641529793 [3.016e11]",
+    "oneShareAssets": "0",
+    "oneShareRedeem": "0",
+    "deadShares": "1000000000000000000 [1e18]",
+    "performanceFeeTimelock": "0",
+    "managementFeeTimelock": "0",
+    "performanceFeeAbdicated": "false",
+    "managementFeeAbdicated": "false",
+    "managementRecipientTimelock": "0",
+    "performanceRecipientTimelock": "0",
+    "forcePenaltyTimelock": "0"
+  }
+}

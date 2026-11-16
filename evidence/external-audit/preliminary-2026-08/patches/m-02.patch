@@ -1,0 +1,473 @@
+diff --git a/contracts/src/Interfaces/ISkyUsdcSUsdsConverter.sol b/contracts/src/Interfaces/ISkyUsdcSUsdsConverter.sol
+index a70cb11f..43f0f999 100644
+--- a/contracts/src/Interfaces/ISkyUsdcSUsdsConverter.sol
++++ b/contracts/src/Interfaces/ISkyUsdcSUsdsConverter.sol
+@@ -26,6 +26,10 @@ interface ISkyUsdcSUsdsConverter {
+         external
+         returns (uint256 usdcOut);
+ 
++    /// @notice Returns whether Sky explicitly halted the USDS-to-USDC route.
++    /// @dev Invalid fees and failures while reading the wrapper are not classified as a halt.
++    function isUsdsToUsdcRouteHalted() external view returns (bool);
++
+     /// @notice Returns a numeric quote only while the reverse route is valid.
+     /// @dev Reverts when Sky marks the route halted or reports an invalid fee;
+     ///      ordinary sub-USDC-atom rounding may still return zero.
+diff --git a/contracts/src/Strategies/SkyUsdcSUsdsConverter.sol b/contracts/src/Strategies/SkyUsdcSUsdsConverter.sol
+index d99f3b39..46d9f611 100644
+--- a/contracts/src/Strategies/SkyUsdcSUsdsConverter.sol
++++ b/contracts/src/Strategies/SkyUsdcSUsdsConverter.sol
+@@ -166,6 +166,10 @@ contract SkyUsdcSUsdsConverter is ISkyUsdcSUsdsConverter, ReentrancyGuard {
+         return _previewUsdsToUsdc(_maxUsdsIn, tout);
+     }
+ 
++    function isUsdsToUsdcRouteHalted() external view returns (bool) {
++        return psmWrapper.tout() == _HALTED;
++    }
++
+     function _previewUsdsToUsdc(uint256 _maxUsdsIn, uint256 _tout) internal pure returns (uint256 usdcOut) {
+         uint256 denominator = _USDC_TO_USDS_SCALE * (_WAD + _tout);
+         usdcOut = Math.mulDiv(_maxUsdsIn, _WAD, denominator);
+diff --git a/contracts/src/Strategies/SkyUsdcSUsdsStrategy.sol b/contracts/src/Strategies/SkyUsdcSUsdsStrategy.sol
+index b33eb97f..a4ad1ae7 100644
+--- a/contracts/src/Strategies/SkyUsdcSUsdsStrategy.sol
++++ b/contracts/src/Strategies/SkyUsdcSUsdsStrategy.sol
+@@ -215,8 +215,13 @@ contract SkyUsdcSUsdsStrategy is BaseStrategy {
+         uint256 usdsValue = _ownedSUsdsUsdsValue() + _ownIdleUsds;
+         if (usdsValue == 0) return 0;
+ 
+-        uint256 quotedUsdc = converter.previewUsdsToUsdc(usdsValue);
+         uint256 oneToOneUsdc = _usdsToUsdc(usdsValue);
++        if (converter.isUsdsToUsdcRouteHalted()) {
++            uint256 principalCached = _principal;
++            return oneToOneUsdc < principalCached ? oneToOneUsdc : principalCached;
++        }
++
++        uint256 quotedUsdc = converter.previewUsdsToUsdc(usdsValue);
+         return quotedUsdc < oneToOneUsdc ? quotedUsdc : oneToOneUsdc;
+     }
+ 
+diff --git a/contracts/test/ExternalAuditGas01BackingRatio.t.sol b/contracts/test/ExternalAuditGas01BackingRatio.t.sol
+index 98e53451..3183a7c8 100644
+--- a/contracts/test/ExternalAuditGas01BackingRatio.t.sol
++++ b/contracts/test/ExternalAuditGas01BackingRatio.t.sol
+@@ -47,6 +47,10 @@ contract ExternalAuditGas01SkyConverter is ISkyUsdcSUsdsConverter {
+         return ISkyLitePsmWrapper(address(0));
+     }
+ 
++    function isUsdsToUsdcRouteHalted() external pure returns (bool) {
++        return false;
++    }
++
+     function convertUsdcToUsds(uint256 usdcAmount, uint256 minUsdsOut, address receiver)
+         external
+         returns (uint256 usdsOut)
+diff --git a/contracts/test/SkyUsdcSUsdsConverter.t.sol b/contracts/test/SkyUsdcSUsdsConverter.t.sol
+index 2c795c28..d73313db 100644
+--- a/contracts/test/SkyUsdcSUsdsConverter.t.sol
++++ b/contracts/test/SkyUsdcSUsdsConverter.t.sol
+@@ -165,6 +165,17 @@ contract SkyUsdcSUsdsConverterTest is Test {
+         assertEq(converter.previewUsdsToUsdc(1e12 - 1), 0);
+     }
+ 
++    function test_RouteHaltStatusDistinguishesExplicitHaltFromInvalidFee() public {
++        wrapper.setFees(0, 0);
++        assertFalse(converter.isUsdsToUsdcRouteHalted(), "live route");
++
++        wrapper.setFees(0, HALTED);
++        assertTrue(converter.isUsdsToUsdcRouteHalted(), "explicit halt");
++
++        wrapper.setFees(0, 1e18 + 1);
++        assertFalse(converter.isUsdsToUsdcRouteHalted(), "invalid fee is not a halt");
++    }
++
+     function testFuzz_PreviewReturnsMaximumAffordableUsdc(uint128 budgetSeed, uint64 toutSeed) public {
+         uint256 budget = bound(uint256(budgetSeed), 0, 1e36);
+         uint256 tout = bound(uint256(toutSeed), 0, 1e18);
+diff --git a/contracts/test/SkyUsdcSUsdsStrategy.t.sol b/contracts/test/SkyUsdcSUsdsStrategy.t.sol
+index 42756669..7e1dd553 100644
+--- a/contracts/test/SkyUsdcSUsdsStrategy.t.sol
++++ b/contracts/test/SkyUsdcSUsdsStrategy.t.sol
+@@ -6,9 +6,13 @@ import "forge-std/Test.sol";
+ import "../src/CollateralVault.sol";
+ import "../src/DToken.sol";
+ import "../src/Interfaces/IDToken.sol";
++import "../src/Interfaces/IMainnetPriceFeed.sol";
+ import "../src/Interfaces/ISkyUsdcSUsdsConverter.sol";
+ import "../src/Interfaces/IStrategy.sol";
++import "../src/PriceFeeds/DFUSDCPriceFeed.sol";
++import "../src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "../src/Strategies/SkyUsdcSUsdsStrategy.sol";
++import "./TestContracts/ChainlinkOracleMock.sol";
+ import "./mocks/MockERC20.sol";
+ 
+ import "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+@@ -34,6 +38,14 @@ contract MockSUsdsVault is ERC4626 {
+     }
+ }
+ 
++contract M02MockBorrowerOperations {
++    bool public shutdownCalled;
++
++    function shutdownFromOracleFailure() external {
++        shutdownCalled = true;
++    }
++}
++
+ contract MockSkyUsdcUsdsConverter is ISkyUsdcSUsdsConverter {
+     using SafeERC20 for IERC20;
+ 
+@@ -42,6 +54,7 @@ contract MockSkyUsdcUsdsConverter is ISkyUsdcSUsdsConverter {
+     uint256 public feeBps;
+     uint256 public reverseRefund;
+     bool public previewShouldFail;
++    bool public routeHalted;
+ 
+     constructor(MockERC20 _usdc, MockERC20 _usds) {
+         usdc = _usdc;
+@@ -72,6 +85,14 @@ contract MockSkyUsdcUsdsConverter is ISkyUsdcSUsdsConverter {
+         previewShouldFail = _previewShouldFail;
+     }
+ 
++    function setRouteHalted(bool _routeHalted) external {
++        routeHalted = _routeHalted;
++    }
++
++    function isUsdsToUsdcRouteHalted() external view returns (bool) {
++        return routeHalted;
++    }
++
+     function convertUsdcToUsds(uint256 usdcAmount, uint256 minUsdsOut, address receiver)
+         external
+         returns (uint256 usdsOut)
+@@ -147,6 +168,81 @@ contract SkyUsdcSUsdsStrategyTest is Test {
+         assertEq(strategy.estimatedTotalUnderlying(), 1_000e6, "position remains intact");
+     }
+ 
++    function test_PricingRemainsAvailablePastCacheWhileSkyRouteHalted() public {
++        (CollateralVault vault, SkyUsdcSUsdsStrategy strategy,, MockERC20 usdc,, MockSkyUsdcUsdsConverter converter) =
++            _deploySkySetup();
++        _depositAndAllocate(vault, usdc, 1_000e6);
++
++        converter.setRouteHalted(true);
++        converter.setPreviewShouldFail(true);
++        vm.warp(block.timestamp + vault.strategyValuationMaxAge() + 1);
++
++        (uint256 haltedRatio, bool haltedAvailable) = vault.backingRatioForPricing();
++        assertEq(haltedRatio, 1e18, "explicit halt uses principal-capped one-to-one value");
++        assertTrue(haltedAvailable, "explicit halt does not expire into pricing unavailable");
++        assertEq(strategy.estimatedTotalUnderlying(), 1_000e6, "halt valuation bypasses unavailable quote");
++
++        converter.setRouteHalted(false);
++        vm.warp(block.timestamp + vault.strategyValuationMaxAge() + 1);
++        (uint256 failedRatio, bool failedAvailable) = vault.backingRatioForPricing();
++        assertEq(failedRatio, 0, "generic quote failure has no numeric fallback");
++        assertFalse(failedAvailable, "generic quote failure still fails closed after cache");
++
++        converter.setPreviewShouldFail(false);
++        (uint256 recoveredRatio, bool recoveredAvailable) = vault.backingRatioForPricing();
++        assertEq(recoveredRatio, 1e18, "live quote restores backing");
++        assertTrue(recoveredAvailable, "live quote restores availability");
++    }
++
++    function test_HaltedRouteValuationDoesNotRecognizeUnrealizedYield() public {
++        (
++            CollateralVault vault,
++            SkyUsdcSUsdsStrategy strategy,
++            MockSUsdsVault susdsVault,
++            MockERC20 usdc,
++            MockERC20 usds,
++            MockSkyUsdcUsdsConverter converter
++        ) = _deploySkySetup();
++        _depositAndAllocate(vault, usdc, 1_000e6);
++
++        usds.mint(address(susdsVault), 200e18);
++        converter.setRouteHalted(true);
++        converter.setPreviewShouldFail(true);
++
++        assertEq(strategy.estimatedTotalUnderlying(), 1_000e6, "halt valuation is capped at principal");
++        assertEq(strategy.realizedYield(), 0, "unrealized Sky yield is not recognized while exit is halted");
++    }
++
++    function test_PriceFeedDoesNotShutDownBranchAfterHaltedRouteCacheExpires() public {
++        (CollateralVault vault,,, MockERC20 usdc,, MockSkyUsdcUsdsConverter converter) = _deploySkySetup();
++        _depositAndAllocate(vault, usdc, 1_000e6);
++
++        converter.setRouteHalted(true);
++        converter.setPreviewShouldFail(true);
++        vm.warp(block.timestamp + vault.strategyValuationMaxAge() + 1);
++
++        ChainlinkOracleMock usdcUsd = new ChainlinkOracleMock();
++        usdcUsd.setDecimals(8);
++        usdcUsd.setPrice(1e8);
++        usdcUsd.setUpdatedAt(block.timestamp);
++
++        ChainlinkOracleMock jpyUsd = new ChainlinkOracleMock();
++        jpyUsd.setDecimals(8);
++        jpyUsd.setPrice(666_700);
++        jpyUsd.setUpdatedAt(block.timestamp);
++
++        JpyUsdRateProvider jpyRateProvider = new JpyUsdRateProvider(address(jpyUsd), 72 hours);
++        M02MockBorrowerOperations borrowerOperations = new M02MockBorrowerOperations();
++        DFUSDCPriceFeed feed = new DFUSDCPriceFeed(
++            address(usdcUsd), 24 hours, address(jpyRateProvider), address(vault), address(borrowerOperations)
++        );
++
++        (, bool failure) = feed.fetchPrice();
++        assertFalse(failure, "route halt is not an oracle failure");
++        assertFalse(borrowerOperations.shutdownCalled(), "branch remains live");
++        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary), "primary remains active");
++    }
++
+     function test_SendToVault_RedeemsSUsdsAndReturnsUsdc() public {
+         (CollateralVault vault, SkyUsdcSUsdsStrategy strategy,, MockERC20 usdc,,) = _deploySkySetup();
+         _depositAndAllocate(vault, usdc, 1_000e6);
+diff --git a/contracts/test/archive/SkyUsdcSUsdsYieldZapper.t.sol b/contracts/test/archive/SkyUsdcSUsdsYieldZapper.t.sol
+index d610a193..76912a81 100644
+--- a/contracts/test/archive/SkyUsdcSUsdsYieldZapper.t.sol
++++ b/contracts/test/archive/SkyUsdcSUsdsYieldZapper.t.sol
+@@ -64,6 +64,10 @@ contract MockUsdcUsdsConverter is ISkyUsdcSUsdsConverter {
+         return ISkyLitePsmWrapper(address(0));
+     }
+ 
++    function isUsdsToUsdcRouteHalted() external pure returns (bool) {
++        return false;
++    }
++
+     function convertUsdsToUsdc(uint256, uint256, address) external pure returns (uint256) {
+         revert("UNUSED");
+     }
+@@ -106,6 +110,10 @@ contract UnderPullUsdcUsdsConverter is ISkyUsdcSUsdsConverter {
+         return ISkyLitePsmWrapper(address(0));
+     }
+ 
++    function isUsdsToUsdcRouteHalted() external pure returns (bool) {
++        return false;
++    }
++
+     function convertUsdsToUsdc(uint256, uint256, address) external pure returns (uint256) {
+         revert("UNUSED");
+     }
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index e7f1062d..6adaa235 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -98,6 +98,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | V12 | 2026-07-14 | jpydf-v2 / codex/sky-usdc-usds-converter | `eed3edfa` (implementation) / `b789c6bd` (ledger correction) | forge 1.2.3-nightly local + GitHub Actions | Ethereum mainnet RPC (URL not recorded) | focused commands; Actions `29349413077` (full local / mainnet / deploy / parity / handover); Slither 0.10.2 audit config | Codex | PASS: converter 11 tests (9 unit + 2 mainnet fork), Strategy 13, Zapper 31, and deploy selector 32. Actions full local, mainnet fork, deploy wiring, parity drill, and handover passed. Confirmed official LitePSMWrapper token identity, USDC -> USDS -> USDC round trip, fee/halt and 6/18-decimal handling, reverse budget/refund, balance/allowance residue, Strategy actual-spend accounting, and concrete-adapter deploy binding. Slither reported no substantive converter finding. Coverage instrumentation fails on inherited test-tree stack/Yul depth limits, so it is separated from required Foundry tests as a non-blocking measurement |
+ | V13 | 2026-08-05 | jpydf-v2 / develop (docs worktree at origin/develop) | `629e1c05` | forge 1.7.1 local | none | `forge test --match-path 'test/MorphoV2*.t.sol'` (30 passed); `forge test --match-path test/DeployLiquity2StrategySelector.t.sol` (34 passed) | Claude | PASS: MorphoV2Strategy 29 tests, MorphoV2BackingRatio 1 test, deploy selector 34 tests. Confirmed hard-zero max\* operation, deposit rejection recovery (cap / receive gate / zero-share / lying return), fail-soft withdraw (liquidity short / send gate / mismatch / zero burn), donation exclusion, immediate loss reflection, staged emergency recovery with `maxShares` and donated-share recovery, bounded `forceDeallocate` penalty with `_ownShares` resync, self-only isolated frames, reentrancy blocking, and `morpho-v2` deploy binding with Day-1 branch policy |
+ | V21 | 2026-08-08 | jpydf-v2 / `fix/preaudit-morpho-pricing-rails` | `825e9674` | forge 1.7.1 local | none | affected 5 suites; fast PR gate; full local gate; `forge build --sizes`; `cloc 2.06`; `git diff --check` | Codex | PASS: affected 253, fast 1,536, full local 1,589; all with 0 failed / 0 skipped. Verified fee-on-transfer receiver delta, Strategy receipt/cache ambiguity, and unavailable/recovering Sky quotes. Vault runtime 23,047 bytes (margin 1,529); full body 5,219 nSLOC |
++| PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | none | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35, fast 1,547, all with 0 failed / 0 skipped. The price-feed integration regression failed before the fix and passed after remediation. Sky Strategy runtime 20,173 bytes (margin 4,403); converter runtime 5,596 bytes (margin 18,980) |
+ 
+ ---
+ 
+@@ -134,6 +135,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ - **IDs under verification** = 658 - open TBD. The Resolved / open / conditional / deferred breakdown of the 72 active TBD items (the archived §9B contributes a further 7, excluded) is governed by each document's TBD register; open gates are outside verification scope. `CORE-*` ID totals and verification status are governed by [Core-Requirements-Verification-Ledger.md](Core-Requirements-Verification-Ledger.md) and are not included in this ledger's active total.
+ - The "Verified" column is the number of IDs whose rows are all PASS or N/A. Update per campaign.
+ - **V21 update (2026-08-08)**: Remediated the additional variants from the cross-skill review. VAULT-FR-002 now tracks receiver delta, VAULT-FR-005 invalidates ambiguous declared/received cache state, ZAP-FR-006 / ZAP-SEC-005 cover fee-on-transfer minimums, and SKY-SEC-011 separates unavailable quotes from measured zero. The §9C dashboard had omitted existing SKY-SEC-008..010; reconciling those three plus new 011 changes 7→11 and adds four to active SEC / IDs / Verified.
++- **PRELIM-M02 update (2026-08-12)**: Refined SKY-SEC-011 for preliminary finding M-02. An explicit Sky reverse-route halt continues principal-capped 1:1 valuation without recognizing unrealized yield. Invalid fee, status-read failure, and every other quote failure remain fail-closed and are not inferred to be halts. Requirement and Verified totals are unchanged.
+ - **V10 update (2026-07-07)**: Added EFWEETH-SEC-014 and updated the active ID total from **615 to 616**. `WeETHWithdrawAdapter` is now included as first-party production source / audit scope and marked PASS based on Etherfi focused tests, deploy selector tests, build, and diff check.
+ - **V11 update (2026-07-07)**: Active ID total remains **616**. Added a DF-specific identity marker to `WeETHWithdrawAdapter` and marked the `EtherfiWeETHStrategy.initialize` marker-less ABI-compatible adapter rejection PASS based on focused tests, deploy selector tests, build, fmt, and diff check.
+ - **Artifact-boundary sync (2026-07-31)**: Added the existing missing `SYS-RISK-008`, the new `SYS-RISK-009`, and `ADR-007`, updating the active ID total from **616 to 619**. The rows remain Not run because operational Evidence has not been collected.
+@@ -848,7 +850,7 @@ Source of truth: [SkySUsdsStrategy.md](../../protocol/product/spec/strategies/Sk
+ | SKY-SEC-008 | Nonzero USDS conversion returning 0 USDC reverts and does not silently reduce tracked idle USDS | unit | ☑ | ☑ | `test_EmergencyConvertRevertsWhenUsdsDustWouldReturnZeroUsdc` | PASS(V9) | Sub-USDC USDS dust remains tracked in `_ownIdleUsds` until additional recovery or accumulation makes it convertible |
+ | SKY-SEC-009 | Converter token identity matches the route and deployment creates the audited concrete adapter | unit / integration | ☑ | ☑ | `test_ConstructorBindsWrapperTokens`; `test_MainnetFork_BindsCanonicalSkyWrapperAndTokens`; `test_MainnetFork_ExecutesRoundTripWhenRoutesAreActive`; `test_DeploySelector_DeploysSkyUsdcSUsdsStrategy` | PASS(V12) | Official wrapper identity and a live round trip were verified with `MAINNET_RPC_URL` |
+ | SKY-SEC-010 | Enforce the `tout`-inclusive USDS budget, refund unused USDS, and reduce idle accounting only by actual spend | unit | ☑ | ☑ | `test_ConvertUsdsToUsdc_UsesBudgetAndRefundsUnspentDust`; `test_PreviewUsdsToUsdc_AccountsForFeeFloorAtOneUsdcAtom`; `test_EmergencyConvertTracksActualUsdsSpentWhenConverterUsesBudget` | PASS(V12) | No unconvertible six-decimal USDC remainder is left in the adapter |
+-| SKY-SEC-011 | Do not classify halt / invalid-fee quote failure as measured zero; transition from fresh cache to pricing unavailable | unit | ☑ | ☑ | `test_PreviewAndConversionFailClosedWhenBuyRouteHaltedOrFeeInvalid`; `test_PricingUsesFreshCacheWhenSkyQuoteUnavailable` | PASS(V21) | Distinct from normal sub-atom floor zero; live valuation recovers automatically with the route |
++| SKY-SEC-011 | Continue principal-capped 1:1 valuation for an explicit route halt; invalid fee, status-read failure, and other quote failures become unavailable after fresh cache | unit / integration | ☑ | ☑ | `test_RouteHaltStatusDistinguishesExplicitHaltFromInvalidFee`; `test_PricingRemainsAvailablePastCacheWhileSkyRouteHalted`; `test_HaltedRouteValuationDoesNotRecognizeUnrealizedYield`; `test_PriceFeedDoesNotShutDownBranchAfterHaltedRouteCacheExpires`; `test_PricingUsesFreshCacheWhenSkyQuoteUnavailable` | PASS(PRELIM-M02) | Conversion / preview still revert on halt; only an explicit halt receives conservative live valuation, while unknown faults are not inferred to be halts |
+ 
+ ## 9D. EtherfiWeETHStrategy.md (EFWEETH, Archived)
+ 
+diff --git a/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md b/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+index 122d7622..3f9e0bc1 100644
+--- a/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
++++ b/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+@@ -33,7 +33,7 @@ Whether an event appears in accounting, is unrecoverable, or is merely a liquidi
+ | ERC4626Strategy (Morpho Vault / EulerEarn, etc.) | `convertToAssets()` for shares minted by the Strategy itself. Share price decline generally appears in live valuation | Real loss from share price decline, temporary `maxWithdraw` / `maxRedeem` limit, withdrawal queue, vault pause, oracle / loan-market bad debt | `convertToAssets(ownShares) < principal` can be a loss signal, but `maxWithdraw` shortage alone is a liquidity constraint. Emergency redeem recoverable amounts, and write off only amounts finalized by share-price decline and bad debt. Avoid double writeoff by comparing live valuation loss with Strategy `principal` reduction |
+ | LidoStrategy | Canonical stETH equivalent of owned wstETH + `pendingWithdrawAmount * pendingWithdrawalValuationBps / 10000` + claimed own idle WETH. stETH DEX market depeg is not by itself a canonical accounting loss. During normal operation pending is valued at 10000 bps; only after incident freeze can the Vault `WRITEOFF_ROLE` lower the bps | Withdrawal queue wait, pending valuation bps, finalization rate, slashing / consensus loss, stETH market depeg, delayed request NFT claim, direct stETH/wstETH/WETH/raw ETH donation | Do not treat queue wait as loss. After `requestLidoWithdrawal`, track finalization / claim; if claim proceeds are uncertain, confirm `pausedAllocation == true` before lowering pending bps as an explicit incident operation. Return actually received WETH to the Vault after claim. Do not write off until slashing or canonical rate / actual claim amount below principal is confirmed. Direct stETH/wstETH/WETH/raw ETH donations are not backing. WETH donations can be returned with generic `emergencyWithdraw` if needed, but are not principal return |
+ | EtherfiWeETHStrategy | Owned weETH eETH/WETH value + `pendingWithdrawAmount * pendingWithdrawalValuationBps / 10000` + claimed own idle WETH. During normal operation pending is valued at 10000 bps; only after incident freeze can the Vault `WRITEOFF_ROLE` lower the bps | Ether.fi withdrawal finalization wait, pending valuation bps, NFT claim delay, actual ETH receipt shortfall, weETH/eETH canonical rate decline, LRT market depeg, direct eETH/weETH/WETH/raw ETH donation | Do not treat pending NFT wait as loss. After `requestEtherfiWithdrawal`, track NFT validity / `isFinalized` / actual claim receipt; if claim proceeds are uncertain, confirm `pausedAllocation == true` before lowering pending bps as an explicit incident operation. Return claimed WETH to the Vault. Do not write off until actual claim receipt or canonical-rate decline confirms residual loss. Direct eETH/weETH/WETH/raw ETH donations are not backing |
+-| SkyUsdcSUsdsStrategy | Owned sUSDS share value in USDS plus own idle USDS, conservatively converted to USDC using the lower of converter preview and 1:1 conversion. Direct sUSDS/USDS/USDC donations are not normal valuation | PSM / LitePSM / converter halt, route slippage, USDS depeg, sUSDS share-price decline, sUSDS `maxWithdraw` limit, USDS idle residue | Converter halt or wider slippage is a halted recovery path, not immediate writeoff. `emergencyRedeemSUsdsToUsds` can return to USDS, but backing is repaired only after USDC conversion and successful `receiveFromStrategy`. Write off only finalized residuals based on conservative USDC quote and actual USDC recovery |
++| SkyUsdcSUsdsStrategy | Normally values owned sUSDS share value in USDS plus own idle USDS at the lower of converter preview and 1:1 USDC conversion. During an explicit reverse-route halt, valuation is `min(1:1 position, principal)` and does not recognize unrealized yield. Direct sUSDS/USDS/USDC donations are not normal valuation | PSM / LitePSM / converter halt, route slippage, USDS depeg, sUSDS share-price decline, sUSDS `maxWithdraw` limit, USDS idle residue | Converter halt or wider slippage is a halted recovery path, not immediate writeoff. `emergencyRedeemSUsdsToUsds` can return to USDS, but backing is repaired only after USDC conversion and successful `receiveFromStrategy`. Do not infer 1:1 value for quote faults other than an explicit halt; write off only finalized residuals based on conservative USDC quote and actual USDC recovery |
+ | Direct idle / mock / inert | Vault buffer or assets directly held by Strategy | Mistaken transfers, directly held idle assets, unconfigured Strategy | Return to Vault with `emergencyWithdraw` / `receiveFromStrategy`. Normally no writeoff because this is not external protocol loss |
+ 
+ ### Classification Aids
+@@ -110,7 +110,7 @@ The same `sendToVault` / `writeoffStrategyPrincipal` means different things depe
+ | ERC-4626 | `sendToVault`; in severe cases `emergencyWithdrawFromERC4626` | liquidity limit from `maxWithdraw` / `maxRedeem` / queue / vault pause | residual confirmed by `convertToAssets(ownShares) < principal` and bad debt, not duplicated with loss already visible in live valuation | share price, maxWithdraw/maxRedeem, curator/governance action, underlying market bad debt |
+ | Lido | `requestLidoWithdrawal` -> finalization -> `claimLidoWithdrawals` -> `sendToVault`; in severe cases `emergencyWithdrawFromLido` | claimed own idle WETH is insufficient; staked amount waits in queue. Finalized but unclaimed requests remain at freeze-gated bps-adjusted pending value. Direct WETH/raw ETH donation is not evidence of recovery or backing | residual confirmed by actual claim receipt or canonical rate decline, not by queue wait | requestId, pending amount matching sum by requestId, `pausedAllocation`, pending valuation bps, finalization/claim status, actually received ETH, own idle WETH, donation residue, withdrawDelay and pending user claims |
+ | Etherfi weETH | `requestEtherfiWithdrawal` -> NFT finalization -> `claimEtherfiWithdrawals` -> `sendToVault`; in severe cases `emergencyWithdrawFromEtherfi` | claimed own idle WETH is insufficient; weETH waits in pending NFT / finalization. Direct WETH/raw ETH donation is not evidence of recovery or backing | residual confirmed by actual claim receipt or weETH/eETH canonical-rate decline, not by NFT wait | requestId, NFT owner / validity, pending amount matching sum by requestId, `pausedAllocation`, pending valuation bps, `isFinalized`, actually received ETH, own idle WETH, donation residue |
+-| Sky USDC/sUSDS | `sendToVault`; in severe cases `emergencyRedeemSUsdsToUsds` -> `emergencyConvertIdleUsdsToVault` or `emergencyWithdrawFromSky` | converter halt / slippage / USDS idle state. Returning to USDS is not backing repair until USDC reaches the Vault | residual finalized by conservative USDC quote, actual USDC recovery amount, and sUSDS share value decline | converter preview / halt, `maxConversionLossBps`, USDS idle, sUSDS `maxWithdraw`, actual USDC recovery, branch 1 / USDC-only configuration |
++| Sky USDC/sUSDS | `sendToVault`; in severe cases `emergencyRedeemSUsdsToUsds` -> `emergencyConvertIdleUsdsToVault` or `emergencyWithdrawFromSky` | converter halt / slippage / USDS idle state. Returning to USDS is not backing repair until USDC reaches the Vault | normal-route converter preview and 1:1 cap; principal-capped 1:1 valuation during an explicit halt; actual USDC recovery; sUSDS share value decline | route-status read, converter preview / halt, `maxConversionLossBps`, USDS idle, sUSDS `maxWithdraw`, actual USDC recovery, branch 1 / USDC-only configuration |
+ 
+ `BaseStrategy.emergencyWithdraw(amount)` is a rescue path for returning Underlying directly held by the Strategy to the Vault; it does not reduce `principal`. To recover external-protocol principal for Aave / ERC4626 / Lido, normally use the specific `emergencyWithdrawFrom...` function or `sendToVault`, so actual Vault receipt is accounted as returned principal. A direct WETH donation to Lido can be returned to Vault with Base emergency, but it is not Lido principal return. After using Base idle rescue, compare remaining `principal` with `estimatedTotalUnderlying()` and apply residual writeoff separately if needed.
+ 
+diff --git a/documents/en/protocol/product/spec/strategies/SkySUsdsStrategy.md b/documents/en/protocol/product/spec/strategies/SkySUsdsStrategy.md
+index bad8b466..42214258 100644
+--- a/documents/en/protocol/product/spec/strategies/SkySUsdsStrategy.md
++++ b/documents/en/protocol/product/spec/strategies/SkySUsdsStrategy.md
+@@ -71,8 +71,8 @@ The reverse route treats its USDS input as a maximum budget because Sky
+ refunds unused USDS, and the Strategy decreases `_ownIdleUsds` only by the
+ actual USDS balance delta.
+ 
+-`estimatedTotalUnderlying()` returns the smaller of the converter preview and
+-the 1:1 USDC conversion for:
++While the Sky USDS-to-USDC route is active, `estimatedTotalUnderlying()` returns
++the smaller of the converter preview and the 1:1 USDC conversion for:
+ 
+ ```text
+ sUSDS.convertToAssets(min(_ownSUsdsShares, sUSDS.balanceOf(this))) + ownIdleUsds
+@@ -86,13 +86,20 @@ or `realizedYield()` until it clears both the ERC-4626 conversion floor and the
+ USDC scale floor. It becomes harvestable through `sendProfitToVault` only after
+ both floors are cleared.
+ 
+-If a tracked nonzero position exists while the Sky reverse route is halted or
+-its fee is invalid, the converter preview and `estimatedTotalUnderlying()`
+-revert. The Vault treats that as live-valuation failure: it may use a fresh
+-measured cache, then reports pricing unavailable once that cache is stale. A
+-route outage must not be classified as a measured total-loss value of zero.
+-This is distinct from ordinary floor rounding of less than one USDC base unit
+-on an otherwise valid route, which may return numeric zero.
++When the converter explicitly reports `isUsdsToUsdcRouteHalted() == true`,
++conversion and preview continue to revert, but valuation returns
++`min(oneToOneUsdc(position), principal)`. Unrealized yield that cannot be exited
++is not recognized. This conservative value remains a live measurement and may
++refresh the Vault cache, so a halt lasting beyond `strategyValuationMaxAge`
++does not become pricing unavailability or branch shutdown.
++
++An invalid fee, route-status read failure, or any other preview failure must
++not be inferred to be a halt. `estimatedTotalUnderlying()` reverts, the Vault
++uses only a fresh measured cache, and pricing becomes unavailable once that
++cache is stale. This preserves fail-closed behavior for unknown quote faults
++instead of assuming a potentially overstated 1:1 value. Ordinary floor rounding
++below one USDC base unit on an otherwise valid route remains a distinct numeric
++zero case.
+ 
+ ## 4. Emergency
+ 
+@@ -124,7 +131,7 @@ recovery or accumulation makes it convertible to at least 1 USDC base unit.
+ | SKY-SEC-008 | Nonzero USDS conversion returning 0 USDC must revert and must not silently reduce tracked idle USDS |
+ | SKY-SEC-009 | Converter USDC/USDS identity must match route tokens, and deployment must create the audited concrete adapter rather than inject an arbitrary converter |
+ | SKY-SEC-010 | Reverse conversion must enforce the `tout`-inclusive USDS budget, refund unused USDS, and decrement idle accounting only by actual spend |
+-| SKY-SEC-011 | An unavailable reverse quote caused by halt / invalid fee must revert rather than classify a nonzero position as measured zero; the Vault transitions from fresh cache to pricing unavailable |
++| SKY-SEC-011 | An explicit reverse-route halt keeps conversion / preview reverting but continues valuation at `min(1:1 position, principal)`; invalid fee, status-read failure, and other quote failures are not inferred as halts and transition from fresh cache to pricing unavailable |
+ 
+ ## 6. Verification
+ 
+@@ -140,7 +147,9 @@ recovery or accumulation makes it convertible to at least 1 USDC base unit.
+ - USDS / sUSDS sweep protection
+ - USDC decimal mismatch rejection
+ - partial USDS budget consumption leaves the unused amount tracked
+-- unavailable Sky quote uses only a fresh cache, becomes pricing unavailable after staleness, and restores live valuation automatically after route recovery
++- an explicit Sky reverse-route halt continues principal-capped valuation beyond cache expiry and does not shut down the price-feed branch
++- unrealized sUSDS yield is not recognized while the reverse route is halted
++- invalid-fee / generic quote failure is not misclassified as a halt, uses only a fresh cache, becomes pricing unavailable after staleness, and restores live valuation automatically after quote recovery
+ 
+ `contracts/test/SkyUsdcSUsdsConverter.t.sol` covers LitePSMWrapper-compatible
+ `tin/tout` fees, halt / invalid-fee preview reverts, fee-floor rounding, min-out checks, balance
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 55479ee4..e8376284 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -105,6 +105,7 @@ source ~/.config/deltaforesight/rpc.env
+ 
+ | V14 | 2026-08-06 | jpydf-v2 / develop | `90a784f2` | forge 1.7.1 local | なし | `forge test --match-path test/DFWstETHPriceFeed.t.sol`（36 passed）; `forge test --match-path test/DFWstETHPriceFeedProxyIntegration.t.sol`（10 passed）; `forge test --match-path test/CollateralYieldZapper.t.sol`（47 passed） | Claude | PASS: spec に存在するが台帳に行が無かった `ORCL-FR-015`（dwstETH composite feed）と、requirement ID 自体が無かった Zapper の native ETH on-ramp（新規 `ZAP-FR-015`）を追加。実装・テストは merge 済みで、欠けていたのは要件行と spec 記述のみ |
+ | V21 | 2026-08-08 | jpydf-v2 / `fix/preaudit-morpho-pricing-rails` | `825e9674` | forge 1.7.1 local | なし | affected 5 suites; fast PR gate; full local gate; `forge build --sizes`; `cloc 2.06`; `git diff --check` | Codex | PASS: affected 253、fast 1,536、full local 1,589、全て 0 failed / 0 skipped。fee-on-transfer receiver delta、Strategy receipt/cache ambiguity、Sky quote unavailable/recovery を確認。Vault runtime 23,047 bytes（margin 1,529）、full body 5,219 nSLOC |
++| PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | なし | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35、fast 1,547、全て 0 failed / 0 skipped。pre-fix では価格 feed 統合回帰が失敗し、remediation 後に成功。Sky Strategy runtime 20,173 bytes（margin 4,403）、converter runtime 5,596 bytes（margin 18,980） |
+ 
+ ---
+ 
+@@ -143,6 +144,7 @@ source ~/.config/deltaforesight/rpc.env
+ - **V19 更新（2026-08-06）**: §9B `LidoStrategy`（`LIDO-*` 47 件）と §9D `EtherfiWeETHStrategy`（`EFWEETH-*` 13 件）を archived とし、active ID 計を **718 → 658**、active 検証済を **158 → 106** に更新。これは**削除ではなくアーカイブ**である。Solidity source は `contracts/src/Strategies/archive/`、test は `contracts/test/archive/` へ移動し、いずれも compile / test（84 tests）は継続して通る。両 Strategy の underlying は構造的に WETH であり、それを束ねていた deploy selector は PR #1424 で削除済み。branch 0 の underlying も WETH → wstETH へ移行したため、WETH underlying を供給できる branch は存在しない。両 surface は 2026-08-05 完了の外部監査（監査対象 identity `0c7766e0`）の対象に含まれていたため、要件が監査トレーサビリティから消えないよう行と ID を active 合計の下に残す。`LIDO-*` / `EFWEETH-*` は履歴 ID として凍結し、再利用も active scope としての参照も禁止する。再有効化には新規 activation package と audit-scope 変更が必要。
+ - **V20 更新（2026-08-08）**: 外部監査開始前の是正として、MV2-FR-003 を bounded partial retry、MV2-FR-005 を Vault incident rails / donation-first penalty 会計へ更新し、focused 74 tests と fast Foundry gate で再確認した。pricing は valuation unavailable と measured zero を分離し、VAULT-FR-016 / ORCL-FR-014 に unit evidence を追加したが、fork / invariant / full integration 未実施のため両行は PARTIAL のままとした。既に PASS だった MV2 / ORCL-FR-015 の再実証であり、active ID 数・検証済集計は変更しない。
+ - **V21 更新（2026-08-08）**: security-skill 横断 review の追加 variant を是正した。VAULT-FR-002 は receiver 実着額、VAULT-FR-005 は declared/received 不一致時 cache 無効化、ZAP-FR-006 / ZAP-SEC-005 は fee-on-transfer 下限、SKY-SEC-011 は quote 不能と測定済み0の分離を追跡する。§9C 集計が既存 SKY-SEC-008..010 を未計上だったため、新規011と併せて 7→11へ訂正し、active SEC / ID / 検証済をそれぞれ +4 とした。
++- **PRELIM-M02 更新（2026-08-12）**: SKY-SEC-011 を予備監査 M-02 に合わせて精緻化した。明示的な Sky 逆変換 route halt は principal-capped 1:1 valuation を継続し、停止中の未実現 yield を認識しない。invalid fee、status read failure、その他の quote failure は halt と推測せず従来どおり fail-closed とする。要件 ID 数・検証済集計は不変。
+ - **V1-MAP（2026-06-20）件数訂正**: メタ監査（[ledger-completeness-audit](../historical-reviews/2026-06-20-ledger-completeness-audit.md)）により Product-Overview（ARCH/ADR）・LIDO（INV/EVT）・Parameters（bridge-minter-timelock）の欠落 **5 行**を反映。develop の §3 集計（566）に +5 し ID 計 **571**。追加行 = **ARCH-006 / ADR-006 / LIDO-INV-010 / LIDO-EVT-005 / PRM-BRIDGE-MINTER-TIMELOCK**（うち bridge-minter は commit `756a736` 由来）。**合計行はセル和と一致するよう全面再計算済**。
+ - **台帳同期（2026-06-24）**: Strategy / Etherfi の追補 ID **6 行**（STGY-INV-011 / STGY-EVT-012 / EFWEETH-SEC-008..011）を反映し、active ID 計を **571 → 577** に更新。追加時点では検証実体未確認のため PASS にせず、未実施として扱った。
+ - **V8 更新（2026-06-24）**: EFWEETH-SEC-012 を追加し、active ID 計を **577 → 578** に更新。`test/*Strategy*.t.sol` の実走で EFWEETH-SEC-008..012 を PASS に更新した。
+@@ -859,7 +861,7 @@ placeholder 期挙動:
+ | SKY-SEC-008 | 非ゼロ USDS の変換が 0 USDC 実受領になる場合は revert し、tracked idle USDS を silent に減らさない | unit | ☑ | ☑ | `test_EmergencyConvertRevertsWhenUsdsDustWouldReturnZeroUsdc` | PASS(V9) | USDC base unit 未満の USDS dust は `_ownIdleUsds` として維持し、追加回収や累積後に変換する |
+ | SKY-SEC-009 | converter token identity を route と一致させ、deploy script が監査済み concrete adapter を生成する | unit / integration | ☑ | ☑ | `test_ConstructorBindsWrapperTokens`; `test_MainnetFork_BindsCanonicalSkyWrapperAndTokens`; `test_MainnetFork_ExecutesRoundTripWhenRoutesAreActive`; `test_DeploySelector_DeploysSkyUsdcSUsdsStrategy` | PASS(V12) | `MAINNET_RPC_URL` 付き fork で公式 wrapper identity と実 round-trip を確認 |
+ | SKY-SEC-010 | `tout` 込みUSDS予算、未使用refund、実消費量だけのidle減算 | unit | ☑ | ☑ | `test_ConvertUsdsToUsdc_UsesBudgetAndRefundsUnspentDust`; `test_PreviewUsdsToUsdc_AccountsForFeeFloorAtOneUsdcAtom`; `test_EmergencyConvertTracksActualUsdsSpentWhenConverterUsesBudget` | PASS(V12) | 6 decimals USDCへ変換できない残余をadapterに残さない |
+-| SKY-SEC-011 | halt / invalid fee の quote 不能を測定済み0と誤分類せず、fresh cache 後は pricing unavailable | unit | ☑ | ☑ | `test_PreviewAndConversionFailClosedWhenBuyRouteHaltedOrFeeInvalid`; `test_PricingUsesFreshCacheWhenSkyQuoteUnavailable` | PASS(V21) | 正常 route 上の sub-atom floor 0 とは分離し、route 回復時に live valuation が自動復旧 |
++| SKY-SEC-011 | 明示的な route halt は principal-capped 1:1 valuation を継続し、invalid fee / status read / その他の quote failure は fresh cache 後に unavailable | unit / integration | ☑ | ☑ | `test_RouteHaltStatusDistinguishesExplicitHaltFromInvalidFee`; `test_PricingRemainsAvailablePastCacheWhileSkyRouteHalted`; `test_HaltedRouteValuationDoesNotRecognizeUnrealizedYield`; `test_PriceFeedDoesNotShutDownBranchAfterHaltedRouteCacheExpires`; `test_PricingUsesFreshCacheWhenSkyQuoteUnavailable` | PASS(PRELIM-M02) | conversion / preview の halt revert は維持。未知の障害を halt と推測せず、明示的 halt だけが保守的 live valuation を使う |
+ 
+ ## 9D. EtherfiWeETHStrategy.md（EFWEETH・Archived）
+ 
+diff --git a/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md b/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+index 2fa74cc5..c19a06f2 100644
+--- a/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
++++ b/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+@@ -33,7 +33,7 @@
+ | ERC4626Strategy（Morpho Vault / EulerEarn 等）      | Strategy 自身が mint した share の `convertToAssets()`。share price 低下は原則として live valuation に出る                                                                                                 | share price 低下による実損、`maxWithdraw` / `maxRedeem` の一時制限、withdraw queue、vault pause、oracle / loan-market bad debt                     | `convertToAssets(ownShares) < principal` は損失シグナルになり得るが、`maxWithdraw` 不足だけなら流動性制約。緊急 redeem で回収可能分を戻し、share price 低下と bad debt が確定した分のみ writeoff。二重 writeoff を避けるため、既に valuation に出ている loss と `principal` 減算額を突合する |
+ | LidoStrategy                                        | 自己 wstETH の canonical stETH 換算 + pending withdrawal amount の bps 評価 + claim 済み自己 idle WETH。stETH の DEX 市場価格 depeg はそのまま canonical 会計損ではない。通常時の pending は 10000 bps で request 時記録額、incident freeze 後だけ Vault `WRITEOFF_ROLE` が bps を下げられる | withdrawal queue の待機、pending valuation bps、finalization rate、slashing / consensus loss、stETH 市場 depeg、request NFT claim 遅延、直接 stETH/wstETH/WETH/raw ETH donation | queue 待ちを loss と見なさない。`requestLidoWithdrawal` 後は finalization / claim を追跡し、claim 実額に疑義がある場合は `pausedAllocation == true` を確認してから `setPendingWithdrawalValuationBps` で pending を保守割引して判断する。claim 後に実受領 WETH を Vault へ戻す。slashing 等で canonical rate / claim 実受領額が元本を下回ることが確認されるまで writeoff しない。直接 stETH/wstETH/WETH/raw ETH donation は backing として扱わない。WETH donation は必要時に汎用 `emergencyWithdraw` で戻せるが principal return ではない |
+ | EtherfiWeETHStrategy                                | 自己 weETH の eETH/WETH 換算 + WithdrawRequestNFT pending amount の bps 評価 + claim 済み自己 idle WETH。通常時の pending は 10000 bps で request 時の net eETH 額、incident freeze 後だけ Vault `WRITEOFF_ROLE` が bps を下げられる | Ether.fi withdrawal finalization 待ち、pending valuation bps、NFT claim 遅延、claim 実受領 ETH の不足、weETH/eETH canonical rate 低下、LRT market depeg、直接 eETH/weETH/WETH/raw ETH donation | pending NFT 待ちを loss と見なさない。`requestEtherfiWithdrawal` 後は NFT / `isFinalized` / claim 実受領 ETH を追跡し、claim 実額に疑義がある場合は `pausedAllocation == true` を確認してから `setPendingWithdrawalValuationBps` で pending を保守割引して判断する。claim 後に WETH として Vault へ戻す。claim 実受領額や canonical rate 低下で residual が確認されるまで writeoff しない。直接 eETH/weETH/WETH/raw ETH donation は backing として扱わない。WETH donation は必要時に汎用 `emergencyWithdraw` で戻せるが principal return ではない |
+-| SkyUsdcSUsdsStrategy                                | 自己 sUSDS share の USDS 建て value + 自己 idle USDS を、converter `previewUsdsToUsdc` と 1:1 換算の小さい方で USDC 建て評価する。直接 sUSDS/USDS/USDC donation は通常 valuation に含めない | converter halt / pause、USDS→USDC route slippage、USDS depeg、sUSDS `convertToAssets` 低下、sUSDS vault `maxWithdraw` 制限、USDS idle residue | converter 停止や slippage 拡大は即 writeoff ではなく回収経路停止として扱う。`emergencyRedeemSUsdsToUsds` で USDS に戻せても、Vault backing に戻るのは USDC に変換して `receiveFromStrategy` が成功した分だけ。最終 USDC 建ての保守 quote と実回収額で residual が確定した分だけ writeoff |
++| SkyUsdcSUsdsStrategy                                | 通常時は自己 sUSDS share の USDS 建て value + 自己 idle USDS を、converter `previewUsdsToUsdc` と 1:1 換算の小さい方で USDC 建て評価する。明示的な逆変換 route halt 中は `min(1:1 position, principal)` とし、未実現 yield は認識しない。直接 sUSDS/USDS/USDC donation は通常 valuation に含めない | converter halt / pause、USDS→USDC route slippage、USDS depeg、sUSDS `convertToAssets` 低下、sUSDS vault `maxWithdraw` 制限、USDS idle residue | converter 停止や slippage 拡大は即 writeoff ではなく回収経路停止として扱う。`emergencyRedeemSUsdsToUsds` で USDS に戻せても、Vault backing に戻るのは USDC に変換して `receiveFromStrategy` が成功した分だけ。明示的 halt 以外の quote 障害を 1:1 と推定せず、最終 USDC 建ての保守 quote と実回収額で residual が確定した分だけ writeoff |
+ | 直接 idle / mock / inert                            | Vault buffer または Strategy 直接保有分                                                                                                                                                                    | 誤送金、直接保有 idle、未設定 Strategy                                                                                                             | `emergencyWithdraw` / `receiveFromStrategy` で Vault へ戻す。外部 protocol 損失ではないため、原則 writeoff しない                                                                                                                                                                            |
+ 
+ ### 判定の補助線
+@@ -110,7 +110,7 @@ Admin Console と Ops Dashboard は、以下の分類を同じ語彙で表示す
+ | ERC-4626                          | `sendToVault`、重大時は `emergencyWithdrawFromERC4626`                                                                | `maxWithdraw` / `maxRedeem` / queue / vault pause による liquidity limit                  | `convertToAssets(ownShares) < principal` と bad debt が確定し、既に live valuation に出た loss と重複しない residual | share price、maxWithdraw/maxRedeem、curator/governance action、underlying market bad debt            |
+ | Lido                              | `requestLidoWithdrawal` → finalization → `claimLidoWithdrawals` → `sendToVault`。重大時は `emergencyWithdrawFromLido` | claim 済み自己 idle WETH が足りないだけ。stake 済み分は queue 待ち。finalized でも未 claim なら freeze 後の bps 調整済み pending 評価のまま。直接 WETH/raw ETH donation は回収可能性や backing の証拠にしない | queue 待ちではなく、claim 実受領額または canonical rate 低下で確認された residual                                    | requestId、pending amount と requestId 別合計の一致、`pausedAllocation`、pending valuation bps、finalization/claim 状態、実受領 ETH、自己 idle WETH、donation residue、withdrawDelay と pending user claims |
+ | Etherfi weETH                     | `requestEtherfiWithdrawal` → NFT finalization → `claimEtherfiWithdrawals` → `sendToVault`。重大時は `emergencyWithdrawFromEtherfi` | claim 済み自己 idle WETH が足りないだけ。weETH 分は pending NFT / finalization 待ち。直接 WETH/raw ETH donation は回収可能性や backing の証拠にしない | NFT 待ちではなく、claim 実受領 ETH または weETH/eETH canonical rate 低下で確認された residual                         | requestId、NFT owner / validity、pending amount と requestId 別合計の一致、`pausedAllocation`、pending valuation bps、`isFinalized`、実受領 ETH、自己 idle WETH、donation residue |
+-| Sky USDC/sUSDS                    | `sendToVault`、重大時は `emergencyRedeemSUsdsToUsds` → `emergencyConvertIdleUsdsToVault` または `emergencyWithdrawFromSky` | converter halt / slippage / USDS idle 化。USDS に戻せても USDC として Vault に戻るまでは backing 修復ではない | converter preview と 1:1 cap に基づく保守 USDC quote、実USDC回収額、sUSDS share value 低下で確認された residual         | converter preview / halt、`maxConversionLossBps`、USDS idle、sUSDS `maxWithdraw`、実USDC回収額、branch 1 / USDC 専用設定 |
++| Sky USDC/sUSDS                    | `sendToVault`、重大時は `emergencyRedeemSUsdsToUsds` → `emergencyConvertIdleUsdsToVault` または `emergencyWithdrawFromSky` | converter halt / slippage / USDS idle 化。USDS に戻せても USDC として Vault に戻るまでは backing 修復ではない | 通常時は converter preview と 1:1 cap、明示的 halt 中は principal-capped 1:1 valuation、実USDC回収額、sUSDS share value 低下で確認された residual | route-status read、converter preview / halt、`maxConversionLossBps`、USDS idle、sUSDS `maxWithdraw`、実USDC回収額、branch 1 / USDC 専用設定 |
+ 
+ `BaseStrategy.emergencyWithdraw(amount)` は「Strategy が直接保有する Underlying を Vault へ戻す」救済経路であり、`principal` を減算しない。Aave / ERC4626 / Lido の外部 protocol principal を回収する場合は、原則として固有 `emergencyWithdrawFrom...` または `sendToVault` を使い、Vault 実受領額を returned principal として減算する。Lido の直接 WETH donation は Base emergency で Vault へ戻せるが、Lido の principal return ではない。Base の idle 救済を使った場合は、その後に残る `principal` と `estimatedTotalUnderlying()` の差分を確認し、必要なら別途 residual writeoff を行う。
+ 
+diff --git a/documents/jp/protocol/product/spec/strategies/SkySUsdsStrategy.md b/documents/jp/protocol/product/spec/strategies/SkySUsdsStrategy.md
+index 9bd95817..5f59396a 100644
+--- a/documents/jp/protocol/product/spec/strategies/SkySUsdsStrategy.md
++++ b/documents/jp/protocol/product/spec/strategies/SkySUsdsStrategy.md
+@@ -120,7 +120,8 @@ withdraw し、USDS を converter で USDC に戻す。
+ 
+ ### 3.4 Valuation
+ 
+-`estimatedTotalUnderlying()` は以下を USDC 建てで返す。
++Sky の USDS→USDC route が有効な間、`estimatedTotalUnderlying()` は以下を
++USDC 建てで返す。
+ 
+ ```text
+ min(
+@@ -137,12 +138,17 @@ USDS dust は `convertToAssets` と USDC scale の両方を超えるまで
+ `estimatedTotalUnderlying()` / `realizedYield()` に算入しない。両方の floor を超えた時点で
+ USDC 建て yield として `sendProfitToVault` で回収できる。
+ 
+-非ゼロの追跡済み position がある状態で Sky 逆変換 route が halt、または fee が invalid なら、
+-converter preview は revert し、`estimatedTotalUnderlying()` も valuation 不能として revert する。
+-Vault は live valuation failure として扱い、fresh cache がある間だけその測定値を使用し、cache が
+-stale になれば pricing availability を false にする。route 障害を測定済みの全損 `0` として
+-価格へ反映してはならない。これと、正常 route 上で USDC 1 base unit 未満の USDS dust が
+-通常の切り捨てにより数値 `0` となる場合は区別する。
++converter が `isUsdsToUsdcRouteHalted() == true` と明示した場合、conversion と preview は
++従来どおり revert する一方、valuation は `min(oneToOneUsdc(position), principal)` を返す。
++停止中に換金できない未実現 yield は認識せず、元本または現在の 1:1 position の小さい方に
++限定する。この保守的な値は live measurement として Vault cache を更新できるため、停止が
++`strategyValuationMaxAge` を超えても pricing unavailable や branch shutdown へ遷移させない。
++
++invalid fee、route-status read failure、またはその他の preview failure は halt と推測してはならず、
++`estimatedTotalUnderlying()` を revert させる。Vault は fresh cache がある間だけ直近の測定値を
++使用し、cache が stale になれば pricing availability を false にする。未知の quote 障害を
++1:1 と推定して過大評価してはならない。これと、正常 route 上で USDC 1 base unit 未満の
++USDS dust が通常の切り捨てにより数値 `0` となる場合は区別する。
+ 
+ ### 3.5 Emergency
+ 
+@@ -177,7 +183,7 @@ USDC の最小単位未満の USDS dust を変換しようとして 0 USDC に
+ | SKY-SEC-008 | 非ゼロ USDS の変換が 0 USDC 実受領になる場合は revert し、追跡済み idle USDS を silent に減らさない |
+ | SKY-SEC-009 | converter の USDC / USDS identity は Strategy 初期化時に route token と一致させ、deploy script は任意 converter ではなく監査済み concrete adapter を deploy する |
+ | SKY-SEC-010 | USDS→USDC は `tout` 込み最大支払予算として計算し、未使用 USDS を返却して実消費量だけ `_ownIdleUsds` から減らす |
+-| SKY-SEC-011 | halt / invalid fee により逆変換 quote が利用不能な場合、preview は revert し、非ゼロ position を測定済み `0` と誤分類しない。Vault は fresh cache 後に pricing unavailable へ遷移する |
++| SKY-SEC-011 | 明示的な逆変換 route halt は conversion / preview を revert させたまま、valuation だけを `min(1:1 position, principal)` として継続する。invalid fee・status read failure・その他の quote failure は halt と推測せず、fresh cache 後に pricing unavailable とする |
+ 
+ ---
+ 
+@@ -196,7 +202,9 @@ USDC の最小単位未満の USDS dust を変換しようとして 0 USDC に
+ - USDS / sUSDS sweep が拒否される
+ - USDC decimals mismatch が初期化時に拒否される
+ - converter が予算の一部だけを消費した場合、未使用 USDS が `_ownIdleUsds` に残る
+-- Sky quote が利用不能な間は fresh cache だけを使用し、stale 後は pricing unavailable、route 回復後は live valuation が自動復旧する
++- 明示的な Sky 逆変換 route halt が cache 期限を超えても principal-capped valuation を継続し、価格 feed が branch shutdown しない
++- route halt 中の未実現 sUSDS yield を認識しない
++- invalid fee / generic quote failure は halt と誤分類せず、fresh cache 後は pricing unavailable、quote 回復後は live valuation が自動復旧する
+ 
+ `contracts/test/SkyUsdcSUsdsConverter.t.sol` は Sky 公式 LitePSMWrapper と同じ
+ `sellGem` / `buyGem` / `tin` / `tout` 意味論を持つ mock に対し、fee floor、halt / invalid fee 時の preview revert、最小受取、

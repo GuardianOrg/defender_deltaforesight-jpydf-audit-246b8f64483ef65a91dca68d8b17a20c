@@ -1,0 +1,12 @@
+Compiling 5 files with Solc 0.8.24
+Solc 0.8.24 finished in 6.39s
+Compiler run successful!
+
+Ran 4 tests for test/CollateralVaultStrategy.t.sol:CollateralVaultStrategyTest
+[PASS] test_Allocate_StopsAllOutboundWhenPrincipalValuationReverts() (gas: 777823)
+[PASS] test_RemoveStrategy_RevertsWhenZeroPrincipalButValuationUnavailable() (gas: 593147)
+[PASS] test_TransferYieldToTreasury_StopsOnPartialValuationAndRecoversAutomatically() (gas: 1147583)
+[PASS] test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing() (gas: 11831421)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 7.50ms (2.67ms CPU time)
+
+Ran 1 test suite in 8.99ms (7.50ms CPU time): 4 tests passed, 0 failed, 0 skipped (4 total tests)

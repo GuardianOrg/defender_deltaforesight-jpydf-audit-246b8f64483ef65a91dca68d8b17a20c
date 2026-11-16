@@ -1,0 +1,30 @@
+{
+  "observedAtUtc": "2026-09-17T06:25:10.994919+00:00",
+  "readOnly": true,
+  "schedule": {
+    "Name": "Jpydf-production-Backend-PrivateMonitorScheduleD70C-ywbWk4Py9dpj",
+    "State": "DISABLED",
+    "ScheduleExpression": "rate(1 minute)"
+  },
+  "privateMonitorEcsServicesInStack": [],
+  "alarms": [
+    {
+      "name": "Jpydf-production-Backend-P0-private-monitor-notification",
+      "actionsEnabled": true,
+      "state": "OK",
+      "actionTopicNames": [
+        "Jpydf-production-Backend-backend-alarms",
+        "Jpydf-staging-Backend-backend-alarms-slack"
+      ]
+    },
+    {
+      "name": "Jpydf-production-Backend-P1-private-monitor-notification",
+      "actionsEnabled": true,
+      "state": "OK",
+      "actionTopicNames": [
+        "Jpydf-production-Backend-backend-alarms"
+      ]
+    }
+  ],
+  "conclusion": "Production schedule is DISABLED; no replacement PrivateMonitor ECS service in this stack; P0 includes staging Slack topic. Production recipient delivery is not verified. No configuration changes or test messages sent."
+}

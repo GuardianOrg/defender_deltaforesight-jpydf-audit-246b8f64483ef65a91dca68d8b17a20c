@@ -1,0 +1,68 @@
+{
+  "recordedDate": "2026-09-24",
+  "auditBaseCommit": "5723a6d76279ec13c7cd57e081faf8493db34f15",
+  "auditedProductionTree": "4d461638a27fccd2f749f7086ec955985d04c2a0",
+  "upstreamDevelopCommit": "09076b0c6e4b0df706b6779c54742f4e044b1860",
+  "upstreamProductionTree": "375f41640a8e12396d8b379ef48755cb23320714",
+  "r2L01MergeCommit": "18bedbf68905705e3c8a4b01a39096fd7881a1bb",
+  "r2L01ReviewedHead": "60393b3843b35991c02af67daadb9d45bec2a6c1",
+  "ciTestedHead": "a0347215390145b4c195e13510114ce67e5f1946",
+  "ciLocalFull": {
+    "passed": 1861,
+    "failed": 0,
+    "skipped": 2
+  },
+  "ciMainnetFull": {
+    "passed": 27,
+    "failed": 0,
+    "skipped": 1
+  },
+  "ciSeparateInvocations": {
+    "canonicalTimelockPassed": 5,
+    "ccipEntrypointPassed": 1,
+    "ccipMainnetPassed": 1
+  },
+  "presto": {
+    "forkBlock": 25995374,
+    "passed": 4,
+    "fuzzRuns": 256
+  },
+  "guardianBoardReadback": {
+    "date": "2026-09-24",
+    "round": "Remediation Review",
+    "L-01": "Pending",
+    "L-02": "Pending",
+    "comments": {
+      "L-01": {
+        "submitted": true,
+        "persistedAfterReload": true,
+        "bodySha256": "03b4152c4a3f239c90b9c111742d8898d359a3cabb6da70b10fec585f8108859"
+      },
+      "L-02": {
+        "submitted": true,
+        "persistedAfterReload": true,
+        "bodySha256": "3fa97f6d55db3ed3fb68696fdbec7cd430fd61ce234c51fd5ff960a50c1f6742"
+      }
+    }
+  },
+  "guardianVerification": "not claimed",
+  "productionDeployment": "not performed",
+  "artifacts": {
+    "upstream-production-delta.patch": "1125557960ec30f42ac7bc12a940017a1b56c725527adae1708a4845851b61dd",
+    "r2-l01-implementation.patch": "c7710d7f893df5653c9fd93592e2892878073819cf0339c7614c8545e53db8ba",
+    "r2-l01-coverage-followup.patch": "9ace2ccc29f4cb76f124405f8281c22a89aa40fb59abddf29dc154e40a288340",
+    "invariant-harness-followup.patch": "25ab34beed0a00714229abc6d03866dcd47e4d81fc231d1b207f403796f0d192",
+    "upstream-ci-summary.txt": "8e52733c5220e7f23d37a29d7f6db28e5ff4de9a6dd2ed4323bbfad51b73574f",
+    "r2-l02-implementation.patch": "8a92f8c1bb70afc0a233b3570a11d0b9206a46b76cfe82e7a4eab2cc3453f55a"
+  },
+  "r2L02ImplementationCommit": "11828df54c9ab5508db2fd0500b02d6b87bbfe32",
+  "r2L02ImplementationParent": "09076b0c6e4b0df706b6779c54742f4e044b1860",
+  "r2L02Merged": true,
+  "r2L02UpstreamTests": {
+    "suites": 3,
+    "passed": 48,
+    "failed": 0
+  },
+  "r2L02MergeCommit": "937a43b5d5ea54dd9ab206516fa28168b4a4fa44",
+  "r2L02MergedProductionTree": "3f7ab10db30e6dc237bb9f4cbf8447393a69dca6"
+}

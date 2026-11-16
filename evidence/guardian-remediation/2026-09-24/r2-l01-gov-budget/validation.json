@@ -1,0 +1,30 @@
+{
+  "recordedDate": "2026-09-24",
+  "implementationCommit": "1bb408d7b41d3b6cb7ad8257ecb96476a5392c4e",
+  "parent": "d59d0059d1c07e647a374ff426cb75e64edcaedc",
+  "productionTree": "dc3963480ee152dcb8d58f5c780862551cfd53f3",
+  "merged": true,
+  "budget": {
+    "default": 500000,
+    "min": 100000,
+    "max": 2000000
+  },
+  "tests": {
+    "l01Suite": {
+      "passed": 13,
+      "failed": 0
+    },
+    "regression": {
+      "passed": 948,
+      "failed": 0,
+      "skipped": 1
+    }
+  },
+  "collateralVaultRuntimeBytes": 24216,
+  "artifacts": {
+    "implementation.patch": "4eaae05d9754db514f8a353dc25b5d8bb0d96b14f5d733f9a6dff5c1935514d7",
+    "run.txt": "3a2701cd01b80d386872ff935111c1668f46d6b74d8c90024c607a646e302d45"
+  },
+  "mergeCommit": "df2984d83f2afa9815913e648356f5d39578b1bc",
+  "mergedProductionTreeMatches": true
+}

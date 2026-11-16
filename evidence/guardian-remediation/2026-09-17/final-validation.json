@@ -1,0 +1,553 @@
+{
+  "identity": {
+    "comparisonBase": "ac26da740074f33ce0e0590058a59fb22cbc2958",
+    "integratedMainCommit": "9ff9cb16d5e6ffb06457e1ded831d89db7385623",
+    "remediationCommit": "1aeafc3d92af624eb994958d65ff902587ec445b",
+    "branch": "audit/guardian-remediation-20260917",
+    "tree": "3394dee2f7f87826d1e0fcaae7fd00c3603a0b12",
+    "sourceSnapshotTree": "23fa1a7a027b24699b4fff6af892b92da0cd83db",
+    "productionSourceTree": "4d461638a27fccd2f749f7086ec955985d04c2a0",
+    "treeEqualsIntegratedMain": true,
+    "purpose": "Single remediation review commit; individual merged PR history remains on main. Baseline artifact/provenance manifests are unchanged and describe the earlier candidate."
+  },
+  "compiler": {
+    "solc": "0.8.24",
+    "evm": "cancun",
+    "optimizer": true,
+    "optimizerRuns": 200,
+    "viaIR": false
+  },
+  "checks": {
+    "fastFoundry": {
+      "command": "forge test --use 0.8.24 --threads 1 --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill' -vv",
+      "passed": 1824,
+      "failed": 0,
+      "skipped": 1,
+      "skip": "DeployProductionTimelockTest setup; unrelated to remediation",
+      "note": "Combined L01-L10/I01-I09 fixes and Oracle logic. Subsequent changes are comments, docs and an additional close-boundary assertion; no production logic changed."
+    },
+    "postFableFocused": {
+      "command": "forge test --use 0.8.24 --threads 1 --match-contract GuardianOraclePolicyTest -vv",
+      "passed": 9,
+      "failed": 0,
+      "fuzzRunsPerTest": 256
+    },
+    "productionBuild": {
+      "command": "forge build --use 0.8.24 --sizes --skip test --skip script --no-cache --out <isolated-out> --cache-path <isolated-cache>",
+      "exitCode": 0
+    },
+    "slither": {
+      "directSolcScans": [
+        "BorrowerOperations.sol",
+        "PriceFeeds/PriceFeedProxy.sol"
+      ],
+      "success": true,
+      "review": "Existing authorized close transfers fixed gas compensation from configured gasPool to the validated receiver. Registry-authorized risk sync emits at Registry. Abstract base lastGoodPrice is initialized by concrete feeds; latestRoundData deliberately ignores startedAt, using validated updatedAt. Other results are existing style/optimization/imported dead-code warnings. No new actionable finding in changed paths."
+    },
+    "docs": "git diff --check, changed relative file links, and Japanese prose lint passed; existing unrelated whole-document lint warnings retained."
+  },
+  "artifacts": {
+    "BorrowerOperations": {
+      "runtimeBytes": 24576,
+      "eip170Margin": 0,
+      "runtimeTemplateKeccak256": "0x20d5d3b9141673703b00621b5b71d8c27e901c2804bd1b0f54a8e777fde26613",
+      "artifactSha256": "2d67bfc82208e262aa2c0c5b2b95529877bcb6e302168effa12a9f18f1fa8cde",
+      "immutableReferences": {
+        "60307": [
+          {
+            "start": 3125,
+            "length": 32
+          },
+          {
+            "start": 16860,
+            "length": 32
+          }
+        ],
+        "60310": [
+          {
+            "start": 20588,
+            "length": 32
+          }
+        ],
+        "60327": [
+          {
+            "start": 5384,
+            "length": 32
+          },
+          {
+            "start": 17943,
+            "length": 32
+          }
+        ],
+        "74027": [
+          {
+            "start": 2761,
+            "length": 32
+          },
+          {
+            "start": 4374,
+            "length": 32
+          },
+          {
+            "start": 11562,
+            "length": 32
+          },
+          {
+            "start": 13605,
+            "length": 32
+          },
+          {
+            "start": 14553,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "TroveManager": {
+      "runtimeBytes": 24568,
+      "eip170Margin": 8,
+      "runtimeTemplateKeccak256": "0xc3c1364c0d33812666db58bd0f823f6e4769f9322d9da3de3ae48922804e3658",
+      "artifactSha256": "741314d7387dd1642629470e01f514415503547ea7ecbc50191ae59b857adb28",
+      "immutableReferences": {
+        "106291": [
+          {
+            "start": 2189,
+            "length": 32
+          }
+        ],
+        "106317": [
+          {
+            "start": 16476,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "PriceFeedProxy": {
+      "runtimeBytes": 6265,
+      "eip170Margin": 18311,
+      "runtimeTemplateKeccak256": "0x2c41429df05b25dbc31dfcbb5d9fbd60fadc8c0f5cd39e2f234421bae689dc70",
+      "artifactSha256": "259a88894b2bd0d766346e18c78baa10a29062f5e1f894bbfd0d1907b4ddab8c",
+      "immutableReferences": {
+        "90019": [
+          {
+            "start": 466,
+            "length": 32
+          },
+          {
+            "start": 1010,
+            "length": 32
+          },
+          {
+            "start": 1297,
+            "length": 32
+          },
+          {
+            "start": 1538,
+            "length": 32
+          },
+          {
+            "start": 2682,
+            "length": 32
+          },
+          {
+            "start": 3069,
+            "length": 32
+          },
+          {
+            "start": 3196,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "CollateralVault": {
+      "runtimeBytes": 23624,
+      "eip170Margin": 952,
+      "runtimeTemplateKeccak256": "0xa594ba7d62b5f491139f88a390020dfd6faf2c6d7f8f58284cfaa79119fbbe48",
+      "artifactSha256": "73686e59e76bb011fc6d9e2f417414e91bbdfc351f9e5cf4efdd33fd3258d325",
+      "immutableReferences": {
+        "42938": [
+          {
+            "start": 5177,
+            "length": 32
+          },
+          {
+            "start": 5241,
+            "length": 32
+          },
+          {
+            "start": 6236,
+            "length": 32
+          },
+          {
+            "start": 6300,
+            "length": 32
+          },
+          {
+            "start": 6566,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "DToken": {
+      "runtimeBytes": 12108,
+      "eip170Margin": 12468,
+      "runtimeTemplateKeccak256": "0x46d638cc872f3d3f225f24d61287f2278075c87ab17dbb8794d0c3eb01568905",
+      "artifactSha256": "bc58ff0aea08d017758998888b9721c6ffee9d7283811399529331a70e8afc83",
+      "immutableReferences": {
+        "42938": [
+          {
+            "start": 2092,
+            "length": 32
+          },
+          {
+            "start": 2165,
+            "length": 32
+          },
+          {
+            "start": 3154,
+            "length": 32
+          },
+          {
+            "start": 3218,
+            "length": 32
+          },
+          {
+            "start": 3363,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "MorphoV2Strategy": {
+      "runtimeBytes": 18074,
+      "eip170Margin": 6502,
+      "runtimeTemplateKeccak256": "0x4d1c38ea567af403eaaadb7934cfcd8aba7db7a8b00795c52465da62c78f64c4",
+      "artifactSha256": "fddb8f78b5baf0c4ac90b0f7cf4bc2068308e8383d5731e8eb3f54bc1c858385",
+      "immutableReferences": {
+        "42938": [
+          {
+            "start": 3854,
+            "length": 32
+          },
+          {
+            "start": 3918,
+            "length": 32
+          },
+          {
+            "start": 4118,
+            "length": 32
+          },
+          {
+            "start": 4182,
+            "length": 32
+          },
+          {
+            "start": 4327,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "AddressesRegistry": {
+      "runtimeBytes": 6931,
+      "eip170Margin": 17645,
+      "runtimeTemplateKeccak256": "0xe13bd91d7a02bd1b251715fba3e7f89883dabe2f123fcc1152ae9463520a36de",
+      "artifactSha256": "ae0dd4f8e991498e69e31d6b1a8fe3bedddc31c885e49ea97d3a327ef4bf5ef2",
+      "immutableReferences": {
+        "59288": [
+          {
+            "start": 792,
+            "length": 32
+          },
+          {
+            "start": 2765,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "CollateralYieldZapper": {
+      "runtimeBytes": 15299,
+      "eip170Margin": 9277,
+      "runtimeTemplateKeccak256": "0xaa8089e6b79f348154b3883aa24c18d806969a7625bb74837a5552cb05a14e92",
+      "artifactSha256": "6d6940ef09713e9c0e03e8bd7c45be7b96111e8df32f3c7b6a8f6f0caabd9a4f",
+      "immutableReferences": {
+        "112264": [
+          {
+            "start": 1220,
+            "length": 32
+          },
+          {
+            "start": 2183,
+            "length": 32
+          },
+          {
+            "start": 3544,
+            "length": 32
+          },
+          {
+            "start": 3976,
+            "length": 32
+          },
+          {
+            "start": 5804,
+            "length": 32
+          },
+          {
+            "start": 6377,
+            "length": 32
+          },
+          {
+            "start": 6974,
+            "length": 32
+          },
+          {
+            "start": 7302,
+            "length": 32
+          },
+          {
+            "start": 8684,
+            "length": 32
+          },
+          {
+            "start": 10439,
+            "length": 32
+          },
+          {
+            "start": 10854,
+            "length": 32
+          }
+        ],
+        "112267": [
+          {
+            "start": 1047,
+            "length": 32
+          },
+          {
+            "start": 6172,
+            "length": 32
+          }
+        ],
+        "112270": [
+          {
+            "start": 527,
+            "length": 32
+          },
+          {
+            "start": 1469,
+            "length": 32
+          },
+          {
+            "start": 5065,
+            "length": 32
+          },
+          {
+            "start": 6606,
+            "length": 32
+          },
+          {
+            "start": 7903,
+            "length": 32
+          }
+        ],
+        "112273": [
+          {
+            "start": 1117,
+            "length": 32
+          },
+          {
+            "start": 3425,
+            "length": 32
+          },
+          {
+            "start": 3475,
+            "length": 32
+          },
+          {
+            "start": 4084,
+            "length": 32
+          },
+          {
+            "start": 6313,
+            "length": 32
+          },
+          {
+            "start": 10988,
+            "length": 32
+          },
+          {
+            "start": 11156,
+            "length": 32
+          },
+          {
+            "start": 11224,
+            "length": 32
+          },
+          {
+            "start": 11331,
+            "length": 32
+          }
+        ],
+        "112493": [
+          {
+            "start": 723,
+            "length": 32
+          },
+          {
+            "start": 4733,
+            "length": 32
+          },
+          {
+            "start": 5235,
+            "length": 32
+          },
+          {
+            "start": 11734,
+            "length": 32
+          }
+        ],
+        "112496": [
+          {
+            "start": 1737,
+            "length": 32
+          },
+          {
+            "start": 5615,
+            "length": 32
+          },
+          {
+            "start": 6799,
+            "length": 32
+          },
+          {
+            "start": 11396,
+            "length": 32
+          },
+          {
+            "start": 11443,
+            "length": 32
+          }
+        ],
+        "112499": [
+          {
+            "start": 914,
+            "length": 32
+          },
+          {
+            "start": 4400,
+            "length": 32
+          },
+          {
+            "start": 4520,
+            "length": 32
+          },
+          {
+            "start": 4593,
+            "length": 32
+          },
+          {
+            "start": 8918,
+            "length": 32
+          },
+          {
+            "start": 9041,
+            "length": 32
+          },
+          {
+            "start": 9383,
+            "length": 32
+          }
+        ],
+        "112502": [
+          {
+            "start": 996,
+            "length": 32
+          },
+          {
+            "start": 2956,
+            "length": 32
+          },
+          {
+            "start": 3392,
+            "length": 32
+          },
+          {
+            "start": 11123,
+            "length": 32
+          },
+          {
+            "start": 11907,
+            "length": 32
+          }
+        ],
+        "112506": [
+          {
+            "start": 672,
+            "length": 32
+          },
+          {
+            "start": 4897,
+            "length": 32
+          },
+          {
+            "start": 9349,
+            "length": 32
+          }
+        ],
+        "112512": [
+          {
+            "start": 1838,
+            "length": 32
+          },
+          {
+            "start": 2501,
+            "length": 32
+          }
+        ],
+        "74027": [
+          {
+            "start": 2017,
+            "length": 32
+          },
+          {
+            "start": 2302,
+            "length": 32
+          },
+          {
+            "start": 3254,
+            "length": 32
+          },
+          {
+            "start": 3800,
+            "length": 32
+          },
+          {
+            "start": 5986,
+            "length": 32
+          },
+          {
+            "start": 7110,
+            "length": 32
+          },
+          {
+            "start": 7444,
+            "length": 32
+          },
+          {
+            "start": 12515,
+            "length": 32
+          }
+        ]
+      }
+    }
+  },
+  "artifactNote": "Runtime template hashes contain compiler placeholders for constructor immutables and are not deployed-instance codehashes. Production source is identical to reviewed 2baa67e; ABI/deployment changes from other Guardian PRs require fresh deployment or separately reviewed migration. No production action occurred.",
+  "oracleReview": {
+    "model": "Claude Fable (claude-fable-5-1)",
+    "reviewedCodeHead": "2baa67efbda2db89774723dbb3ca949fad84a130",
+    "verdict": "Conditional approval, no blockers. Fixed-compiler size gate and documentation conditions satisfied; close restriction regression and zombie reactivation note added."
+  }
+}

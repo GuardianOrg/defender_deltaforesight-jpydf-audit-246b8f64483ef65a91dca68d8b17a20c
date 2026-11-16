@@ -1,0 +1,287 @@
+diff --git a/contracts/test/CollateralVaultStrategy.t.sol b/contracts/test/CollateralVaultStrategy.t.sol
+index 7a6d34ea..99e2509f 100644
+--- a/contracts/test/CollateralVaultStrategy.t.sol
++++ b/contracts/test/CollateralVaultStrategy.t.sol
+@@ -923,6 +923,90 @@ contract CollateralVaultStrategyTest is Test {
+         assertEq(cachedAfter, 0, "cache reduced to avoid double count");
+     }
+
++    function test_SendToVault_PartialRecoveryDoesNotRenewValuationCache() public {
++        (CollateralVault fVault, FailingMockStrategy fStrat) = _deployFailingSetup();
++
++        uint256 amount = 100e8;
++        uint256 recovered = 10e8;
++        underlying.mint(alice, amount);
++        vm.startPrank(alice);
++        underlying.approve(address(fVault), amount);
++        fVault.deposit(amount);
++        vm.stopPrank();
++        fVault.setBufferConfig(0, 0);
++        fVault.allocate();
++
++        (uint256 cachedBefore, uint256 updatedBefore, bool initializedBefore) =
++            fVault.strategyValuationCaches(IStrategy(address(fStrat)));
++        assertTrue(initializedBefore, "allocation initializes cache");
++        assertEq(cachedBefore, amount, "cache starts at principal");
++
++        fStrat.setValuationShouldFail(true);
++        fStrat.setWithdrawShouldFail(false);
++
++        uint256 maxAge = fVault.strategyValuationMaxAge();
++        vm.warp(updatedBefore + maxAge - 1);
++        vm.prank(admin);
++        uint256 sent = fStrat.sendToVault(recovered);
++        assertEq(sent, recovered, "partial recovery reaches vault");
++
++        (uint256 cachedAfter, uint256 updatedAfter, bool initializedAfter) =
++            fVault.strategyValuationCaches(IStrategy(address(fStrat)));
++        assertTrue(initializedAfter, "cache remains initialized");
++        assertEq(cachedAfter, cachedBefore - recovered, "receipt reduces cached value");
++        assertEq(updatedAfter, updatedBefore, "partial receipt is not a full valuation refresh");
++
++        vm.warp(updatedBefore + maxAge + 1);
++        (uint256 unavailableRatio, bool availableBeforeRecovery) = fVault.backingRatioForPricing();
++        assertEq(unavailableRatio, 0, "pricing returns the unavailable sentinel");
++        assertFalse(availableBeforeRecovery, "partial receipt cannot extend the original valuation TTL");
++
++        fStrat.setValuationShouldFail(false);
++        vm.prank(bob);
++        assertTrue(
++            fVault.refreshStrategyValuation(IStrategy(address(fStrat))), "permissionless full refresh restores liveness"
++        );
++        (uint256 recoveredRatio, bool availableAfterRecovery) = fVault.backingRatioForPricing();
++        assertEq(recoveredRatio, 1e18, "recovered valuation preserves full backing");
++        assertTrue(availableAfterRecovery, "fresh full valuation restores pricing availability");
++    }
++
++    function test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing() public {
++        (CollateralVault fVault, FailingMockStrategy fStrat) = _deployFailingSetup();
++
++        uint256 amount = 100e8;
++        underlying.mint(alice, amount);
++        vm.startPrank(alice);
++        underlying.approve(address(fVault), amount);
++        fVault.deposit(amount);
++        vm.stopPrank();
++        fVault.setBufferConfig(0, 0);
++        fVault.allocate();
++
++        (uint256 cachedBefore, uint256 updatedBefore, bool initializedBefore) =
++            fVault.strategyValuationCaches(IStrategy(address(fStrat)));
++        assertTrue(initializedBefore, "allocation initializes cache");
++        assertEq(cachedBefore, amount, "cache starts at principal");
++
++        deal(address(underlying), address(fStrat), 0);
++        fStrat.setValuationShouldFail(true);
++        fVault.pauseAllocation();
++        vm.warp(updatedBefore + fVault.strategyValuationMaxAge() + 1);
++
++        fVault.writeoffStrategyPrincipal(IStrategy(address(fStrat)), amount, 0);
++
++        assertEq(fStrat.principal(), 0, "confirmed loss is written off");
++        (uint256 cachedAfter, uint256 updatedAfter, bool initializedAfter) =
++            fVault.strategyValuationCaches(IStrategy(address(fStrat)));
++        assertTrue(initializedAfter, "reduced cache remains initialized");
++        assertEq(cachedAfter, 0, "writeoff removes cached value");
++        assertEq(updatedAfter, updatedBefore, "writeoff fallback is not a full valuation refresh");
++
++        (uint256 unavailableRatio, bool availableAfterWriteoff) = fVault.backingRatioForPricing();
++        assertEq(unavailableRatio, 0, "pricing returns the unavailable sentinel");
++        assertFalse(availableAfterWriteoff, "accounting writeoff alone cannot restore valuation availability");
++    }
++
+     function test_SendProfitToVault_PrincipalUnchanged() public {
+         _deposit(alice, 10e8);
+         vault.setBufferConfig(0, 0);
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 3e1163d2..832275c2 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -101,6 +101,8 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | none | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35, fast 1,547, all with 0 failed / 0 skipped. The price-feed integration regression failed before the fix and passed after remediation. Sky Strategy runtime 20,173 bytes (margin 4,403); converter runtime 5,596 bytes (margin 18,980) |
+ | PRELIM-L01 | 2026-08-12 | jpydf-audit / `audit/preliminary-l01-remediation` | source `fe3d3d0` + M-01/M-02/L-01 overlays | forge 1.7.1 local | none | CollateralVault focused; push-model invariant; fast PR gate; production size gate; pre-fix mutation; production-source `forge fmt --check`; `git diff --check` | Codex | PASS: Vault focused 197, invariant 4, fast 1,547; all with 0 failed / 0 skipped. Before the fix, the owner-retry idempotence regression failed with `RequestNotFound`; after remediation it passed. Vault runtime 23,032 bytes (margin 1,544). The test file has unrelated pre-existing fmt drift, so the full-file fmt gate was not applied; the changed block and production sources were checked separately |
+ | PRELIM-L02 | 2026-08-12 | jpydf-audit / `audit/preliminary-l02-remediation` | source `fe3d3d0` + M-01/M-02/L-01/L-02 overlays | forge 1.7.1 local | none | active-feed constructor focused; deploy selector; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 129, fast 1,549; all with 0 failed / 0 skipped. Before the fix, a Standard feed deployed against an expired shared provider and the regression failed; after remediation Standard / dwstETH both revert `InvalidInitialPrice`, while deployment succeeds after fresh JPY recovery. DFUSDC runtime 3,095 bytes (margin 21,481); DFWstETH runtime 3,492 bytes (margin 21,084) |
++| PRELIM-L03 | 2026-08-12 | jpydf-audit / `audit/preliminary-l03-disposition` | source `fe3d3d0` + M-01/M-02/L-01/L-02 overlays + L-03 resolution tests/docs | forge 1.7.1 local | none | CollateralVaultStrategy focused; fast PR gate; report-recommendation mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 125 and fast 1,550, all with 0 failed / 0 skipped. The report's `updatedAt = block.timestamp` mutation advanced the cache timestamp from `1` to `86400` and made the partial-recovery non-renewal regression fail as intended. Production source is unchanged; recovery of both live reads restores pricing availability immediately, while permissionless refresh repopulates the cache |
++| PRELIM-L03-FU | 2026-08-12 | jpydf-audit / `agent/correct-l03-writeoff-recovery-evidence` | source `fe3d3d0` + M-01/M-02/L-01/L-02 + corrected L-03 overlay | forge 1.7.1 local | none | stale-cache full-writeoff regression; CollateralVaultStrategy focused; fast PR gate; five-overlay reconstruction; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 126 and fast 1,551, all with 0 failed / 0 skipped. A full writeoff reflects confirmed accounting loss but does not restore pricing availability while live valuation remains unreadable. Production source is unchanged; five-overlay reconstruction reports zero drift, missing, and undecided files |
+
+ ---
+
+@@ -140,6 +142,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ - **PRELIM-M02 update (2026-08-12)**: Refined SKY-SEC-011 for preliminary finding M-02. An explicit Sky reverse-route halt continues principal-capped 1:1 valuation without recognizing unrealized yield. Invalid fee, status-read failure, and every other quote failure remain fail-closed and are not inferred to be halts. Requirement and Verified totals are unchanged.
+ - **PRELIM-L01 update (2026-08-12)**: Refined VAULT-FR-006 for preliminary finding L-01. A retry for an existing, settled request returns `0` without a second transfer, accounting mutation, or event; an unissued ID still reverts with `RequestNotFound`. Permissionless triggering and fixed owner payout remain unchanged. Re-certifying VAULT-FR-006 updates §7 / active Verified from **2 to 3 / 110 to 111**; requirement-ID totals are unchanged.
+ - **PRELIM-L02 update (2026-08-12)**: Added ORCL-INV-012, requiring every active DF feed constructor to seed a primary, nonzero `lastGoodPrice`. An unhealthy expired shared-JPY episode rejects deployment even when an unregistered feed's shutdown call is caught, and fresh recovery restores deployability. §10 INV / IDs / non-ID checks / Verified change **11→12 / 53→54 / 14→15 / 5→6**; active totals change **126→127 / 662→663 / 116→117 / 111→112**. The stale base in the IDs-under-verification formula is also reconciled to the dashboard total, **663**.
++- **PRELIM-L03 update (2026-08-12)**: Rejected preliminary L-03's timestamp-refresh proposal. A partial receipt is not a full valuation of the remaining Strategy position; advancing `updatedAt` would let repeated small recoveries indefinitely renew an old high cache that may include unobserved loss. VAULT-FR-005 / VAULT-INV-005 now state that TTL remains anchored to the last full valuation, expiry fails closed, availability returns immediately when both live valuation reads recover, and permissionless full refresh repopulates the cache. Incident writeoff reflects confirmed accounting loss but does not restore availability while valuation remains unreadable; a follow-up unit test fixes that boundary. Requirement-ID and dashboard Verified totals are unchanged.
+ - **V10 update (2026-07-07)**: Added EFWEETH-SEC-014 and updated the active ID total from **615 to 616**. `WeETHWithdrawAdapter` is now included as first-party production source / audit scope and marked PASS based on Etherfi focused tests, deploy selector tests, build, and diff check.
+ - **V11 update (2026-07-07)**: Active ID total remains **616**. Added a DF-specific identity marker to `WeETHWithdrawAdapter` and marked the `EtherfiWeETHStrategy.initialize` marker-less ABI-compatible adapter rejection PASS based on focused tests, deploy selector tests, build, fmt, and diff check.
+ - **Artifact-boundary sync (2026-07-31)**: Added the existing missing `SYS-RISK-008`, the new `SYS-RISK-009`, and `ADR-007`, updating the active ID total from **616 to 619**. The rows remain Not run because operational Evidence has not been collected.
+@@ -400,18 +403,18 @@ Source of truth: [CollateralVault.md](../../protocol/product/spec/CollateralVaul
+ | VAULT-FR-002 | redeem (immediate/delayed, first-come all-or-nothing, CEI, reject non-exact amount, return receiver delta) | unit, integration, invariant=VAULT-INV-002/003/014 | ☑ | ☑ | `test_Redeem_ImmediateWhenBufferSufficient`; `test_Redeem_ShortfallCreatesRequest`; `test_Redeem_QueuesShortfallBeforePartialBufferTransferHook`; `test_Redeem_FeeOnTransferReturnsReceiverBalanceDelta` | PASS(V21/unit) | Return value is the receiver balance delta even for fee-on-transfer Underlying; integration / invariant not run |
+ | VAULT-FR-003 | redeemWithPermit (exact check -> permit -> burn(self), all reverts) | unit, integration | ☐ | ☐ | | Not run | |
+ | VAULT-FR-004 | allocate (cooldown/pause/M==0, all-outbound stop plus no cooldown consumption and automatic recovery on partial valuation, cap clamp, fixed weights, exact-recovery deposit-reject skip, recovery-mismatch full revert, no reallocation) | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | Not run | |
+-| VAULT-FR-005 | receiveFromStrategy (registration check, balance-delta accounting, zero short-circuit, invalidate cache on declared/received mismatch) | unit, invariant=VAULT-INV-005 | ☑ | ☑ | `test_ReceiveFromStrategy_OnlyFromRegistered`; `test_ReceiveFromStrategy_ZeroAmountFromRegistered`; `test_FeeOnTransferToken_PrincipalMatchesSent`; `test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage` | PASS(V21/unit) | Fails closed rather than guessing upstream position decrease; invariant not run |
++| VAULT-FR-005 | receiveFromStrategy (registration check, balance-delta accounting, zero short-circuit, exact partial recovery reduces cache value without renewing TTL, invalidate cache on declared/received mismatch) | unit, invariant=VAULT-INV-005 | ☑ | ☑ | `test_ReceiveFromStrategy_OnlyFromRegistered`; `test_ReceiveFromStrategy_ZeroAmountFromRegistered`; `test_FeeOnTransferToken_PrincipalMatchesSent`; `test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage`; `test_SendToVault_PartialRecoveryDoesNotRenewValuationCache` | PASS(PRELIM-L03/unit) | Does not infer the remaining position's value from a receipt; fails closed after expiry. Recovery of both live reads restores availability immediately; permissionless refresh repopulates the cache. Invariant not run |
+ | VAULT-FR-006 | claim (permissionless trigger, fixed owner payout, settled retry returns 0, unissued/time/buffer reverts, no partial claim, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 | ☑ | ☑ | `test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent`; `test_Claim_PermissionlessTriggerPaysContractRequestOwner`; `test_Claim_UnknownId_Reverts`; `forge test --match-path test/InvariantPushModel.t.sol` | PASS(PRELIM-L01) | An owner retry after prior settlement does not mutate state/balances or emit another event; it cannot prevent gas expenditure by an already-submitted no-op transaction |
+ | VAULT-FR-007 | transferYieldToTreasury (M<=L early return, buffer clamp, min valuation, backstop excluded) | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-008 | whitelist / addStrategy / removeStrategy (guards, Underlying invariant, principal==0, add=GOV / remove=GUARDIAN) | unit, invariant=VAULT-INV-007/008 | ☐ | ☐ | | Not run | |
+-| VAULT-FR-009 | updateStrategy (GOV) / writeoffStrategyPrincipal (WRITEOFF, weight invariant, clamp) | unit, invariant=VAULT-INV-009 | ☐ | ☐ | | Not run | |
++| VAULT-FR-009 | updateStrategy (GOV) / writeoffStrategyPrincipal and forceDeallocateMorphoV2 (WRITEOFF, atomic incident pause, penalty/backing guards, tracked-loss cache reflection) | unit, invariant=VAULT-INV-009 | ☐ | ☐ | `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `MorphoV2StrategyTest` force-deallocation suite | PARTIAL(PRELIM-L03-FU/unit) | In addition to the Morpho incident path, a stale-cache full writeoff reflects confirmed loss but does not restore pricing availability while valuation remains unreadable; full update/writeoff requirement recertification and invariant not run |
+ | VAULT-FR-010 | initialize (placeholder mode, grant 4 roles, defaults, zero/reinitialize revert) | unit, manual | ☐ | ☐ | | Not run | |
+ | VAULT-FR-011 | setUnderlying (one-time, dToken-first, bidirectional whenUnderlyingReady guard) | unit, invariant=VAULT-INV-010/011, manual | ☐ | ☐ | | Not run | |
+ | VAULT-FR-012 | GOV configuration setters (setBufferConfig / setAllocatorConfig / setStrategyValuationMaxAge / setWithdrawDelay / setTreasury; restricted, validated, immediate effect) | unit | ☐ | ☐ | | Not run | |
+ | VAULT-FR-013 | View group (bufferBalance / backstopBalance / totalUnderlying / Strategy enumeration; placeholder-safe, index, raw value vs min) | unit, manual | ☐ | ☐ | | Not run | |
+ | VAULT-FR-014 | Pause / Unpause (GUARDIAN/GOV asymmetry, 4 independent lines, claim stop) | unit | ☐ | ☐ | | Not run | |
+ | VAULT-FR-015 | Upgrade (UUPS, GOV-only, storage append-only) | unit, manual | ☐ | ☐ | | Not run | |
+-| VAULT-FR-016 | backingRatio (downward-only, L_eff==0 -> 1e18, liability dust rounded up, placeholder-safe) | unit, fork, invariant=VAULT-INV-012/014 | ☐ | ☐ | | Not run | |
++| VAULT-FR-016 | operational backingRatio and pricing availability (unavailable vs measured zero, downward-only, L_eff==0 -> 1e18, liability dust rounded up, placeholder-safe) | unit, fork, invariant=VAULT-INV-012/014 | ☐ | ☐ | `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_backingValuationUnavailableShutsDownAtLastGoodPrice`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing` | PARTIAL(PRELIM-L03-FU/unit) | An unavailable valuation remains unavailable after full writeoff and is distinct from live-read recovery, which restores availability immediately; full refresh repopulates the cache. Fork / invariant and full requirement recertification not run |
+ | VAULT-FR-017 | backstopDeposit / releaseBackstopToBuffer (actual-received accounting, no mint, backing recovery, explicit GOV release) | unit, integration, invariant=VAULT-INV-013 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-018 | backing ops views (liability / shortfall / amount to top up target ratio, rounded up, target>1e18 revert) | unit, integration, invariant=VAULT-INV-014 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-019 | emergencyDisableStrategy (GUARDIAN immediate, weight set to 0, idempotent, backing unchanged, re-enable only by updateStrategy) | unit, invariant=VAULT-INV-009 | ☐ | ☐ | | Not run | |
+@@ -424,7 +427,7 @@ Source of truth: [CollateralVault.md](../../protocol/product/spec/CollateralVaul
+ | VAULT-INV-002 | redeem CEI order, full burn, InvalidDTokenAmount rejection for non-exact amount | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-003 | Shortfall redeem: immediate payment + request == needed; pendingWithdrawals increases by remaining amount | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-004 | pendingWithdrawals == sum of unclaimed requests; double claim impossible (`claimed` flag) | invariant | ☐ | ☐ | | Not run | |
+-| VAULT-INV-005 | totalUnderlying == raw balance + sum conservative valuations (min / fresh cache / 0 valuation, outflow increment, received decrement) | invariant | ☐ | ☐ | | Not run | |
++| VAULT-INV-005 | totalUnderlying == raw balance + sum conservative valuations (min / fresh cache / 0 valuation, outflow increment, received decrement, no cache-TTL renewal on partial receipt) | invariant | ☐ | ☐ | `test_SendToVault_PartialRecoveryDoesNotRenewValuationCache` | SUPPORT(PRELIM-L03/unit) | Timestamp safety/liveness boundary covered by unit test; specified invariant campaign not run |
+ | VAULT-INV-006 | allocate movement <= allocateMaxMove; allocation <= cap remaining; reduction stays in buffer | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-007 | Guards for addToWhitelist / addStrategy (EOA rejection, whitelist, vault.underlying finalized, Underlying match) | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-008 | removeStrategy only when principal==0 (StrategyHasPrincipal) | invariant | ☐ | ☐ | | Not run | |
+diff --git a/documents/en/protocol/product/spec/CollateralVault.md b/documents/en/protocol/product/spec/CollateralVault.md
+index 5b0a8c5c..4a82d34b 100644
+--- a/documents/en/protocol/product/spec/CollateralVault.md
++++ b/documents/en/protocol/product/spec/CollateralVault.md
+@@ -277,7 +277,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+   1. **Registration validation** — if `msg.sender` is not a registered Strategy, revert with `NotRegisteredStrategy`
+   2. **Zero short-circuit** — if `_declaredAmount == 0`, emit `ReceivedFromStrategy(msg.sender, 0, 0)` and return `0` (do not revert)
+   3. **Actual received accounting** — record Vault balance before receipt, pull `_declaredAmount` with `safeTransferFrom(msg.sender, vault, _declaredAmount)`, and determine `received` as balance delta
+-  4. **Valuation cache reconciliation** — on exact delivery (`received == _declaredAmount`), reduce the fallback cache by `received`. On a fee-on-transfer / rebase mismatch, invalidate the cache because the receipt alone cannot prove how much upstream position value moved. This prevents an ambiguous fresh cache from reaching pricing during a live valuation outage
++  4. **Valuation cache reconciliation** — on exact delivery (`received == _declaredAmount`), reduce the fallback cache's `conservativeValue` by `received` but do not update `updatedAt`. A receipt proves delivery into the Vault buffer, not a full valuation of what remains in the Strategy. On a fee-on-transfer / rebase mismatch, invalidate the cache because the receipt alone cannot prove how much upstream position value moved. This prevents an ambiguous or expired cache from reaching pricing as fresh during a live valuation outage
+   5. **Emit `ReceivedFromStrategy(msg.sender, _declaredAmount, received)`**
+ - **Revert / early return**: unregistered Strategy -> `NotRegisteredStrategy`; `_declaredAmount == 0` -> emit `ReceivedFromStrategy(_, 0, 0)` and return `0` (no revert); `safeTransferFrom` failure (balance/allowance) -> upstream revert.
+ - **Emitted event**: `ReceivedFromStrategy(strategy, declaredAmount, received)` (`declaredAmount` is requested amount; `received` is actual Vault balance delta; [VAULT-EVT-005](#11-events-and-monitoring-requirements-evt)).
+@@ -285,8 +285,9 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+   - **Approval direction is Strategy -> Vault**: during initialization, the Strategy performs `underlying.safeApprove(vault, type(uint256).max)` **to the Vault**, allowing the Vault to pull with `safeTransferFrom` ([VAULT-FR-011](#vault-fr-011) / [Strategy Requirements Specification](strategies/Strategy.md)).
+   - **Declared vs actual receipt separation**: `received` is not the declared amount; it is **balance delta**, preventing accounting drift if fee-on-transfer / rebasing behavior makes actual receipt lower than declared. The calling Strategy reduces its own `principal` based on this `received` value (= return value; [Strategy Requirements Specification](strategies/Strategy.md)).
+   - **Principal-return cache reconciliation**: exact delivery reduces the cache by actual receipt; a declared/received mismatch invalidates it. Yield-only `sendProfitToVault` / Underlying reward claims bypass this function and do not move principal or cache. Treasury yield transfer is handled by `transferYieldToTreasury` ([VAULT-FR-007](#vault-fr-007)).
++  - **Partial recovery does not renew cache TTL**: an exact receipt proves only that a known amount moved from the Strategy into the Vault, not the current value of the remaining position. Advancing `updatedAt` would let repeated small recoveries indefinitely renew an old high cache that may contain unobserved loss. TTL therefore continues from the last successful full live valuation and fails closed after expiry even during partial recovery. Pricing availability returns as soon as both live valuation reads recover. Permissionless `refreshStrategyValuation` then stores that full valuation in the bounded cache for subsequent transient read failures. Incident writeoff finalizes confirmed accounting loss but does not restore availability while valuation remains unreadable ([VAULT-FR-009](#vault-fr-009)).
+   - **`nonReentrant`**.
+-- **Verification**: unit (unregistered revert, zero short-circuit, balance-delta accounting, cache invalidation and live recovery after declared/received mismatch), invariant=[VAULT-INV-005](#vault-inv-005).
++- **Verification**: unit (unregistered revert, zero short-circuit, balance-delta accounting, cache invalidation and live recovery after declared/received mismatch, partial recovery does not extend TTL, live-read recovery restores availability, full refresh repopulates the cache), invariant=[VAULT-INV-005](#vault-inv-005).
+
+ ### <a id="vault-fr-006"></a>VAULT-FR-006: `claim` (receive delayed redemption for a WithdrawRequest)
+
+@@ -408,8 +409,9 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+   - **Canonical registration path is `addStrategy`** (passes whitelist and Underlying-invariant guards, [VAULT-FR-008](#vault-fr-008)). `updateStrategy` only adjusts existing registrations and does not re-check whitelist / Underlying consistency.
+   - **Disable procedure**: in emergencies, use `emergencyDisableStrategy(strategy)` (GUARDIAN, immediate, [VAULT-FR-019](#vault-fr-019)). For planned disable, use `updateStrategy(strategy, 0, cap, false)` (with `weightBps` set to 0 per step 2). Either way, the Strategy remains in `strategies[]` and remains a target for push recovery via `receiveFromStrategy`, `writeoffStrategyPrincipal`, and `removeStrategy`. Re-enable is only through delayed-side `updateStrategy` (`addStrategy` re-registration is rejected with `StrategyAlreadyExists`).
+   - **Writeoff is bookkeeping only**: no asset movement. Recoverable amounts are first returned to the Vault through `Strategy.sendToVault` ([Strategy Requirements Specification](strategies/Strategy.md)) / emergency recovery (`Strategy.emergencyWithdraw`, [Strategy Requirements Specification](strategies/Strategy.md)), and only unrecoverable residual is written off. Even if Strategy `estimatedTotalUnderlying()` does not reflect loss, GOV can determine the unrecoverable amount and write it off; then the `principal` side of `min(est, principal)` decreases and `totalUnderlying()` / `backingRatio()` reflect it downward.
++  - **Writeoff and pricing availability are separate boundaries**: if a full live valuation fails after writeoff, the Vault reduces the cache's `conservativeValue` by the actual writeoff but does not advance `updatedAt` beyond the last full valuation. Once that original TTL has expired, `backingRatioForPricing()` remains unavailable even when a full writeoff reduces cache and principal to zero. Writeoff reflects confirmed accounting loss; it is not evidence that an unreadable valuation is now available. Availability returns as soon as both live reads recover; permissionless full refresh stores that value in the bounded cache.
+   - **Safety of over-writeoff requests**: if `_amount > principal`, Strategy clamps, so `principal` cannot go negative. Vault event `amount` is actual reduction, not requested amount. `_minBackingRatioAfter` adds an operator-specified backing-impact guard, so immediate writeoff does not become a silent over-markdown if the requested amount, units, or live state differ from the incident dry-run. Can also be executed on disabled Strategies (`weightBps == 0`).
+-- **Verification**: unit (registration validation, weight invariant, upper bound, guardian emergency disable, over-writeoff clamp, writeoff on disabled Strategy), invariant=[VAULT-INV-009](#vault-inv-009).
++- **Verification**: unit (registration validation, weight invariant, upper bound, guardian emergency disable, over-writeoff clamp, writeoff on disabled Strategy, full writeoff of a stale cache does not restore pricing availability), invariant=[VAULT-INV-009](#vault-inv-009).
+
+ ### <a id="vault-fr-010"></a>VAULT-FR-010: `initialize` (placeholder-capable proxy initialization)
+
+@@ -719,7 +721,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ | <a id="vault-inv-002"></a>VAULT-INV-002 | Successful redeem preserves CEI order (exact required amount calculation -> `dToken.burn` -> `safeTransfer`), and `_dTokenAmount` is fully burned after immediate/delayed allocation. Non-exact dToken amount reverts with `InvalidDTokenAmount` before burn ([VAULT-FR-002](#vault-fr-002)) | invariant |
+ | <a id="vault-inv-003"></a>VAULT-INV-003 | In buffer-insufficient redeem, `immediate payment + WithdrawRequest.underlyingAmount == underlyingNeeded`, and `pendingWithdrawals` increases by `remaining` (first-come-takes-all + delayed rule, [VAULT-FR-002](#vault-fr-002)) | invariant |
+ | <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(unclaimed WithdrawRequest.underlyingAmount)`. The first successful claim reduces exactly that amount; an already-settled retry returns `0` without changing accounting, transfer, or event state (`claimed` flag, [VAULT-FR-006](#vault-fr-006)) | invariant |
+-| <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`. Strategies with live valuation readable use `min(estimatedTotalUnderlying_i, principal_i)`; valuation failure uses fresh cache; stale/missing/disabled cache is 0. This raw balance is the sum of liquid buffer and protected backstop reserve, while `bufferBalance()` excludes reserve. If live refresh fails after Vault->Strategy allocation, fallback cache is incremented by known outflow. `receiveFromStrategy` accounts `received` by balance delta, not declared amount; exact delivery reduces fallback cache by actual receipt, while declared/received mismatch invalidates it ([VAULT-FR-005](#vault-fr-005) / [VAULT-FR-007](#vault-fr-007)) | invariant |
++| <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`. Strategies with live valuation readable use `min(estimatedTotalUnderlying_i, principal_i)`; valuation failure uses fresh cache; stale/missing/disabled cache is 0. This raw balance is the sum of liquid buffer and protected backstop reserve, while `bufferBalance()` excludes reserve. If live refresh fails after Vault->Strategy allocation, fallback cache is incremented by known outflow without freshening an old/stale cache. `receiveFromStrategy` accounts `received` by balance delta, not declared amount; exact delivery reduces fallback cache by actual receipt but does not advance `updatedAt` because it is not a full valuation, while declared/received mismatch invalidates it ([VAULT-FR-005](#vault-fr-005) / [VAULT-FR-007](#vault-fr-007)) | invariant |
+ | <a id="vault-inv-006"></a>VAULT-INV-006 | Per-call buffer->Strategy movement by `allocate()` is at most `allocateMaxMove`, and each Strategy allocation is at most cap headroom (`cap_i - est_i`). A failed managed-assets preflight stops all outbound movement. After a successful preflight, amounts reduced by caps or skipped due to a per-Strategy valuation reread/deposit failure are not reallocated and remain in buffer. Deposit rejection is skipped only after exact recovery; any mismatch reverts the whole call ([VAULT-FR-004](#vault-fr-004)) | invariant |
+ | <a id="vault-inv-007"></a>VAULT-INV-007 | `addToWhitelist` / `addStrategy` reject EOA / undeployed strategy, and `addStrategy` succeeds only when `whitelistedStrategies[strategy] == true`, `vault.underlying() != address(0)`, and `strategy.underlying() == vault.underlying()` ([VAULT-FR-008](#vault-fr-008)) | invariant |
+ | <a id="vault-inv-008"></a>VAULT-INV-008 | `removeStrategy` succeeds only when `strategy.principal() == 0` and live `strategy.estimatedTotalUnderlying() == 0` (remaining principal -> `StrategyHasPrincipal`; live valuation failure or residual assets -> `StrategyHasAssets`, [VAULT-FR-008](#vault-fr-008)) | invariant |
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 4ade747f..b3cd5080 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -108,6 +108,8 @@ source ~/.config/deltaforesight/rpc.env
+ | PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | なし | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35、fast 1,547、全て 0 failed / 0 skipped。pre-fix では価格 feed 統合回帰が失敗し、remediation 後に成功。Sky Strategy runtime 20,173 bytes（margin 4,403）、converter runtime 5,596 bytes（margin 18,980） |
+ | PRELIM-L01 | 2026-08-12 | jpydf-audit / `audit/preliminary-l01-remediation` | source `fe3d3d0` + M-01/M-02/L-01 overlays | forge 1.7.1 local | なし | CollateralVault focused; push-model invariant; fast PR gate; production size gate; pre-fix mutation; production-source `forge fmt --check`; `git diff --check` | Codex | PASS: Vault focused 197、invariant 4、fast 1,547、全て 0 failed / 0 skipped。pre-fix では owner retry の idempotence 回帰が `RequestNotFound` で失敗し、remediation 後に成功。Vault runtime 23,032 bytes（margin 1,544）。既存 test file には本変更外の fmt drift があるため全ファイル fmt gate は適用せず、本変更ブロックと production source を個別確認 |
+ | PRELIM-L02 | 2026-08-12 | jpydf-audit / `audit/preliminary-l02-remediation` | source `fe3d3d0` + M-01/M-02/L-01/L-02 overlays | forge 1.7.1 local | なし | active feed constructor focused; deploy selector; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 129、fast 1,549、全て 0 failed / 0 skipped。pre-fix では expired shared provider に対する Standard feed deploy が成功して回帰テストが失敗し、remediation 後は Standard / dwstETH とも `InvalidInitialPrice`、fresh JPY recovery 後は deploy 成功。DFUSDC runtime 3,095 bytes（margin 21,481）、DFWstETH runtime 3,492 bytes（margin 21,084） |
++| PRELIM-L03 | 2026-08-12 | jpydf-audit / `audit/preliminary-l03-disposition` | source `fe3d3d0` + M-01/M-02/L-01/L-02 overlays + L-03 resolution tests/docs | forge 1.7.1 local | なし | CollateralVaultStrategy focused; fast PR gate; report-recommendation mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 125、fast 1,550、全て 0 failed / 0 skipped。報告推奨の `updatedAt = block.timestamp` mutation は cache timestamp を `1 → 86400` へ進め、partial recovery 非更新回帰を意図どおり失敗させた。production source は変更せず、両 live read の復旧で pricing availability が直ちに回復し、permissionless refresh が cache を再格納することを確認 |
++| PRELIM-L03-FU | 2026-08-12 | jpydf-audit / `agent/correct-l03-writeoff-recovery-evidence` | source `fe3d3d0` + M-01/M-02/L-01/L-02 + corrected L-03 overlay | forge 1.7.1 local | なし | stale-cache full-writeoff regression; CollateralVaultStrategy focused; fast PR gate; 5-overlay reconstruction; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 126、fast 1,551、全て 0 failed / 0 skipped。全額 writeoff は確定損失を会計反映する一方、live valuation が読取不能なら pricing availability を回復しないことを確認。production source は変更なし、5 overlays は drift / missing / undecided 全て 0 |
+
+ ---
+
+@@ -149,6 +151,7 @@ source ~/.config/deltaforesight/rpc.env
+ - **PRELIM-M02 更新（2026-08-12）**: SKY-SEC-011 を予備監査 M-02 に合わせて精緻化した。明示的な Sky 逆変換 route halt は principal-capped 1:1 valuation を継続し、停止中の未実現 yield を認識しない。invalid fee、status read failure、その他の quote failure は halt と推測せず従来どおり fail-closed とする。要件 ID 数・検証済集計は不変。
+ - **PRELIM-L01 更新（2026-08-12）**: VAULT-FR-006 を予備監査 L-01 に合わせて精緻化した。実在する settlement 済み request の再 claim は二重送金・二重減算・追加 event を行わず `0` を返し、未発行 ID は従来どおり `RequestNotFound` とする。permissionless trigger と owner 固定送金は維持する。VAULT-FR-006 の再認定により §7 / active 検証済を **2 → 3 / 110 → 111** に更新し、要件 ID 数は不変。
+ - **PRELIM-L02 更新（2026-08-12）**: active DF feed の初期 fetch が `primary` かつ nonzero `lastGoodPrice` を seed する constructor invariant を ORCL-INV-012 として追加した。shared JPY provider の unhealthy expiry 中は未登録 feed の shutdown call が catch されても deployment を拒否し、fresh recovery 後は再開する。§10 INV / ID / 非 ID check / 検証済を **11→12 / 53→54 / 14→15 / 5→6**、active 合計を **126→127 / 662→663 / 116→117 / 111→112** に更新し、stale だった検証対象 ID 式の基数も dashboard と同じ **663** に同期した。
++- **PRELIM-L03 更新（2026-08-12）**: 予備監査 L-03 の timestamp refresh 提案は不採用。partial receipt は残存 Strategy position の full valuation ではなく、これで `updatedAt` を進めると未観測損失を含み得る古い高値 cache を少額回収で反復延命できる。VAULT-FR-005 / VAULT-INV-005 を精緻化し、TTL は最後の full valuation を基準に維持、期限後は fail-closed、両 live valuation read の復旧で availability が直ちに回復し、permissionless full refresh が cache を再格納する方針を回帰テストで固定した。incident writeoff は確定損失を会計へ反映するが、valuation が読取不能な間は availability を回復しない境界も follow-up unit test で固定した。要件 ID・dashboard 検証済集計は不変。
+ - **V1-MAP（2026-06-20）件数訂正**: メタ監査（[ledger-completeness-audit](../historical-reviews/2026-06-20-ledger-completeness-audit.md)）により Product-Overview（ARCH/ADR）・LIDO（INV/EVT）・Parameters（bridge-minter-timelock）の欠落 **5 行**を反映。develop の §3 集計（566）に +5 し ID 計 **571**。追加行 = **ARCH-006 / ADR-006 / LIDO-INV-010 / LIDO-EVT-005 / PRM-BRIDGE-MINTER-TIMELOCK**（うち bridge-minter は commit `756a736` 由来）。**合計行はセル和と一致するよう全面再計算済**。
+ - **台帳同期（2026-06-24）**: Strategy / Etherfi の追補 ID **6 行**（STGY-INV-011 / STGY-EVT-012 / EFWEETH-SEC-008..011）を反映し、active ID 計を **571 → 577** に更新。追加時点では検証実体未確認のため PASS にせず、未実施として扱った。
+ - **V8 更新（2026-06-24）**: EFWEETH-SEC-012 を追加し、active ID 計を **577 → 578** に更新。`test/*Strategy*.t.sol` の実走で EFWEETH-SEC-008..012 を PASS に更新した。
+@@ -408,18 +411,18 @@ placeholder 期挙動（各行 = doc §12 の表 1 行。発火実証列に ✅
+ | VAULT-FR-002 | redeem（即時／遅延・先着総取り・CEI・exact amount 拒否・receiver 実着額返却） | unit, integration, invariant=VAULT-INV-002/003/014 | ☑ | ☑ | `test_Redeem_ImmediateWhenBufferSufficient`; `test_Redeem_ShortfallCreatesRequest`; `test_Redeem_QueuesShortfallBeforePartialBufferTransferHook`; `test_Redeem_FeeOnTransferReturnsReceiverBalanceDelta` | PASS(V21/unit) | fee-on-transfer Underlying でも返値は receiver 残高差分。integration / invariant は未実施 |
+ | VAULT-FR-003 | redeemWithPermit（exact check→permit→burn(self)・各 revert） | unit, integration | ☑ | ☑ | `forge test --match-path test/CollateralVault.t.sol`（V6 / 2026-06-21: 55 passed） | PASS(unit) | round-trip / permit front-run 済み nonce + allowance / invalid permit + allowance 不足 `PermitFailed` / zero amount / zero receiver / non-exact dust before permit を確認。integration は未実施 |
+ | VAULT-FR-004 | allocate（cooldown/pause/M==0・partial valuation 時は全 outbound 停止＋cooldown 非消費＋自動復旧・cap クランプ・固定 weights・deposit reject は完全回収時のみ skip・回収不一致は全体 revert・再配分なし） | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | 未実施 | |
+-| VAULT-FR-005 | receiveFromStrategy（登録判定・残高差分計上・ゼロ短絡・declared/received 不一致時 cache 無効化） | unit, invariant=VAULT-INV-005 | ☑ | ☑ | `test_ReceiveFromStrategy_OnlyFromRegistered`; `test_ReceiveFromStrategy_ZeroAmountFromRegistered`; `test_FeeOnTransferToken_PrincipalMatchesSent`; `test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage` | PASS(V21/unit) | 不一致時に upstream position 減少量を推測せず fail-closed。invariant は未実施 |
++| VAULT-FR-005 | receiveFromStrategy（登録判定・残高差分計上・ゼロ短絡・exact partial recovery は cache 値のみ減額して TTL 非更新・declared/received 不一致時 cache 無効化） | unit, invariant=VAULT-INV-005 | ☑ | ☑ | `test_ReceiveFromStrategy_OnlyFromRegistered`; `test_ReceiveFromStrategy_ZeroAmountFromRegistered`; `test_FeeOnTransferToken_PrincipalMatchesSent`; `test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage`; `test_SendToVault_PartialRecoveryDoesNotRenewValuationCache` | PASS(PRELIM-L03/unit) | receipt だけから残存 position の価値を再評価せず、期限後は fail-closed。両 live read の復旧で availability が直ちに回復し、permissionless refresh が cache を再格納。invariant は未実施 |
+ | VAULT-FR-006 | claim（permissionless trigger・owner 固定送金・settlement 済み retry は 0・未発行/時刻/buffer 各 revert・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 | ☑ | ☑ | `test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent`; `test_Claim_PermissionlessTriggerPaysContractRequestOwner`; `test_Claim_UnknownId_Reverts`; `forge test --match-path test/InvariantPushModel.t.sol` | PASS(PRELIM-L01) | 先行 settlement 後の owner retry は state / balance / event を再変更しない。ただし送信済み no-op tx のガス消費自体は防げない |
+ | VAULT-FR-007 | transferYieldToTreasury（M≤L 早期・buffer クランプ・min 評価・backstop 除外） | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-008 | whitelist / addStrategy / removeStrategy（ガード・Underlying 不変条件・principal==0・add=GOV / remove=GUARDIAN） | unit, invariant=VAULT-INV-007/008 | ☐ | ☐ | | 未実施 | |
+-| VAULT-FR-009 | updateStrategy（GOV）/ writeoffStrategyPrincipal・forceDeallocateMorphoV2（WRITEOFF・atomic incident pause・penalty / backing guard・tracked-loss cache 反映） | unit, invariant=VAULT-INV-009 | ☐ | ☐ | `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `MorphoV2StrategyTest` force-deallocation 群 | PARTIAL(unit) | 新 Morpho incident path の正常/異常系は V20 で実走。update/writeoff を含む要件全体の ledger 再認定と invariant は未実施 |
++| VAULT-FR-009 | updateStrategy（GOV）/ writeoffStrategyPrincipal・forceDeallocateMorphoV2（WRITEOFF・atomic incident pause・penalty / backing guard・tracked-loss cache 反映） | unit, invariant=VAULT-INV-009 | ☐ | ☐ | `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `MorphoV2StrategyTest` force-deallocation 群 | PARTIAL(PRELIM-L03-FU/unit) | Morpho incident path に加え、stale cache の全額 writeoff は損失を会計反映しても pricing availability を回復しない境界を実走。update/writeoff を含む要件全体の ledger 再認定と invariant は未実施 |
+ | VAULT-FR-010 | initialize（placeholder 化・4 ロール付与・既定値・ゼロ/再初期化 revert） | unit, manual | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-011 | setUnderlying（一度きり・dToken-first・whenUnderlyingReady 双方向ガード） | unit, invariant=VAULT-INV-010/011, manual | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-012 | GOV 設定 setter（setBufferConfig / setAllocatorConfig / setStrategyValuationMaxAge / setWithdrawDelay / setTreasury。限定・検証・即時反映） | unit | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-013 | View 群（bufferBalance / backstopBalance / totalUnderlying / Strategy 列挙。placeholder-safe・index・生値 vs min） | unit, manual | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-014 | Pause / Unpause（GUARDIAN/GOV 非対称・4 系統独立・claim 停止） | unit | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-015 | アップグレード（UUPS・GOV 限定・storage 追記のみ） | unit, manual | ☐ | ☐ | | 未実施 | |
+-| VAULT-FR-016 | operational backingRatio と pricing availability（取得不能 vs 実測0・下方専用・L_eff==0→1e18・liability dust 切り上げ・placeholder-safe） | unit, fork, invariant=VAULT-INV-012/014 | ☐ | ☐ | `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_backingValuationUnavailableShutsDownAtLastGoodPrice` | PARTIAL(unit) | V20 で availability 境界を実走。fork / invariant と要件全体の再認定は未実施 |
++| VAULT-FR-016 | operational backingRatio と pricing availability（取得不能 vs 実測0・下方専用・L_eff==0→1e18・liability dust 切り上げ・placeholder-safe） | unit, fork, invariant=VAULT-INV-012/014 | ☐ | ☐ | `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_backingValuationUnavailableShutsDownAtLastGoodPrice`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing` | PARTIAL(PRELIM-L03-FU/unit) | unavailable valuation は全額 writeoff 後も unavailable のままで、即時 availability を回復する live read 復旧と区別される。full refresh は cache 再格納を担う。fork / invariant と要件全体の再認定は未実施 |
+ | VAULT-FR-017 | backstopDeposit / releaseBackstopToBuffer（実着額計上・mint なし・backing 回復・GOV 明示解放） | unit, integration, invariant=VAULT-INV-013 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-018 | backing ops views（liability / shortfall / 目標比率補填額・切り上げ・target>1e18 revert） | unit, integration, invariant=VAULT-INV-014 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-019 | emergencyDisableStrategy（GUARDIAN 即時・weight 0 化・冪等・backing 不変・再有効化は updateStrategy のみ） | unit, invariant=VAULT-INV-009 | ☐ | ☐ | | 未実施 | |
+@@ -432,7 +435,7 @@ placeholder 期挙動（各行 = doc §12 の表 1 行。発火実証列に ✅
+ | VAULT-INV-002 | redeem の CEI 順序・全量 burn・非 exact 額の InvalidDTokenAmount 拒否 | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-003 | 不足 redeem: 即時支払い＋request == needed・pendingWithdrawals が remaining 分増加 | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-004 | pendingWithdrawals == Σ 未 claim request・二重 claim 不可（claimed フラグ） | invariant | ☐ | ☐ | | 未実施 | |
+-| VAULT-INV-005 | totalUnderlying == raw 残高＋Σ 保守評価（min / fresh cache / 0 評価・outflow 増分・received 減額） | invariant | ☐ | ☐ | | 未実施 | |
++| VAULT-INV-005 | totalUnderlying == raw 残高＋Σ 保守評価（min / fresh cache / 0 評価・outflow 増分・received 減額、partial receipt で cache TTL 非更新） | invariant | ☐ | ☐ | `test_SendToVault_PartialRecoveryDoesNotRenewValuationCache` | SUPPORT(PRELIM-L03/unit) | timestamp safety / liveness の unit 境界は確認。規定 invariant campaign は未実施 |
+ | VAULT-INV-006 | allocate の移動量 ≤ allocateMaxMove・配分 ≤ cap 残・削減分は buffer 残置 | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-007 | addToWhitelist / addStrategy のガード（EOA 拒否・whitelist・vault.underlying 確定・underlying 一致） | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-008 | removeStrategy は principal==0 のみ（StrategyHasPrincipal） | invariant | ☐ | ☐ | | 未実施 | |
+diff --git a/documents/jp/protocol/product/spec/CollateralVault.md b/documents/jp/protocol/product/spec/CollateralVault.md
+index 651fcb98..4844663d 100644
+--- a/documents/jp/protocol/product/spec/CollateralVault.md
++++ b/documents/jp/protocol/product/spec/CollateralVault.md
+@@ -278,7 +278,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+   1. **登録検証** — `msg.sender` が登録済み Strategy でなければ `NotRegisteredStrategy` で revert
+   2. **ゼロ短絡** — `_declaredAmount == 0` なら `ReceivedFromStrategy(msg.sender, 0, 0)` を発火して `0` を返す（revert しない）
+   3. **実受領計上** — 受領前の Vault 残高を記録し、`safeTransferFrom(msg.sender, vault, _declaredAmount)` で引き取り、残高差分を `received` として確定する
+-  4. **valuation cache reconciliation** — `received == _declaredAmount` の exact delivery なら fallback valuation cache を `received` 分だけ減額する。fee-on-transfer / rebase 等で両者が異なる場合、Vault は receipt だけから upstream position の減少量を確定できないため cache を無効化する。これにより live valuation 失敗時に曖昧な fresh cache を pricing へ使わない
++  4. **valuation cache reconciliation** — `received == _declaredAmount` の exact delivery なら fallback valuation cache の `conservativeValue` を `received` 分だけ減額するが、`updatedAt` は更新しない。receipt は Vault buffer への実着を証明しても、Strategy に残る価値の full valuation ではないためである。fee-on-transfer / rebase 等で両者が異なる場合、Vault は receipt だけから upstream position の減少量を確定できないため cache を無効化する。これにより live valuation 失敗時に曖昧または期限切れの cache を fresh として pricing へ使わない
+   5. **`ReceivedFromStrategy(msg.sender, _declaredAmount, received)` を発火**
+ - **revert / 早期 return**: 未登録 Strategy → `NotRegisteredStrategy`；`_declaredAmount == 0` → `ReceivedFromStrategy(_, 0, 0)` 発火＋`0` 返却（revert しない）；`safeTransferFrom` 失敗（残高・allowance 不足）→ 上流 revert。
+ - **発火イベント**: `ReceivedFromStrategy(strategy, declaredAmount, received)`（`declaredAmount` は要求量、`received` は Vault が実際に受領した残高差分、[VAULT-EVT-005](#11-イベント監視要件evt)）。
+@@ -286,8 +286,9 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+   - **approve 方向は Strategy → Vault**: Strategy は初期化時に `underlying.safeApprove(vault, type(uint256).max)` で **Vault に対して** max approve しており、Vault は `safeTransferFrom` で引き取れる（[VAULT-FR-011](#vault-fr-011-setunderlying後付け確定一度限り) / [Strategy 要件定義](./strategies/Strategy.md)）。
+   - **declared と実受領の分離**: `received` は declared 量ではなく **残高差分**で確定するため、fee-on-transfer / rebasing 等で実着額が declared を下回っても会計がずれない。呼び出し元 Strategy はこの `received`（= 戻り値）を基準に自らの `principal` を減算する（[Strategy 要件定義](./strategies/Strategy.md)）。
+   - **元本返却系のみ cache を reconcile**: 本関数を通った受領は元本返却系として扱い、exact delivery なら cache を実着額分減額し、declared/received mismatch なら cache を無効化する。`sendProfitToVault` / Underlying reward claim は本関数を通らず Strategy から Vault へ直接送金されるため、Strategy principal / valuation cache を動かさない。収益の Treasury 送付は別関数 `transferYieldToTreasury`（[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)）が担う。
++  - **部分回収は cache TTL を更新しない**: exact receipt で判明するのは「既知量が Strategy から Vault へ移った」ことだけで、残存 position の現在価値ではない。`updatedAt` を receipt 時刻へ進めると、未観測損失を含み得る古い高値 cache を少額回収で反復延命できる。したがって TTL は最後に full live valuation が成功した時刻から進み続け、期限後は partial recovery 中でも pricing unavailable として fail-closed する。pricing availability は両 live valuation read が復旧した時点で直ちに回復する。permissionless `refreshStrategyValuation` はその full valuation を bounded cache へ再格納し、その後の一時的な read failure に備える。確定損失の incident writeoff は帳簿上の毀損を確定するが、valuation が読取不能なままなら availability を回復しない（[VAULT-FR-009](#vault-fr-009-updatestrategy--emergencydisablestrategy--writeoffstrategyprincipal登録-strategy-の調整と元本毀損確定)）。
+   - **`nonReentrant`**。
+-- **Verification**: unit（未登録 revert・ゼロ短絡・残高差分計上・declared/received mismatch 時の cache 無効化と live 回復）, invariant=[VAULT-INV-005](#vault-inv-005)。
++- **Verification**: unit（未登録 revert・ゼロ短絡・残高差分計上・declared/received mismatch 時の cache 無効化と live 回復・partial recovery が TTL を延長せず live read 復旧で availability 回復・full refresh で cache 再格納）, invariant=[VAULT-INV-005](#vault-inv-005)。
+
+ ### VAULT-FR-006: claim（WithdrawRequest の遅延償還受領）
+
+@@ -409,8 +410,9 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+   - **正規の登録経路は `addStrategy`**（whitelist ＋ Underlying 不変条件のガードを通る、[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)）。`updateStrategy` は既登録 Strategy の調整専用で whitelist / Underlying 整合の再検査は行わない。
+   - **無効化の手順**: 緊急時は `emergencyDisableStrategy(strategy)`（GUARDIAN・即時、[VAULT-FR-019](#vault-fr-019-emergencydisablestrategy登録-strategy-の即時無効化)）。計画的な無効化は `updateStrategy(strategy, 0, cap, false)`（手順 2 の不変条件に従い `weightBps` を 0 にする）。いずれも無効化後は `strategies[]` に残り、`receiveFromStrategy` での push 回収・`writeoffStrategyPrincipal`・`removeStrategy` の対象であり続ける。再有効化は遅延側の `updateStrategy` のみ（`addStrategy` での再登録は登録判定により `StrategyAlreadyExists` で拒否）。
+   - **writeoff は帳簿操作のみ**: 実資産の移動は伴わない。回収可能分は先に `Strategy.sendToVault`（[Strategy 要件定義](./strategies/Strategy.md)）／緊急回収（`Strategy.emergencyWithdraw`、[Strategy 要件定義](./strategies/Strategy.md)）で Vault に戻し、残った回収不能分のみを writeoff する。Strategy の `estimatedTotalUnderlying()` が損失を反映しない場合でも、GOV が回収不能額を確定して writeoff すれば `min(est, principal)` の `principal` 側が下がり、`totalUnderlying()` / `backingRatio()` に下方反映される。
++  - **writeoff と pricing availability は別境界**: writeoff 後の full live valuation が失敗した場合、Vault は cache の `conservativeValue` を実 writeoff 額だけ減らすが、`updatedAt` は最後の full valuation 時刻から進めない。元 TTL が期限切れなら、全額 writeoff で cache / principal が 0 になっても `backingRatioForPricing()` は unavailable のままである。writeoff は確定損失を会計へ反映する操作であって、読取不能な valuation を available にする証拠ではない。availability は両 live read の復旧時点で回復し、permissionless full refresh はその値を bounded cache へ再格納する。
+   - **過大 writeoff の安全性**: `_amount > principal` でも Strategy 側でクランプされるため `principal` は負にならない。Vault 側イベントの `amount` は要求額ではなく実減少額を示す。`_minBackingRatioAfter` により operator が指定した backing 影響 guard が入り、要求額・単位・live state が incident dry-run とずれた場合に即時 writeoff が無音の過大 markdown にならない。無効化済み Strategy（`weightBps == 0`）にも実行できる。
+-- **Verification**: unit（登録検証・weight 不変条件・上限・guardian emergency disable・過大 writeoff クランプ・無効化済みへの writeoff）, invariant=[VAULT-INV-009](#vault-inv-009)。
++- **Verification**: unit（登録検証・weight 不変条件・上限・guardian emergency disable・過大 writeoff クランプ・無効化済みへの writeoff・stale cache の全額 writeoff だけでは pricing availability が回復しない）, invariant=[VAULT-INV-009](#vault-inv-009)。
+
+ ### VAULT-FR-010: initialize（プレースホルダー化・proxy 初期化）
+
+@@ -722,7 +724,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | <a id="vault-inv-002"></a>VAULT-INV-002 | redeem 成功時は CEI 順序（必要量 exact 算出 → `dToken.burn` → `safeTransfer`）を守り、即時／遅延の按分後も `_dTokenAmount` は全量 burn される。非 exact dToken amount は burn 前に `InvalidDTokenAmount` で revert する（[VAULT-FR-002](#vault-fr-002-redeemdtoken--underlying)） | invariant |
+ | <a id="vault-inv-003"></a>VAULT-INV-003 | buffer 不足 redeem では `即時支払い + WithdrawRequest.underlyingAmount == underlyingNeeded` かつ `pendingWithdrawals` が `remaining` だけ増える（先着総取り＋遅延ルール、[VAULT-FR-002](#vault-fr-002-redeemdtoken--underlying)） | invariant |
+ | <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(未 claim の WithdrawRequest.underlyingAmount)`。初回 claim 成功で当該分だけ減り、既決済 retry は `0` で会計・送金・event を変更しない（`claimed` フラグ、[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)） | invariant |
+-| <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`。live valuation が読める Strategy は `min(estimatedTotalUnderlying_i, principal_i)`、valuation failure 時は fresh cache、stale/missing/無効 cache は 0 評価する。この raw balance は liquid buffer と protected backstop reserve の合計であり、`bufferBalance()` は reserve を除外する。Vault→Strategy allocation 後に live refresh が失敗した場合、fallback cache は投下前に読めた live 保守値へ既知 outflow 分を足した値で seed し、古い/stale cache を fresh 化しない。`receiveFromStrategy` の `received` は declared でなく残高差分で計上され、exact delivery の fallback cache は実着額分だけ減額、declared/received mismatch の cache は無効化される（[VAULT-FR-005](#vault-fr-005-receivefromstrategystrategy--vault-の-push-受入) / [VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)） | invariant |
++| <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`。live valuation が読める Strategy は `min(estimatedTotalUnderlying_i, principal_i)`、valuation failure 時は fresh cache、stale/missing/無効 cache は 0 評価する。この raw balance は liquid buffer と protected backstop reserve の合計であり、`bufferBalance()` は reserve を除外する。Vault→Strategy allocation 後に live refresh が失敗した場合、fallback cache は投下前に読めた live 保守値へ既知 outflow 分を足した値で seed し、古い/stale cache を fresh 化しない。`receiveFromStrategy` の `received` は declared でなく残高差分で計上され、exact delivery の fallback cache は実着額分だけ減額するが full valuation ではないため `updatedAt` を進めない。declared/received mismatch の cache は無効化される（[VAULT-FR-005](#vault-fr-005-receivefromstrategystrategy--vault-の-push-受入) / [VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)） | invariant |
+ | <a id="vault-inv-006"></a>VAULT-INV-006 | `allocate()` の 1 回の buffer→Strategy 移動量は `allocateMaxMove` 以下、かつ各 Strategy への配分は cap 残（`cap_i - est_i`）以下。managed-assets preflight failure は outbound 全体を停止する。preflight 成功後、cap で削られた分・Strategy 別 valuation 再読/deposit failure で skip された分は再配分されず buffer に留まる。deposit reject 時は完全回収できた場合だけ skip し、不一致は全体 revert する（[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)） | invariant |
+ | <a id="vault-inv-007"></a>VAULT-INV-007 | `addToWhitelist` / `addStrategy` は EOA / 未デプロイ strategy を拒否し、`addStrategy` は `whitelistedStrategies[strategy] == true` かつ `vault.underlying() != address(0)` かつ `strategy.underlying() == vault.underlying()` のときのみ成功する（[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)） | invariant |
+ | <a id="vault-inv-008"></a>VAULT-INV-008 | `removeStrategy` は `strategy.principal() == 0` かつ live `strategy.estimatedTotalUnderlying() == 0` のときのみ成功する（残元本があれば `StrategyHasPrincipal`、live valuation 失敗または残余資産があれば `StrategyHasAssets`、[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)） | invariant |

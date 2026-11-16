@@ -1,0 +1,2731 @@
+Compiling 89 files with Solc 0.8.24
+Solc 0.8.24 finished in 86.06s
+Compiler run successful!
+warning: invalid natspec tag '@audit', custom tags must use format '@custom:name'
+   ╭▸ test/rebasingBatchShares.t.sol:39:9
+   │
+39 │         /// @audit MED impact
+   ╰╴        ━━━━━━━━━━━━━━━━━━━━━
+
+
+Ran 24 tests for test/AaveV3Strategy.t.sol:AaveV3StrategyTest
+[PASS] test_Allocate_RecoversAndSkipsWhenAaveSupplyCapRejects() (gas: 14199630)
+[PASS] test_Allocate_RecoversAndSkipsWhenAaveSupplyMintsZeroScaledBalance() (gas: 14206156)
+[PASS] test_ClaimAaveRewards_ClaimsOnlyATokenAssetAndSweepsRewardToTreasury() (gas: 15071841)
+[PASS] test_ClaimAaveRewards_FeeOnTransferRewardReportsTreasuryReceipt() (gas: 15170522)
+[PASS] test_ClaimAaveRewards_PushesUnderlyingRewardToVaultWithoutReducingPrincipal() (gas: 14441912)
+[PASS] test_ClaimAaveRewards_RejectsInvalidCallerAndController() (gas: 14922436)
+[PASS] test_ClaimAaveRewards_RejectsProtectedRewardTokensBeforeControllerCall() (gas: 14234820)
+[PASS] test_DonationDoesNotInflateRealizedYield() (gas: 14309218)
+[PASS] test_EmergencyWithdrawFromAave_DoesNotTransientlyDiscountBacking() (gas: 14234036)
+[PASS] test_EmergencyWithdrawFromAave_DrainsResetsScaleAndPushesToVault() (gas: 14208967)
+[PASS] test_EmergencyWithdrawFromAave_PartialWhenReserveIlliquid() (gas: 14353726)
+[PASS] test_EmergencyWithdrawFromAave_RevertsWhenAaveWithdrawBurnsZeroScaledBalance() (gas: 14335075)
+[PASS] test_EmergencyWithdrawFromAave_WriteoffResidualAfterPartialRecovery() (gas: 15359426)
+[PASS] test_Initialize_RevertsOnATokenUnderlyingMismatch() (gas: 5973831)
+[PASS] test_Initialize_RevertsOnNonContractAToken() (gas: 4878696)
+[PASS] test_Initialize_RevertsOnNonContractAavePool() (gas: 5338016)
+[PASS] test_Initialize_RevertsOnZeroUpgrader() (gas: 5238530)
+[PASS] test_LossReflectedInEstimate() (gas: 14283765)
+[PASS] test_SendToVault_AaveWithdrawalCreditsNetUnderlyingReceipt() (gas: 14388437)
+[PASS] test_SendToVault_CapsAaveWithdrawalToLiquidUnderlying() (gas: 14362118)
+[PASS] test_SendToVault_RevertsWhenAaveWithdrawBurnsZeroScaledBalance() (gas: 14335044)
+[PASS] test_SweepRewardToken_AaveRewardStillSweepsToTreasury() (gas: 14687448)
+[PASS] test_SweepRewardToken_RejectsATokenPositionToken() (gas: 14004233)
+[PASS] test_VaultTotalUnderlyingReflectsLossImmediately() (gas: 14283872)
+Suite result: ok. 24 passed; 0 failed; 0 skipped; finished in 32.47ms (21.05ms CPU time)
+
+Ran 7 tests for test/verification-20260815/ActivePoolVerification.t.sol:ActivePoolVerification
+[PASS] testAggregateAccountingEventsAndCallerGuards() (gas: 72131)
+[PASS] testBatchFeeViewAndAccountingEvents() (gas: 1158353)
+[PASS] testCollateralAccountingCannotUnderflow() (gas: 15494)
+[PASS] testCollateralTransferSurfacesAccountAndEmit() (gas: 604115)
+[PASS] testConstructorWiringApprovalAndEvents() (gas: 1378364)
+[PASS] testInterestDebtAndApproximateRateViews() (gas: 1170745)
+[PASS] testShutdownFreezesAggregateInterest() (gas: 1549929)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 10.12ms (2.05ms CPU time)
+
+Ran 3 tests for test/verification-20260815/CollSurplusPoolVerification.t.sol:CollSurplusPoolVerification
+[PASS] testAccountAndClaimSurplusWithEvents() (gas: 249840)
+[PASS] testCallerGuards() (gas: 13071)
+[PASS] testConstructorWiringAndEvents() (gas: 535830)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 6.83ms (533.92µs CPU time)
+
+Ran 59 tests for test/CollateralVault.t.sol:CollateralVaultTest
+[PASS] test_ActualLiabilities_RoundsUpDTokenDust() (gas: 334056)
+[PASS] test_BackingOpsViews_GuardianCannotInvalidateStrategyCache() (gas: 516939)
+[PASS] test_BackingOpsViews_IncludePendingWithdrawalsAndRoundUp() (gas: 1532068)
+[PASS] test_BackingOpsViews_ReportShortfallAndRepairAmounts() (gas: 1400312)
+[PASS] test_BackingOpsViews_StrategyValuationRevertUsesFreshCacheThenExpires() (gas: 1944443)
+[PASS] test_BackingOpsViews_TargetAboveOneReverts() (gas: 1046000)
+[PASS] test_BackingOpsViews_WriteoffRoleCanInvalidateFreshStrategyCacheOnValuationFailure() (gas: 1894387)
+[PASS] test_BackingOpsViews_ZeroMaxAgeDisablesOnlyFallbackAndConfigCorrectionRecovers() (gas: 1891067)
+[PASS] test_BackingRatio_ImpairmentReturnsAssetOverLiability() (gas: 354228)
+[PASS] test_BackingRatio_IncludesPendingWithdrawals() (gas: 550365)
+[PASS] test_BackingRatio_ZeroLiabilitiesAndHealthyReturnOne() (gas: 185743)
+[PASS] test_BackstopDeposit_RepairsBackingWithoutMintingDToken() (gas: 452323)
+[PASS] test_BackstopDeposit_WorksWhilePaused() (gas: 174334)
+[PASS] test_BackstopDeposit_ZeroReverts() (gas: 35669)
+[PASS] test_BackstopReserve_DoesNotCreateTreasurySurplus() (gas: 270570)
+[PASS] test_BackstopReserve_NotSpendableUntilReleased() (gas: 616433)
+[PASS] test_BufferAndTotalUnderlying_NoStrategies() (gas: 261592)
+[PASS] test_Claim_AfterRefillAndDelay_Succeeds() (gas: 409579)
+[PASS] test_Claim_BeforeDelay_Reverts() (gas: 371794)
+[PASS] test_Claim_BlacklistedOwnerRevertsWithoutConsumingRequest() (gas: 9290384)
+[PASS] test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent() (gas: 422503)
+[PASS] test_Claim_InsufficientBuffer_Reverts_ThenSucceeds() (gas: 415352)
+[PASS] test_Claim_PermissionlessTriggerPaysContractRequestOwner() (gas: 547029)
+[PASS] test_Claim_UnknownId_Reverts() (gas: 25313)
+[PASS] test_Deposit_MintsDTokens() (gas: 189736)
+[PASS] test_Deposit_MintsFromActualReceivedAmount() (gas: 9128201)
+[PASS] test_Deposit_ZeroReverts() (gas: 37702)
+[PASS] test_DustRedeem_8dec() (gas: 185946)
+[PASS] test_GetStrategyStatuses_FailSoftOnValuationRevert() (gas: 1655472)
+[PASS] test_Initialize_RevertsOnDTokenEOA() (gas: 4887116)
+[PASS] test_Initialize_RevertsOnDTokenVaultMismatch() (gas: 7663136)
+[PASS] test_Initialize_ZeroDTokenTreasuryAdmin_Revert() (gas: 5053051)
+[PASS] test_MultiplePendingRequests_OrderedClaim() (gas: 510921)
+[PASS] test_PauseGuardian_CannotUnpause() (gas: 74715)
+[PASS] test_Pause_BlocksDepositAndRedeem() (gas: 304233)
+[PASS] test_RedeemWithPermit_RevertsOnNonExactDTokenDustBeforePermit() (gas: 193096)
+[PASS] test_RedeemWithPermit_RevertsWhenPermitFailsAndAllowanceIsMissing() (gas: 243737)
+[PASS] test_RedeemWithPermit_RoundTrip() (gas: 294969)
+[PASS] test_RedeemWithPermit_ToleratesPermitFrontRunWhenAllowanceExists() (gas: 308603)
+[PASS] test_RedeemWithPermit_ZeroReceiverRevertsBeforePermit() (gas: 189398)
+[PASS] test_RedeemWithPermit_ZeroReverts() (gas: 38358)
+[PASS] test_Redeem_BlacklistedReceiverRevertsWithoutBurnOrRequest() (gas: 9173630)
+[PASS] test_Redeem_FeeOnTransferReturnsReceiverBalanceDelta() (gas: 9118021)
+[PASS] test_Redeem_ImmediateWhenBufferSufficient() (gas: 218594)
+[PASS] test_Redeem_QueuesShortfallBeforePartialBufferTransferHook() (gas: 9509689)
+[PASS] test_Redeem_RevertsOnNonExactDTokenDust() (gas: 188373)
+[PASS] test_Redeem_ShortfallCreatesRequest() (gas: 373517)
+[PASS] test_Redeem_USDC6QueuesOnlyExactBaseUnits() (gas: 9224574)
+[PASS] test_Redeem_ZeroReceiverRevertsBeforeBurnOrRequest() (gas: 190797)
+[PASS] test_Redeem_ZeroReverts() (gas: 38066)
+[PASS] test_ReleaseBackstopToBuffer_RevertsOnZeroOrInsufficient() (gas: 156709)
+[PASS] test_SetBufferConfig_RevertAboveBpsAndState() (gas: 58978)
+[PASS] test_SetTreasury_ZeroRevertAndState() (gas: 38533)
+[PASS] test_SetWithdrawDelay() (gas: 362489)
+[PASS] test_Setters_RequireGov() (gas: 35580)
+[PASS] test_StrategyValuationRefresh_EmitsSuccessAndFailure() (gas: 509179)
+[PASS] test_TransferYieldToTreasury_DoesNotSpendAgainstCachedStrategyValue() (gas: 676737)
+[PASS] test_UserFlowSolvencyGate_IgnoresFreshCacheAndRecoversFromConfirmedAssets() (gas: 1413070)
+[PASS] test_UserFlows_FailClosedWhenUnderbacked_AndResumeAfterBackstopRepair() (gas: 735331)
+Suite result: ok. 59 passed; 0 failed; 0 skipped; finished in 25.13ms (23.89ms CPU time)
+
+Ran 16 tests for test/CollateralVaultDeferredUnderlying.t.sol:CollateralVaultDeferredUnderlyingTest
+[PASS] test_BackstopDeposit_RevertsBeforeSetUnderlying() (gas: 101427)
+[PASS] test_Deposit_RevertsBeforeSetUnderlying() (gas: 25225)
+[PASS] test_Deposit_RevertsOnImmediatePathMismatch() (gas: 8232143)
+[PASS] test_FullActivationFlow_ThenDepositWorks() (gas: 478772)
+[PASS] test_Initialize_AllowsZeroUnderlying() (gas: 27863)
+[PASS] test_Initialize_RevertsOnDTokenVaultMismatchForPlaceholder() (gas: 7630853)
+[PASS] test_Initialize_StillRejectsZeroDTokenTreasuryAdmin() (gas: 5050740)
+[PASS] test_PlaceholderSafe_Views_ReturnZeroNotRevert() (gas: 43126)
+[PASS] test_RedeemWithPermit_RevertsBeforeSetUnderlying() (gas: 25821)
+[PASS] test_Redeem_RevertsBeforeSetUnderlying() (gas: 25582)
+[PASS] test_SetUnderlying_RevertsIfAlreadySet() (gas: 194063)
+[PASS] test_SetUnderlying_RevertsIfDTokenNotBound() (gas: 32520)
+[PASS] test_SetUnderlying_RevertsIfNotGov() (gas: 166091)
+[PASS] test_SetUnderlying_RevertsOnAssetMismatch() (gas: 171275)
+[PASS] test_SetUnderlying_RevertsOnZeroAddress() (gas: 15902)
+[PASS] test_SetUnderlying_SucceedsWhenDTokenMatches() (gas: 195310)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 1.75ms (1.09ms CPU time)
+
+Ran 131 tests for test/CollateralVaultStrategy.t.sol:CollateralVaultStrategyTest
+[PASS] testFuzz_GuardianL10_ExhaustedCacheDuringFailedValuationIsUnavailable(uint256) (runs: 256, μ: 11862756, ~: 11863016)
+Logs:
+  Bound result 5566158349
+
+[PASS] test_AddStrategy_RequiresWeightBpsBound() (gas: 3010666)
+[PASS] test_AddStrategy_RequiresWhitelist() (gas: 2981545)
+[PASS] test_AddStrategy_RevertsAtMaxStrategyCount() (gas: 96423666)
+[PASS] test_AddStrategy_RevertsForDisabledButRegisteredStrategy() (gas: 38267)
+[PASS] test_AddStrategy_RevertsOnEOA() (gas: 20506)
+[PASS] test_AddStrategy_RevertsOnPlaceholderVault_UnderlyingNotSet() (gas: 10953890)
+[PASS] test_AddStrategy_RevertsOnUnderlyingMismatch() (gas: 3643222)
+[PASS] test_AddStrategy_ZeroAddressReverts() (gas: 16139)
+[PASS] test_AllocateMaxMoveZero_DisablesOutboundAllocation() (gas: 288239)
+[PASS] test_AllocateMaxMoveZero_UnderbackedStateRemainsObservable() (gas: 451676)
+[PASS] test_Allocate_CapCheckDoesNotOverflowOnHugeEstimate() (gas: 998557)
+[PASS] test_Allocate_DepositRevertFailsClosedWhenReturnTransferFails() (gas: 15366214)
+[PASS] test_Allocate_DepositRevertFailsClosedWhenTransferFeesPreventExactRecovery() (gas: 15395311)
+[PASS] test_Allocate_DepositRevertRecoversAndContinuesToHealthyStrategy() (gas: 6753453)
+[PASS] test_Allocate_DistributesByWeightBps() (gas: 539115)
+[PASS] test_Allocate_EmitsPerStrategyAmounts() (gas: 504682)
+[PASS] test_Allocate_IgnoresProtectedBackstopReserveForTarget() (gas: 569620)
+[PASS] test_Allocate_PostDepositRefreshFailureDoesNotCommitStaleHighCache() (gas: 1002876)
+[PASS] test_Allocate_PostDepositRefreshFailureRevertsAndRecoversAutomatically() (gas: 1025993)
+[PASS] test_Allocate_ReadOnlyReentryDuringDepositCannotInflateVaultViews() (gas: 3292293)
+[PASS] test_Allocate_StopsAllOutboundOnEstimateFailureAndRecoversAutomatically() (gas: 1486575)
+[PASS] test_Allocate_StopsAllOutboundWhenPrincipalValuationReverts() (gas: 777823)
+[PASS] test_Allocate_ZeroTargetBpsUsesAbsoluteFloorAndConfigCorrectionRecovers() (gas: 611087)
+[PASS] test_AllocatorCooldown_Enforced() (gas: 562076)
+[PASS] test_AllocatorCooldown_HighValueBlocksButConfigCorrectionRecovers() (gas: 550869)
+[PASS] test_BaseStrategy_AcceptOwnershipRevertsForNonPendingOwner() (gas: 44620)
+[PASS] test_BaseStrategy_DeployUnderlyingIsSelfOnly() (gas: 13468)
+[PASS] test_BaseStrategy_Deposit_NonzeroDeclaredWithZeroReceiptFailsClosed() (gas: 40263)
+[PASS] test_BaseStrategy_Deposit_ZeroAmountShortCircuits() (gas: 32038)
+[PASS] test_BaseStrategy_EmergencyWithdraw_ZeroAmountIsNoOp() (gas: 37050)
+[PASS] test_BaseStrategy_InitializeRevertsOnNonContractUnderlying() (gas: 2833764)
+[PASS] test_BaseStrategy_InitializeRevertsOnNonContractVault() (gas: 2831123)
+[PASS] test_BaseStrategy_InitializeRevertsOnZeroOwner() (gas: 2826316)
+[PASS] test_BaseStrategy_ReentrancyGuardBlocksNestedEntry() (gas: 2785962)
+[PASS] test_BaseStrategy_RenounceOwnershipDisabled() (gas: 26370)
+[PASS] test_BaseStrategy_SendProfitToVault_ZeroYieldReturnsZero() (gas: 532194)
+[PASS] test_BaseStrategy_SendToVault_ZeroAmountReturnsZero() (gas: 523889)
+[PASS] test_BaseStrategy_SetUpgraderRejectsZeroAddress() (gas: 15652)
+[PASS] test_BaseStrategy_SetUpgraderRequiresCurrentUpgrader() (gas: 34396)
+[PASS] test_BaseStrategy_TransferOwnershipIsTwoStep() (gas: 44076)
+[PASS] test_BaseStrategy_TransferOwnershipZeroAddressCancelsPendingTransfer() (gas: 39816)
+[PASS] test_BaseStrategy_UpgradeAuthorizationRequiresUpgrader() (gas: 2755019)
+[PASS] test_BaseStrategy_WriteoffPrincipal_ClampsAtPrincipal() (gas: 543159)
+[PASS] test_ClaimMerklRewards_ClaimsAsStrategyAndSweepsRewardToTreasury() (gas: 1265212)
+[PASS] test_ClaimMerklRewards_PushesUnderlyingRewardToVault() (gas: 632762)
+[PASS] test_ClaimMerklRewards_RejectsDuplicateTokenBeforeDistributorCall() (gas: 1114019)
+[PASS] test_ClaimMerklRewards_RejectsVaultDTokenBeforeDistributorCall() (gas: 469923)
+[PASS] test_ClaimMerklRewards_RejectsZeroAndNonContractDistributor() (gas: 723826)
+[PASS] test_ClaimMerklRewards_RequiresOwnerAndValidLengths() (gas: 1102644)
+[PASS] test_Claim_AfterDelay_Succeeds() (gas: 752192)
+[PASS] test_Claim_BeforeDelay_Reverts() (gas: 592407)
+[PASS] test_Claim_CEIOrder_BufferCheckFirst() (gas: 761071)
+[PASS] test_ConfigSetters_RevertAndStateUpdate() (gas: 93238)
+[PASS] test_DepositRedeemRoundTrip() (gas: 748488)
+[PASS] test_EmergencyDisableStrategy_RevertsForUnregisteredStrategy() (gas: 2978977)
+[PASS] test_EmergencyDisableStrategy_ZeroesWeightPausesAllocationWithoutChangingBacking() (gas: 1693870)
+[PASS] test_EmergencyWithdraw_DestinationIsVault() (gas: 133497)
+[PASS] test_EmergencyWithdraw_ReducesVaultCacheForFallbackSolvency() (gas: 11603535)
+[PASS] test_FeeOnTransferToken_AllocationCreditsNetReceipt() (gas: 12269314)
+[PASS] test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage() (gas: 12390352)
+[PASS] test_FeeOnTransferToken_PrincipalMatchesSent() (gas: 12205388)
+[PASS] test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossAndRecovery() (gas: 844498)
+[PASS] test_GetAllStrategies_FailSoftWhenEstimateReverts() (gas: 1727219)
+[PASS] test_GetAllStrategies_ReturnsCorrectShape() (gas: 1114381)
+[PASS] test_GetStrategyAt_OutOfBoundsReverts() (gas: 1058423)
+[PASS] test_GetStrategyStatuses_ReturnsAllocationAndEstimatedPnL() (gas: 1611462)
+[PASS] test_GuardianL05_ActualReceiptOverridesReportedWithdrawal() (gas: 838413)
+[PASS] test_Initialize_GrantsWriteoffRoleToAdmin() (gas: 18512)
+[PASS] test_MultiplePendingRequests_SameUser_OrderedClaim() (gas: 861728)
+[PASS] test_PauseClaim_BlocksOnlyClaimUntilGovUnpauses() (gas: 775300)
+[PASS] test_PauseDepositRedeem_BlocksIndependently_NotClaim() (gas: 821579)
+[PASS] test_PausedAllocation_BlocksOutboundVaultFlows_ButNotRecovery() (gas: 569508)
+[PASS] test_PersistentCanaryCanSwapDrainedERC4626ForMorphoV2Candidate() (gas: 3744994)
+[PASS] test_ReceiveFromStrategy_DisabledButTracked_Accepts() (gas: 557543)
+[PASS] test_ReceiveFromStrategy_OnlyFromRegistered() (gas: 27655)
+[PASS] test_ReceiveFromStrategy_ZeroAmountFromRegistered() (gas: 27506)
+[PASS] test_Redeem_WithBufferShortfall_CreatesRequest() (gas: 596763)
+[PASS] test_RemoveStrategyOnDisabled_Succeeds() (gas: 582092)
+[PASS] test_RemoveStrategy_RequiresZeroPrincipal() (gas: 507208)
+[PASS] test_RemoveStrategy_RevertsWhenPrincipalUnavailable() (gas: 592201)
+[PASS] test_RemoveStrategy_RevertsWhenZeroPrincipalButAssetsRemain() (gas: 579564)
+[PASS] test_RemoveStrategy_RevertsWhenZeroPrincipalButValuationUnavailable() (gas: 593147)
+[PASS] test_RemoveStrategy_SucceedsForLastStrategy() (gas: 1537557)
+[PASS] test_RemoveStrategy_SuccessAfterDrain() (gas: 582143)
+[PASS] test_RemoveStrategy_UnregisteredReverts() (gas: 2984003)
+[PASS] test_RoleManagement_GrantRevoke() (gas: 38808)
+[PASS] test_RoleSeparation_AllocatorCannotGovernPauseOrGrantRoles() (gas: 62572)
+[PASS] test_RoleSeparation_GovCannotWriteoffWithoutWriteoffRole() (gas: 534841)
+[PASS] test_RoleSeparation_GovWithoutDefaultAdminCannotGrantRoles() (gas: 83338)
+[PASS] test_RoleSeparation_GuardianCanOnlyPause() (gas: 104334)
+[PASS] test_SendProfitToVault_PrincipalUnchanged() (gas: 565752)
+[PASS] test_SendProfitToVault_RequiresAllocatorRole() (gas: 50291)
+[PASS] test_SendToVault_DecrementsPrincipalBySent() (gas: 560510)
+[PASS] test_SendToVault_PartialRecoveryDoesNotRenewValuationCache() (gas: 11774148)
+[PASS] test_SendToVault_RequiresAllocatorRole() (gas: 541591)
+[PASS] test_SendToVault_WithdrawReverts_Propagates() (gas: 11642029)
+[PASS] test_SweepRewardToken_FeeOnTransferReportsTreasuryReceipt() (gas: 747637)
+[PASS] test_SweepRewardToken_MaxAmountSweepsFullBalance() (gas: 746673)
+[PASS] test_SweepRewardToken_RejectsProtectedUnderlying() (gas: 94542)
+[PASS] test_SweepRewardToken_RejectsVaultDToken() (gas: 135751)
+[PASS] test_SweepRewardToken_RequiresOwner() (gas: 705443)
+[PASS] test_SweepRewardToken_SendsNonUnderlyingToTreasury() (gas: 749803)
+[PASS] test_SweepRewardToken_UsesCurrentVaultTreasury() (gas: 756622)
+[PASS] test_SweepRewardToken_ZeroAmountIsNoOp() (gas: 730691)
+[PASS] test_TransferYieldToTreasury_OnlySurplus() (gas: 598610)
+[PASS] test_TransferYieldToTreasury_RequiresAllocatorRole() (gas: 17672)
+[PASS] test_TransferYieldToTreasury_ReservesBufferForPendingClaims() (gas: 767483)
+[PASS] test_TransferYieldToTreasury_ReservesConfiguredBufferTarget() (gas: 608879)
+[PASS] test_TransferYieldToTreasury_StopsOnPartialValuationAndRecoversAutomatically() (gas: 1147583)
+[PASS] test_TransferYieldToTreasury_SurplusCapStillProtectsPrincipal() (gas: 246684)
+[PASS] test_TransferYieldToTreasury_UnderwaterReturnsZero() (gas: 525854)
+[PASS] test_UpdateStrategy_DisableWithNonZeroWeight_Reverts() (gas: 23139)
+[PASS] test_UpdateStrategy_ReEnableAfterDisable() (gas: 1094956)
+[PASS] test_UpdateStrategy_RevertsForUnregisteredStrategy() (gas: 3012917)
+[PASS] test_UpgradeAuthorization_RequiresGov() (gas: 4827349)
+[PASS] test_Whitelist_AddRemove() (gas: 2999359)
+[PASS] test_Whitelist_DoubleAddReverts() (gas: 22949)
+[PASS] test_Whitelist_RemoveRegisteredStrategyDisablesPausesAndBlocksFutureAllocation() (gas: 1700543)
+[PASS] test_Whitelist_RemoveUnregisteredReverts() (gas: 19844)
+[PASS] test_Whitelist_RevertsOnEOA() (gas: 20405)
+[PASS] test_WriteoffOnDisabledStrategy_Succeeds() (gas: 555871)
+[PASS] test_WriteoffStrategyPrincipal_AfterZeroRecoveryExposesResidualLoss() (gas: 1788945)
+[PASS] test_WriteoffStrategyPrincipal_BlocksStrategyReentry() (gas: 504558)
+[PASS] test_WriteoffStrategyPrincipal_DecreasesPrincipal() (gas: 631709)
+[PASS] test_WriteoffStrategyPrincipal_DiscountsBackingWhenEstimateUnchanged() (gas: 1662702)
+[PASS] test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing() (gas: 11831421)
+[PASS] test_WriteoffStrategyPrincipal_GuardedRevertPreservesSeparateEmergencyDisable() (gas: 1641485)
+[PASS] test_WriteoffStrategyPrincipal_RevertsWhenBackingGuardExceedsOne() (gas: 23313)
+[PASS] test_WriteoffStrategyPrincipal_RevertsWhenBackingWouldFallBelowGuard() (gas: 648564)
+[PASS] test_WriteoffStrategyPrincipal_RevertsWhileEnabledAndAllocationUnpaused() (gas: 506544)
+Suite result: ok. 131 passed; 0 failed; 0 skipped; finished in 305.45ms (303.24ms CPU time)
+
+Ran 52 tests for test/CollateralYieldZapper.t.sol:CollateralYieldZapperTest
+[PASS] test_AddAndWithdrawCollateral_UsesUnderlyingAtEdges() (gas: 1176933)
+[PASS] test_AddCollWithUnderlying_RespectsAddManagerRestriction() (gas: 1161399)
+[PASS] test_AdjustTroveWithUnderlyingWithMin_RevertsWhenRedeemWouldQueue() (gas: 1261606)
+[PASS] test_AdjustTroveWithUnderlying_CollDecreaseAndDebtIncreaseRoutesToReceiver() (gas: 1174987)
+[PASS] test_AdjustTroveWithUnderlying_CoversCollateralDebtQuadrants() (gas: 1539397)
+[PASS] test_AdjustZombieTroveWithUnderlying_ResuscitatesZombieTrove() (gas: 1867320)
+[PASS] test_CloseTroveToUnderlyingWithMin_RevertsWhenRedeemWouldQueue() (gas: 1906828)
+[PASS] test_CloseTroveToUnderlying_AfterNativeEthZapReturnsWstEthAndGasComp() (gas: 96037937)
+[PASS] test_CloseTroveToUnderlying_AllowsQueuedRedeemWithoutMinimum() (gas: 1926811)
+[PASS] test_CloseTroveToUnderlying_RedeemsCollateralAndReturnsGasComp() (gas: 1758260)
+[PASS] test_CloseTroveToUnderlying_RevertsWhenGasCompensationReceiverRejectsETH() (gas: 1858700)
+[PASS] test_CloseTroveToUnderlying_SixDecimalUnderlyingReturnsRedemptionDust() (gas: 95090460)
+[PASS] test_Constructor_RevertsWhenExpectedStEthMismatches() (gas: 94647931)
+[PASS] test_GuardianL09_ManagerClosesToDTokenDuringVaultIncident() (gas: 2135567)
+[PASS] test_GuardianL09_ManagerWithZeroReceiverReturnsDTokenToOwner() (gas: 1801956)
+[PASS] test_GuardianL09_OwnerClosesToDToken() (gas: 1801904)
+[PASS] test_OpenTroveWithNativeEthAndReferral_EmitsReferralAndRouteEvents() (gas: 95540858)
+[PASS] test_OpenTroveWithNativeEth_RecordsProtocolLidoReferralOnSubmit() (gas: 99609496)
+[PASS] test_OpenTroveWithNativeEth_ReentrantSubmitIsBlockedByGuard() (gas: 95583743)
+[PASS] test_OpenTroveWithNativeEth_RevertsOnWrongMsgValue() (gas: 94492785)
+[PASS] test_OpenTroveWithNativeEth_RevertsWhenMinWstEthOutNotMet() (gas: 94668022)
+[PASS] test_OpenTroveWithNativeEth_RevertsWhenRouteUnavailable() (gas: 24307)
+[PASS] test_OpenTroveWithNativeEth_RevertsWhenSubmitPausedAndPlainPathUnaffected() (gas: 95507821)
+[PASS] test_OpenTroveWithNativeEth_StakesWrapsAndOpensTrove() (gas: 95548692)
+[PASS] test_OpenTroveWithNativeEth_SweepsStEthRoundingResidueToCaller() (gas: 95518712)
+[PASS] test_OpenTroveWithReferral_EmitsReferralDeposit() (gas: 1028026)
+[PASS] test_OpenTroveWithUnderlyingPermitAndReferral_EmitsReferralAndRejectsInvalidSignature() (gas: 94804510)
+[PASS] test_OpenTroveWithUnderlyingPermit_DepositsWithoutPriorApproval() (gas: 94725946)
+[PASS] test_OpenTroveWithUnderlyingPermit_ToleratesPermitFrontRunWhenAllowanceExists() (gas: 94732869)
+[PASS] test_OpenTrove_DepositsUnderlyingAndUsesDTokenCollateral() (gas: 1057815)
+[PASS] test_OpenTrove_RevertsWhenBatchManagerAndInterestRateAreBothSet() (gas: 22947)
+[PASS] test_OpenTrove_RevertsWhenOwnerIsNotSender() (gas: 84681)
+[PASS] test_RepayJpydf_RespectsAddManagerRestriction() (gas: 1241899)
+[PASS] test_RepayJpydf_ReturnsAmountAboveMinDebtCap() (gas: 1204881)
+[PASS] test_RevertWhen_CoreRemoveManagerReceiverIsNotZapper() (gas: 985392)
+[PASS] test_RevertWhen_DirectEthTransferIsNotFromWeth() (gas: 16794)
+[PASS] test_RevertWhen_OpenReceivesWrongETH() (gas: 22512)
+[PASS] test_RevertWhen_VaultDTokenDoesNotMatchRegistryCollateral() (gas: 8834128)
+[PASS] test_RevertWhen_ZapperDependenciesAreUnset() (gas: 408210)
+[PASS] test_RiskReducingManagerAdjustmentWorksAfterOracleRecoveryBeforeResume() (gas: 1372664)
+[PASS] test_SetLidoReferral_ManagerCanUpdateAndDisableAttribution() (gas: 95895393)
+[PASS] test_SetLidoReferral_RevertsForNonManager() (gas: 94473870)
+[PASS] test_WithdrawAndRepayJpydf_RoutesToReceiverAndReturnsLeftovers() (gas: 1169896)
+[PASS] test_WithdrawCollToUnderlyingWithMin_OnlyDustRevertsAtomically() (gas: 94450818)
+[PASS] test_WithdrawCollToUnderlyingWithMin_RevertsWhenRedeemWouldQueue() (gas: 1258527)
+[PASS] test_WithdrawCollToUnderlyingWithMin_UsesFeeTokenReceiverDelta() (gas: 94513102)
+[PASS] test_WithdrawCollToUnderlying_AllowsQueuedRedeemWithoutMinimum() (gas: 1261621)
+[PASS] test_WithdrawCollToUnderlying_EightDecimalUnderlyingReturnsDust() (gas: 94480030)
+[PASS] test_WithdrawCollToUnderlying_OnlyDustSkipsVaultRedeem() (gas: 94447063)
+[PASS] test_WithdrawCollToUnderlying_QueuedRedeemStillReturnsDust() (gas: 94638466)
+[PASS] test_WithdrawCollToUnderlying_SixDecimalUnderlyingReturnsDust() (gas: 94480072)
+[PASS] test_WithdrawJpydf_RevertsForUnauthorizedRemoveManager() (gas: 977086)
+Suite result: ok. 52 passed; 0 failed; 0 skipped; finished in 120.30ms (114.04ms CPU time)
+
+Ran 6 tests for test/ConsoleDevnetChainGuard.t.sol:ConsoleDevnetChainGuardTest
+[PASS] testAcceptsExpectedManifestHash() (gas: 415)
+[PASS] testAcceptsExplicitNonMainnetChain() (gas: 268)
+[PASS] testRejectsMainnetAsExpectedChain() (gas: 4062)
+[PASS] testRejectsUnexpectedChain() (gas: 4037)
+[PASS] testRejectsUnexpectedManifestHash() (gas: 4510)
+[PASS] testRejectsZeroManifestHash() (gas: 4393)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 104.67µs (49.00µs CPU time)
+
+Ran 10 tests for test/ConsoleDevnetTimelockHandover.t.sol:ConsoleDevnetTimelockHandoverTest
+[PASS] testFinalizeAcceptsOwnershipFromUnscheduledState() (gas: 2010372)
+Logs:
+  Timelock accepted ownership mock 0x5991A2dF15A8F6A256D3Ec51E99254Cd3fb576A9
+
+[PASS] testFinalizeCompletedStateCanBeVerifiedAgain() (gas: 2082700)
+Logs:
+  Timelock accepted ownership mock 0x5991A2dF15A8F6A256D3Ec51E99254Cd3fb576A9
+
+[PASS] testFinalizeRejectsBroadcasterDifferentFromCurrentAdmin() (gas: 1832250)
+[PASS] testFinalizeRejectsCodedNonTimelock() (gas: 56933)
+[PASS] testFinalizeResumesScheduledDelayUpdate() (gas: 1872542)
+[PASS] testFinalizeResumesScheduledOwnershipAcceptance() (gas: 2015359)
+Logs:
+  Timelock accepted ownership mock 0x5991A2dF15A8F6A256D3Ec51E99254Cd3fb576A9
+
+[PASS] testPrepareAcceptsExpectedBootstrapTimelock() (gas: 1841052)
+[PASS] testPrepareRejectsCodedNonTimelock() (gas: 56788)
+[PASS] testPrepareRejectsNonzeroBootstrapDelay() (gas: 1849194)
+[PASS] testPrepareRejectsOperatorWithoutRoles() (gas: 1833105)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 2.38ms (1.85ms CPU time)
+
+Ran 3 tests for test/ConsoleSepoliaTestTarget.t.sol:ConsoleSepoliaTestTargetTest
+[PASS] testDirectSafeActionIsHarmlessAndTracked() (gas: 60246)
+[PASS] testRolesAreLimitedToSafeAndTimelock() (gas: 52686)
+[PASS] testTimelockScheduleExecuteAndCancel() (gas: 139599)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 363.12µs (165.13µs CPU time)
+
+Ran 1 test for test/DFBranchRiskParams.t.sol:DFBranchRiskParamsTest
+[PASS] testBranchParamsMatchOwnerDecisionManifest() (gas: 133358)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 290.04µs (240.25µs CPU time)
+
+Ran 2 tests for test/archive/DFCandidateStandardPriceFeeds.t.sol:DFCandidateStandardPriceFeedsTest
+[PASS] test_USDTWrapperStillCompilesAndConvertsToJpy() (gas: 892066)
+[PASS] test_XAUTWrapperStillCompilesAndConvertsToJpy() (gas: 892090)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 349.75µs (158.17µs CPU time)
+
+Ran 37 tests for test/DFGovernanceHandover.t.sol:DFGovernanceHandoverTest
+[PASS] test_AcceptHandoverAllowsOnlyLocalChains() (gas: 10492)
+[PASS] test_AcceptHandoverRejectsProductionBeforeReadingSecrets() (gas: 9319)
+[PASS] test_ActiveBranchPreparationKeepsDepositsFrozen() (gas: 9767939)
+Logs:
+  Vault buffer config updated 0x7491359Ecc049aE7aF6DbE7f3fA2E58162b3CC49 333 0
+  Vault withdraw delay updated 0x7491359Ecc049aE7aF6DbE7f3fA2E58162b3CC49 259200
+  Vault allocator config updated 0x7491359Ecc049aE7aF6DbE7f3fA2E58162b3CC49 1000000 1800
+
+[PASS] test_DeploymentSignerPolicyAcceptsOnlyPublicAddress() (gas: 6653)
+[PASS] test_DeploymentSignerPolicyRejectsPrivateKeyBytes() (gas: 10700)
+[PASS] test_FailedHandoverParameterApplicationRollsBackCapAndCanRecover() (gas: 9611399)
+Logs:
+  Vault buffer config updated 0x7491359Ecc049aE7aF6DbE7f3fA2E58162b3CC49 333 0
+  Vault withdraw delay updated 0x7491359Ecc049aE7aF6DbE7f3fA2E58162b3CC49 259200
+  Vault allocator config updated 0x7491359Ecc049aE7aF6DbE7f3fA2E58162b3CC49 1000000 1800
+
+[PASS] test_HandoverBoolEnvFlagsParseExplicitFalseAsFalse() (gas: 32641)
+[PASS] test_HandoverPreflightRejectsSplitRoutersBeforeMutation() (gas: 36132)
+[PASS] test_HandoverPreflightReturnsSharedRouter() (gas: 34629)
+[PASS] test_HandoverStrategyHelpersCoverSecondaryStrategies() (gas: 15289930)
+Logs:
+  Strategy upgrader updated 0x212224D2F2d262cd093eE13240ca4873fcCBbA3C 0x73962B924A2AE752502BAb466471d92481b012A7
+  Strategy ownership transfer started 0x212224D2F2d262cd093eE13240ca4873fcCBbA3C 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+  Strategy upgrader updated 0x3D7Ebc40AF7092E3F1C81F2e996cbA5Cae2090d7 0x73962B924A2AE752502BAb466471d92481b012A7
+  Strategy ownership transfer started 0x3D7Ebc40AF7092E3F1C81F2e996cbA5Cae2090d7 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+  Ownership accepted strategy 0x212224D2F2d262cd093eE13240ca4873fcCBbA3C 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+  Ownership accepted strategy 0x3D7Ebc40AF7092E3F1C81F2e996cbA5Cae2090d7 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+
+[PASS] test_HandoverStrategyHelpersRejectLiveConfigMismatch() (gas: 15144814)
+[PASS] test_HandoverStrategyHelpersRejectSecondaryManifestMismatch() (gas: 15117402)
+[PASS] test_InterestRouterVerifierAcceptsForwarder() (gas: 566186)
+[PASS] test_InterestRouterVerifierRejectsDirectOwnableReceiver() (gas: 127032)
+[PASS] test_InterestRouterVerifierRejectsRecipientThatJpydfNoLongerAccepts() (gas: 588678)
+[PASS] test_InterestRouterVerifierRejectsWrongTokenOrRecipient() (gas: 571196)
+[PASS] test_MainnetDay1EnvelopeAllowsConvertedTokenValues() (gas: 402507)
+[PASS] test_MainnetDay1EnvelopeRejectsExpiredEvidence() (gas: 47446)
+[PASS] test_MainnetDay1EnvelopeRejectsMismatchedEvidence() (gas: 112668)
+[PASS] test_MainnetDay1EnvelopeRejectsNominalJpyAsTokenUnits() (gas: 213230)
+[PASS] test_MainnetDay1EnvelopeRejectsUnknownEvidenceClassification() (gas: 33111)
+[PASS] test_MainnetDay1EnvelopeRejectsUnlimitedValues() (gas: 37951)
+[PASS] test_MainnetDay1EnvelopeRequiresOverrideAndLocalForkSentinelForTestOnlyEvidence() (gas: 154737)
+[PASS] test_MainnetDay1EnvelopeSkipsNonMainnetChains() (gas: 16394)
+[PASS] test_MainnetHandoverRejectsFiveMinutePilotTimelock() (gas: 24759)
+[PASS] test_MainnetHandoverRejectsNonCanonicalAllocator() (gas: 1838143)
+[PASS] test_MainnetHandoverRejectsNonCanonicalGuardian() (gas: 1838059)
+[PASS] test_MainnetHandoverRejectsNonCanonicalInterestRouterRecipient() (gas: 1837994)
+[PASS] test_MainnetHandoverRejectsNonCanonicalPriceFeedOwner() (gas: 1838206)
+[PASS] test_MainnetHandoverRejectsNonCanonicalTreasury() (gas: 1837974)
+[PASS] test_MainnetHandoverRejectsNonCanonicalWriteoff() (gas: 1838166)
+[PASS] test_MainnetHandoverRejectsPartialBranchTopology() (gas: 19269)
+[PASS] test_MainnetHandoverRequiresDistinctTwelveHourProductionTimelock() (gas: 1843623)
+[PASS] test_VaultHandoverRemovesFormerAdminFromPlaceholderVault() (gas: 15254030)
+Logs:
+  Vault treasury updated 0xD6BbDE9174b1CdAa358d2Cf4D57D1a9F7178FBfF 0x6E51954e41A50596AF183E8E8341deb5de394576
+
+[PASS] test_VerifyRejectsFinalDTokenPendingOwner() (gas: 2809256)
+[PASS] test_VerifyRejectsFinalGenericPendingOwner() (gas: 588962)
+[PASS] test_VerifyRejectsFinalStrategyPendingOwner() (gas: 15277520)
+Logs:
+  Strategy upgrader updated 0x212224D2F2d262cd093eE13240ca4873fcCBbA3C 0x73962B924A2AE752502BAb466471d92481b012A7
+  Strategy ownership transfer started 0x212224D2F2d262cd093eE13240ca4873fcCBbA3C 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+  Strategy upgrader updated 0x3D7Ebc40AF7092E3F1C81F2e996cbA5Cae2090d7 0x73962B924A2AE752502BAb466471d92481b012A7
+  Strategy ownership transfer started 0x3D7Ebc40AF7092E3F1C81F2e996cbA5Cae2090d7 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+  Ownership accepted strategy 0x212224D2F2d262cd093eE13240ca4873fcCBbA3C 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+  Ownership accepted strategy 0x3D7Ebc40AF7092E3F1C81F2e996cbA5Cae2090d7 0xe05fcC23807536bEe418f142D19fa0d21BB0cfF7
+
+Suite result: ok. 37 passed; 0 failed; 0 skipped; finished in 15.06ms (13.56ms CPU time)
+
+Ran 45 tests for test/DFPriceFeed.t.sol:DFPriceFeedTest
+[PASS] test_StandardFeed_jpyConversion() (gas: 897595)
+[PASS] test_StandardFeed_jpyConversionUsesFullPrecisionMulDiv() (gas: 907749)
+[PASS] test_USDCDepegAndBackingDiscountCompoundDownward() (gas: 916635)
+[PASS] test_USDC_jpyConversion() (gas: 897151)
+[PASS] test_afterOracleRecovery_returnsLivePrice() (gas: 942715)
+[PASS] test_backingRatioAboveOneIsCapped() (gas: 913071)
+[PASS] test_backingRatioDiscountsFetchAndRedemptionPrice() (gas: 914096)
+[PASS] test_backingRatioFailureShutsDownAtLastGoodPrice() (gas: 963293)
+[PASS] test_backingRatioGasGriefing_bubblesInsufficientGas() (gas: 1422562)
+[PASS] test_backingRatioReadFailureRecoversOnFreshRead() (gas: 956265)
+[PASS] test_backingRatioRecoveryRepricesWithoutBranchShutdown() (gas: 934706)
+[PASS] test_collUsdAnsweredInRoundBehindRoundId_shutsDown() (gas: 924855)
+[PASS] test_collUsdFutureTimestamp_shutsDown() (gas: 924681)
+[PASS] test_collUsdStale_duringJpyStale_stillShutsDown() (gas: 930340)
+[PASS] test_collUsdStale_shutsDown() (gas: 926034)
+[PASS] test_collUsdZeroPrice_shutsDown() (gas: 898762)
+[PASS] test_collUsdZeroRoundId_shutsDown() (gas: 919998)
+[PASS] test_constructorReverts_ifCollDecimalsNot8() (gas: 168919)
+[PASS] test_constructorReverts_ifCollOracleDeadAtDeploy() (gas: 207437)
+[PASS] test_constructorReverts_ifCollateralVaultHasNoCode() (gas: 167266)
+[PASS] test_constructorReverts_ifJpyDecimalsNot8() (gas: 77327)
+[PASS] test_freshRecoveryRestoresAllSourceReads() (gas: 1794469)
+[PASS] test_jpyFreezeExpires_shutsDownAtLastGoodPrice() (gas: 1000979)
+[PASS] test_jpyFreeze_emitsFrozenAndUnfrozenEvents() (gas: 939200)
+[PASS] test_jpyFreeze_setsAndClearsFrozenSince() (gas: 939226)
+[PASS] test_jpyFrozenSince_recordedOnceDuringContinuousFreeze() (gas: 948431)
+[PASS] test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() (gas: 974925)
+[PASS] test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() (gas: 952467)
+[PASS] test_jpyStaleBeforeFirstCallPastFreezeWindowShutsDownImmediately() (gas: 974565)
+[PASS] test_jpyUsdAnsweredInRoundBehindRoundId_substitutesLastGoodRate_noShutdown() (gas: 943987)
+[PASS] test_jpyUsdFreeze_thenRecovers_repricesWithLiveRate() (gas: 948617)
+[PASS] test_jpyUsdFreeze_tracksLiveCollateral() (gas: 941040)
+[PASS] test_jpyUsdFutureTimestamp_substitutesLastGoodRate_noShutdown() (gas: 943778)
+[PASS] test_jpyUsdGasGriefing_bubblesInsufficientGas() (gas: 1537328)
+[PASS] test_jpyUsdOracleCanBeReplacedViaSourceSwap() (gas: 4032024)
+[PASS] test_jpyUsdStale_substitutesLastGoodRate_noShutdown() (gas: 941815)
+[PASS] test_jpyUsdStalenessBoundary_substitutesNoShutdown() (gas: 939769)
+[PASS] test_jpyUsdWeekendCloseWithinThreshold_keepsPrimary() (gas: 908526)
+[PASS] test_jpyUsdZeroPrice_substitutesNoShutdown() (gas: 936669)
+[PASS] test_jpyUsdZeroRoundId_substitutesLastGoodRate_noShutdown() (gas: 939002)
+[PASS] test_redemptionPriceEqualsPrice() (gas: 908088)
+[PASS] test_sharedProviderKeepsFeedsAtSameJpyRateAndFreezeTime() (gas: 1771563)
+[PASS] test_urgentPriceRejectsLegacyTerminalSourceCache() (gas: 995895)
+[PASS] test_urgentRedemptionPriceEqualsPriceForStandardFeed() (gas: 920267)
+[PASS] test_zeroBackingRatioReturnsNearZeroNonSentinelPrice() (gas: 898695)
+Suite result: ok. 45 passed; 0 failed; 0 skipped; finished in 6.03ms (5.61ms CPU time)
+
+Ran 16 tests for test/archive/DFWBTCPriceFeed.t.sol:DFWBTCPriceFeedTest
+[PASS] test_backingRatioDiscountsWbtcJpyPrice() (gas: 1074257)
+[PASS] test_backingRatioFailureShutsDownAtLastGoodPrice() (gas: 1158397)
+[PASS] test_btcUsdFutureTimestamp_shutsDown() (gas: 1129195)
+[PASS] test_btcUsdStale_shutsDown() (gas: 1135263)
+[PASS] test_constructorReverts_ifWbtcBtcDecimalsNot8() (gas: 310730)
+[PASS] test_jpyUsdStale_substitutesLastGoodRate_noShutdown() (gas: 1123868)
+[PASS] test_wbtcBtcStale_shutsDown() (gas: 1132088)
+[PASS] test_wbtcBtcZeroRoundId_shutsDown() (gas: 1121478)
+[PASS] test_wbtcFetchPriceCapsAtCanonicalWhenPegMonitorIsAboveOne() (gas: 1073728)
+[PASS] test_wbtcMarketPriceUsesFullPrecisionMulDiv() (gas: 1084804)
+[PASS] test_wbtcPegRatioUpdatesAfterDeploy() (gas: 1087783)
+[PASS] test_wbtcPriceDoesNotDivideByPegRatio() (gas: 1073677)
+[PASS] test_wbtcPriceMultipliesPegRatioAndBtcUsd() (gas: 1073255)
+[PASS] test_wbtcRedemptionDeviationUsesFullPrecisionMulDiv() (gas: 1089678)
+[PASS] test_wbtcRedemptionPriceReflectsRealDepegOutsideThreshold() (gas: 1089238)
+[PASS] test_wbtcRedemptionPriceUsesCanonicalWhenPegLagIsWithinThreshold() (gas: 1090135)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 2.08ms (1.87ms CPU time)
+
+Ran 6 tests for test/archive/DFWBTCPriceFeedProxyIntegration.t.sol:DFWBTCPriceFeedProxyIntegrationTest
+[PASS] test_proxy_btcUsdStale_shutsDownAndServesLastGood() (gas: 134846)
+[PASS] test_proxy_healthy_multipliesPegBtcUsdAndJpy() (gas: 113033)
+[PASS] test_proxy_jpyFreezeExpires_proxyShutsDownAndServesLastGood() (gas: 214123)
+[PASS] test_proxy_jpyStale_substitutesNoShutdownAndTracksLivePegLegs() (gas: 166549)
+[PASS] test_proxy_redemption_wbtcBtcFailureDegradesToLastGood() (gas: 126269)
+[PASS] test_proxy_wbtcBtcStale_shutsDownAndServesLastGood() (gas: 131727)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 835.50µs (405.21µs CPU time)
+
+Ran 53 tests for test/DFWstETHPriceFeed.t.sol:DFWstETHPriceFeedTest
+[PASS] testFuzz_redemptionPriceNeverBelowNormal(uint96,uint96) (runs: 256, μ: 1320485, ~: 1320678)
+Logs:
+  Bound result 99990000000699
+  Bound result 99991190498491
+
+[PASS] test_afterOracleRecovery_returnsLivePrice() (gas: 1337374)
+[PASS] test_backingRatioAboveOneIsCapped() (gas: 1304994)
+[PASS] test_backingRatioDiscountsFetchAndRedemptionPrice() (gas: 1312323)
+[PASS] test_backingRatioFailureShutsDownAtLastGoodPrice() (gas: 1354832)
+[PASS] test_backingRatioGasGriefing_bubblesInsufficientGas() (gas: 1813217)
+[PASS] test_backingValuationUnavailableShutsDownAtLastGoodPrice() (gas: 1354721)
+[PASS] test_canonicalRateRevert_shutsDown() (gas: 1329473)
+[PASS] test_canonicalRateZero_shutsDown() (gas: 1307506)
+[PASS] test_compositeJpyConversionUsesFullPrecisionMulDiv() (gas: 1306550)
+[PASS] test_constructorReverts_ifCollateralVaultHasNoCode() (gas: 310033)
+[PASS] test_constructorReverts_ifJpyDecimalsNot8() (gas: 50020)
+[PASS] test_constructorReverts_ifRedemptionReferenceDeadAtDeploy() (gas: 403211)
+[PASS] test_constructorReverts_ifRedemptionReferenceStaleAtDeploy() (gas: 416999)
+[PASS] test_constructorReverts_ifStEthEthReferenceDeadAtDeploy() (gas: 410396)
+[PASS] test_constructorReverts_ifStEthEthReferenceStaleAtDeploy() (gas: 427814)
+[PASS] test_constructorReverts_ifStEthOracleDeadAtDeploy() (gas: 372047)
+[PASS] test_constructorReverts_ifWstEthDecimalsNot18() (gas: 306952)
+[PASS] test_constructorReverts_ifWstEthHasNoCode() (gas: 299841)
+[PASS] test_constructorReverts_ifWstEthRateZeroAtDeploy() (gas: 306826)
+[PASS] test_jpyConversion() (gas: 1288331)
+[PASS] test_jpyFreezeExpires_shutsDownAtLastGoodPrice() (gas: 1396823)
+[PASS] test_jpyFreeze_emitsFrozenAndUnfrozenEvents() (gas: 1332414)
+[PASS] test_jpyFreeze_setsAndClearsFrozenSince() (gas: 1331055)
+[PASS] test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() (gas: 1365587)
+[PASS] test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() (gas: 1344312)
+[PASS] test_jpyStaleBeforeFirstCallPastFreezeWindowShutsDownImmediately() (gas: 1365316)
+[PASS] test_jpyUsdFreeze_thenRecovers_repricesWithLiveRate() (gas: 1341759)
+[PASS] test_jpyUsdFreeze_tracksLiveStEthAndRateLegs() (gas: 1339326)
+[PASS] test_jpyUsdStale_substitutesLastGoodRate_noShutdown() (gas: 1333397)
+[PASS] test_jpyUsdStalenessBoundary_substitutesNoShutdown() (gas: 1331614)
+[PASS] test_jpyUsdWeekendCloseWithinThreshold_keepsPrimary() (gas: 1299341)
+[PASS] test_jpyUsdZeroPrice_substitutesNoShutdown() (gas: 1328603)
+[PASS] test_jpyUsdZeroRoundId_substitutesNoShutdown() (gas: 1330953)
+[PASS] test_rateDecreaseLowersPrice() (gas: 1304517)
+[PASS] test_rateIncreaseRaisesPrice() (gas: 1304537)
+[PASS] test_redemptionCompositeTracksEthMoveWithoutIgnoringStEthDepeg() (gas: 1314394)
+[PASS] test_redemptionKeepsStEthUsdWhenEthUsdReferenceIsLower() (gas: 1311107)
+[PASS] test_redemptionPriceEqualsPrice() (gas: 1306248)
+[PASS] test_redemptionReferenceGasGriefingRevertsInsteadOfFallingBack() (gas: 1941561)
+[PASS] test_redemptionReferenceStaleFailsClosedAndEmits() (gas: 1337413)
+[PASS] test_redemptionUsesUnconditionalHigherEthUsdReference() (gas: 1313216)
+[PASS] test_stEthUsdFutureTimestamp_shutsDown() (gas: 1324679)
+[PASS] test_stEthUsdStale_duringJpyStale_stillShutsDown() (gas: 1321104)
+[PASS] test_stEthUsdStale_shutsDown() (gas: 1314699)
+[PASS] test_stEthUsdZeroPrice_shutsDown() (gas: 1306250)
+[PASS] test_urgentAndRedemptionPricesStayEqualForProxyContinuity() (gas: 1320627)
+[PASS] test_urgentCompositeJpyFreezeExpiryReturnsFailureAtLastGoodPrice() (gas: 1398438)
+[PASS] test_urgentCompositeUsesFrozenJpyRateWithinWindow() (gas: 1338322)
+[PASS] test_urgentCompositeUsesSharedLiveJpyRateExactlyOnce() (gas: 1306674)
+[PASS] test_urgentPriceRejectsLegacyTerminalSourceCache() (gas: 1385740)
+[PASS] test_urgentReferenceFailureReturnsFailureWithoutUpdatingNormalCache() (gas: 1308883)
+[PASS] test_zeroBackingRatioReturnsNearZeroNonSentinelPrice() (gas: 1288613)
+Suite result: ok. 53 passed; 0 failed; 0 skipped; finished in 54.61ms (54.20ms CPU time)
+
+Ran 13 tests for test/DFWstETHPriceFeedProxyIntegration.t.sol:DFWstETHPriceFeedProxyIntegrationTest
+[PASS] test_direct_failure_endStateMatchesProxy() (gas: 1464074)
+[PASS] test_proxy_canonicalRateRevert_shutsDown() (gas: 154190)
+[PASS] test_proxy_canonicalRateZero_shutsDown() (gas: 128872)
+[PASS] test_proxy_healthy_appliesBackingRatio() (gas: 102213)
+[PASS] test_proxy_healthy_servesCompositeJpyPrice() (gas: 91485)
+[PASS] test_proxy_jpyFreezeExpires_proxyShutsDownAndServesLastGood() (gas: 206189)
+[PASS] test_proxy_jpyStale_substitutesNoShutdown() (gas: 135557)
+[PASS] test_proxy_jpyWeekendCloseWithinThreshold_staysHealthy() (gas: 97672)
+[PASS] test_proxy_redemptionReferenceStalePausesUntilValidatedResume() (gas: 253400)
+[PASS] test_proxy_redemptionUsesHigherEthReferenceWithoutPollutingNormalFallback() (gas: 169057)
+[PASS] test_proxy_redemption_failureDegradesToLastGood() (gas: 172087)
+[PASS] test_proxy_stEthStale_shutsDownAndServesLastGood() (gas: 115799)
+[PASS] test_proxy_urgentReferenceFailureFailsClosedWithoutThirdCache() (gas: 135130)
+Suite result: ok. 13 passed; 0 failed; 0 skipped; finished in 1.73ms (1.15ms CPU time)
+
+Ran 49 tests for test/DToken.t.sol:DTokenTest
+[PASS] test_AcceptOwnership_RevertsForNonPendingOwner() (gas: 44675)
+[PASS] test_BurnOnlyVault() (gas: 63569)
+[PASS] test_BurnRevertNonVault() (gas: 80643)
+[PASS] test_BurnThenMintWithCap() (gas: 100804)
+[PASS] test_ConvertToDToken() (gas: 17778)
+[PASS] test_ConvertToDTokenRevertTokenInfoNotSet() (gas: 278562)
+[PASS] test_ConvertToUnderlying() (gas: 17783)
+[PASS] test_ConvertToUnderlyingRevertTokenInfoNotSet() (gas: 278598)
+[PASS] test_Decimals() (gas: 17360)
+[PASS] test_DefaultCap() (gas: 278395)
+[PASS] test_GuardianL01_MintChecksFinalizationEvenWithOpenCap() (gas: 76411)
+[PASS] test_GuardianL01_RegistryBindingIsAuthorizedAndOneShot() (gas: 551883)
+[PASS] test_GuardianL01_UnboundRegistryBlocksCapAndMint() (gas: 423529)
+[PASS] test_InitializeRevertZeroOwner() (gas: 91744)
+[PASS] test_InitializeRevertZeroVault() (gas: 91694)
+[PASS] test_MintExceedsCap() (gas: 43549)
+[PASS] test_MintExceedsCapAfterPartialMint() (gas: 91369)
+[PASS] test_MintOnlyVault() (gas: 80115)
+[PASS] test_MintRevertNonVault() (gas: 18327)
+[PASS] test_MintRevertsBeforeTokenInfoSet() (gas: 2760852)
+[PASS] test_MintWithinCap() (gas: 96788)
+[PASS] test_NameAndSymbol() (gas: 23788)
+[PASS] test_NameAndSymbolFallbackBeforeSetTokenInfo() (gas: 286451)
+[PASS] test_NonceIncrementsAfterPermit() (gas: 681609)
+[PASS] test_NonceStartsAtZero() (gas: 17875)
+[PASS] test_Permit_DomainSeparatorReflectsCurrentName() (gas: 30043)
+[PASS] test_Permit_DomainTracksNameAcrossSetTokenInfo() (gas: 423617)
+[PASS] test_Permit_FrontendDomainFromName_PermitSucceeds() (gas: 82262)
+[PASS] test_Permit_eip712DomainReportsCurrentName() (gas: 32246)
+[PASS] test_RenounceOwnership_Disabled() (gas: 26610)
+[PASS] test_SetAllowedUnderlying_EmitsAndCanRemoveBeforeBind() (gas: 299406)
+[PASS] test_SetAllowedUnderlying_RevertsAfterTokenInfoSet() (gas: 20165)
+[PASS] test_SetAllowedUnderlying_RevertsOnZeroOrEOA() (gas: 285282)
+[PASS] test_SetCap() (gas: 30731)
+[PASS] test_SetCapBelowCurrentSupply() (gas: 111750)
+[PASS] test_SetCapEvent() (gas: 32038)
+[PASS] test_SetCapRevertNonOwner() (gas: 18160)
+[PASS] test_SetTokenInfoRevertAlreadySet() (gas: 21057)
+[PASS] test_SetTokenInfoRevertEmptyName() (gas: 282013)
+[PASS] test_SetTokenInfoRevertEmptySymbol() (gas: 282072)
+[PASS] test_SetTokenInfoRevertInvalidUnderlyingDecimals() (gas: 968664)
+[PASS] test_SetTokenInfoRevertUnderlyingEOA() (gas: 286396)
+[PASS] test_SetTokenInfoRevertUnderlyingNotAllowed() (gas: 289136)
+[PASS] test_SetTokenInfoRevertZeroUnderlying() (gas: 279943)
+[PASS] test_TimelockOwnerCanIdleAndReopenCapRepeatedly() (gas: 1969920)
+[PASS] test_TransferOwnership_IsTwoStep() (gas: 58651)
+[PASS] test_TransferOwnership_ZeroAddressCancelsPendingTransfer() (gas: 39980)
+[PASS] test_UpgradeOnlyOwner() (gas: 2507958)
+[PASS] test_UpgradeRevertNonOwner() (gas: 2501745)
+Suite result: ok. 49 passed; 0 failed; 0 skipped; finished in 3.22ms (2.69ms CPU time)
+
+Ran 2 tests for test/DebtInFrontHelper.t.sol:DebtInFrontHelperTest
+[PASS] test_GetDebtBetweenInterestRateAndTrove(uint256[8],uint256,uint256,uint8) (runs: 256, μ: 6901467, ~: 6766166)
+Logs:
+  Bound result 1200000123456789000000001
+  Bound result 1200000000000000002678401
+  Bound result 424778274955748829861763
+  Bound result 1200000000000000000023433
+  Bound result 1270388747776572147261611
+  Bound result 1200134250000000000000001
+  Bound result 1200000000000000000048880
+  Bound result 1200000000000000000000017
+  Bound result 5
+  Bound result 3
+
+[PASS] test_GetDebtBetweenInterestRates(uint256[8],uint256,uint256,uint8) (runs: 256, μ: 6912170, ~: 6774624)
+Logs:
+  Bound result 1200000123456789000000001
+  Bound result 1200000000000000002678401
+  Bound result 424778274955748829861763
+  Bound result 1200000000000000000023433
+  Bound result 1270388747776572147261611
+  Bound result 1200134250000000000000001
+  Bound result 1200000000000000000048880
+  Bound result 1200000000000000000000017
+  Bound result 5
+  Bound result 3
+
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 5.29s (5.28s CPU time)
+
+Ran 2 tests for test/verification-20260815/DebtInFrontHelperVerification.t.sol:DebtInFrontHelperVerification
+[PASS] testInvalidCollateralIndexRevertsForBothQuerySurfaces() (gas: 469633)
+[PASS] testRangeAndStopQueriesAreReadOnlyAndNonCustodial() (gas: 1282619)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 7.11ms (372.33µs CPU time)
+
+Ran 4 tests for test/verification-20260815/DefaultPoolVerification.t.sol:DefaultPoolVerification
+[PASS] testCallerGuardsAndAccountingCannotUnderflow() (gas: 23366)
+[PASS] testCollateralRoundTripAccountsAndEmits() (gas: 311230)
+[PASS] testConstructorWiringApprovalAndEvents() (gas: 549611)
+[PASS] testDebtAccountingViewsAndEvents() (gas: 45006)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 7.07ms (456.08µs CPU time)
+
+Ran 6 tests for test/DeployLiquity2PriceFeedReadback.t.sol:DeployLiquity2PriceFeedReadbackTest
+[PASS] test_ProductionMinDebtGateAcceptsFinalFloor() (gas: 8334)
+[PASS] test_ProductionMinDebtGateRejectsPilotFloor() (gas: 9192)
+[PASS] test_ProductionMinDebtGateRejectsStaleFloor() (gas: 9268)
+[PASS] test_ProductionMinDebtGateSkipsNonMainnet() (gas: 5518)
+[PASS] test_VerifierAcceptsAllHealthyPricePaths() (gas: 16978)
+[PASS] test_VerifierRejectsUnavailableUrgentPrice() (gas: 41162)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 4.94ms (65.08µs CPU time)
+
+Ran 85 tests for test/DeployLiquity2StrategySelector.t.sol:DeployLiquity2StrategySelectorTest
+[PASS] test_BridgeReadinessJsonIncludesDay1LaunchEvidence() (gas: 2077867)
+[PASS] test_ConfigureBaseTokens_KeepsLocalUsdcOnAnvil() (gas: 2712465)
+[PASS] test_ConfigureBaseTokens_RejectsUnexpectedSepoliaUsdcMetadata() (gas: 1480949)
+[PASS] test_ConfigureBaseTokens_RejectsUnexpectedSepoliaUsdcSymbol() (gas: 1483493)
+[PASS] test_ConfigureBaseTokens_UsesAaveUsdcOnSepolia() (gas: 1484735)
+[PASS] test_DeploySelector_DeploysAndRegistersERC4626Strategy() (gas: 14012746)
+[PASS] test_DeploySelector_DeploysAndRegistersMorphoV2Strategy() (gas: 14632956)
+[PASS] test_DeploySelector_DeploysLocalAaveVenueOffMainnet() (gas: 14024980)
+[PASS] test_DeploySelector_DeploysMultipleStrategiesForOneBranch() (gas: 19774640)
+[PASS] test_DeploySelector_DeploysSkyUsdcSUsdsStrategy() (gas: 16931333)
+[PASS] test_DeploySelector_LocalAaveRoundTripSupportsSixDecimalUsdc() (gas: 14239121)
+[PASS] test_DeploySelector_MorphoV2PenaltyDefaultsToProtocolMax() (gas: 14623996)
+[PASS] test_DeploySelector_RejectsOtherAaveUnderlyingOnSepolia() (gas: 8957639)
+[PASS] test_DeploySelector_RevertsOnUnknownStrategyKind() (gas: 8955521)
+[PASS] test_DeploySelector_RevertsWhenERC4626VaultHasNoCode() (gas: 8973064)
+[PASS] test_DeploySelector_RevertsWhenMainnetAavePoolHasNoCode() (gas: 8976568)
+[PASS] test_DeploySelector_RevertsWhenMorphoV2PenaltyAboveProtocolMax() (gas: 10398380)
+[PASS] test_DeploySelector_RevertsWhenMorphoV2VaultHasNoCode() (gas: 8973318)
+[PASS] test_DeploySelector_RevertsWhenNoneIsUsedInsideStrategyArray() (gas: 8834098)
+[PASS] test_DeploySelector_RevertsWhenNoneStrategyHasNonZeroCap() (gas: 8965005)
+[PASS] test_DeploySelector_RevertsWhenNoneStrategyHasNonZeroWeight() (gas: 8960259)
+[PASS] test_DeploySelector_RevertsWhenSkyStrategyIsNotDUsdcBranch() (gas: 10977375)
+[PASS] test_DeploySelector_RevertsWhenSkyStrategyUnderlyingIsNotUSDC() (gas: 11630460)
+[PASS] test_DeploySelector_RevertsWhenSkyVenueHasNoCode() (gas: 11007598)
+[PASS] test_DeploySelector_SkipsRegistrationForNoneStrategyWithZeroConfig() (gas: 8974213)
+[PASS] test_DeploySelector_UsesConfiguredAaveVenueOnMainnet() (gas: 14040236)
+[PASS] test_DeploySelector_UsesLiveAaveVenueOnSepolia() (gas: 12895798)
+[PASS] test_DeployYieldLayer_InitializesDTokenAndVaultThroughAtomicHelper() (gas: 9558046)
+[PASS] test_DeployYieldLayer_InitializesInertBranchWithZeroCapAndFailClosedVault() (gas: 8651425)
+[PASS] test_DeployZappers_DTokenBranchOnlyDeploysCollateralYieldZapper() (gas: 16925547)
+[PASS] test_EnvFreezeJsonIncludesGovernanceTreasuryAndOracleEvidence() (gas: 2795361)
+[PASS] test_LegacyCanaryGateAcceptsExactMinDebtAck() (gas: 18502)
+[PASS] test_LocalNativeEthRouteResolvesLinkedStEthOnlyForBranchZero() (gas: 2374010)
+[PASS] test_MainnetCanaryBridgeAdminHasNoCallableSurface() (gas: 49554)
+[PASS] test_MainnetCanaryExecutionBoundaryAcceptsExactRealMainnetAck() (gas: 10050)
+[PASS] test_MainnetCanaryStrategyPolicyAcceptsPinnedGauntletUsdcPrime() (gas: 90036)
+[PASS] test_MainnetCanaryStrategyPolicyRejectsCapAboveOneHundredUsdc() (gas: 82646)
+[PASS] test_MainnetCanaryStrategyPolicyRejectsUnpinnedVault() (gas: 77131)
+[PASS] test_MainnetDay1StrategyPolicyAcceptsPlannedActiveSet() (gas: 72272)
+[PASS] test_MainnetDay1StrategyPolicyRejectsAdditionalERC4626OnBranchOne() (gas: 79627)
+[PASS] test_MainnetDay1StrategyPolicyRejectsCandidateKind() (gas: 54661)
+[PASS] test_MainnetDay1StrategyPolicyRejectsDroppedStakingKinds() (gas: 94361)
+[PASS] test_MainnetDay1StrategyPolicyRequiresNoStrategyOnBranchZero() (gas: 29724)
+[PASS] test_ManifestClassifiesLocalBuildAsTestOnly() (gas: 10039)
+[PASS] test_ManifestClassifiesMainnetBuildAsProductionCandidate() (gas: 10429)
+[PASS] test_ManifestClassifiesSepoliaBuildAsTestOnly() (gas: 10365)
+[PASS] test_ManifestIncludesProductionIdentityMetadata() (gas: 98951)
+[PASS] test_ProductionGovernanceEvidenceBindingRejectsAddressOrHashDrift() (gas: 17078)
+[PASS] test_ProductionMainnetNativeEthRouteRequiresExactOwnerManifestValues() (gas: 178548)
+[PASS] test_ProductionNativeEthRouteGateDoesNotApplyOutsideMainnetBranchZero() (gas: 15354)
+[PASS] test_ResolveBridgeAdminValidatesConfiguredContract() (gas: 28712)
+[PASS] test_Run_AcceptsProductionBuildWithoutCanaryIdentity() (gas: 11921)
+[PASS] test_Run_EnvFlagParsesFalseStringsAsFalse() (gas: 23175)
+[PASS] test_Run_MainnetCanaryRejectsConfiguredBridgeAdmin() (gas: 20621)
+[PASS] test_Run_MainnetCanaryRejectsNonCompleteMode() (gas: 15933)
+[PASS] test_Run_MainnetCanaryRejectsSharedBroadcastPath() (gas: 16912)
+[PASS] test_Run_MainnetCanaryRejectsSharedManifestPath() (gas: 16674)
+[PASS] test_Run_MainnetCanaryRejectsWrongCanaryId() (gas: 16318)
+[PASS] test_Run_MainnetCanaryRejectsWrongExpectedDeployer() (gas: 20982)
+[PASS] test_Run_MainnetCanaryRejectsWrongSalt() (gas: 16563)
+[PASS] test_Run_RevertsOnMainnetCanaryWithIncorrectMinDebtAck() (gas: 16094)
+[PASS] test_Run_RevertsOnMainnetCanaryWithoutExplicitMinDebtAck() (gas: 15944)
+[PASS] test_Run_RevertsOnMainnetCompleteWithoutDTokenWiringFlag() (gas: 11276)
+[PASS] test_Run_RevertsOnMainnetProductionWithoutExplicitSalt() (gas: 11408)
+[PASS] test_SepoliaLidoPreflightAcceptsCanonicalLiveShape() (gas: 174956)
+[PASS] test_SepoliaLidoPreflightRejectsExhaustedStakeLimit() (gas: 175771)
+[PASS] test_SepoliaLidoPreflightRejectsLinkedStEthMismatch() (gas: 174937)
+[PASS] test_SepoliaLidoPreflightRejectsNoncanonicalAddresses() (gas: 15249)
+[PASS] test_SepoliaLidoPreflightRejectsOtherChains() (gas: 8894)
+[PASS] test_SepoliaLidoPreflightRejectsPausedStaking() (gas: 174573)
+[PASS] test_SepoliaLidoPreflightRejectsStoppedProtocol() (gas: 175099)
+[PASS] test_SepoliaLidoPreflightRejectsZeroRate() (gas: 173927)
+[PASS] test_UUPSImplementationsRejectDirectInitialization() (gas: 21825904)
+[PASS] test_ZapperReferralManagerAcceptsDistinctTwelveHourProductionTimelock() (gas: 1803917)
+[PASS] test_ZapperReferralManagerAcceptsExactFiveMinuteMainnetCanaryTimelock() (gas: 46555)
+[PASS] test_ZapperReferralManagerProbesConfiguredNonMainnetTimelock() (gas: 1790737)
+[PASS] test_ZapperReferralManagerRejectsCodelessTimelock() (gas: 14835)
+[PASS] test_ZapperReferralManagerRejectsMissingTimelockOnNonLocalChain() (gas: 9711)
+[PASS] test_ZapperReferralManagerRejectsNonOzProductionTimelock() (gas: 9408)
+[PASS] test_ZapperReferralManagerRejectsPilotTimelockForProduction() (gas: 46529)
+[PASS] test_ZapperReferralManagerRejectsWrongMainnetCanaryCodehash() (gas: 10299)
+[PASS] test_ZapperReferralManagerRejectsWrongMainnetCanaryDelay() (gas: 47416)
+[PASS] test_ZapperReferralManagerRejectsWrongMainnetCanaryTimelock() (gas: 1789103)
+[PASS] test_ZapperReferralManagerRejectsWrongProductionTimelockDelay() (gas: 1790259)
+[PASS] test_ZapperReferralManagerRejectsWrongProductionTimelockRoles() (gas: 1793734)
+Suite result: ok. 85 passed; 0 failed; 0 skipped; finished in 28.08ms (26.71ms CPU time)
+
+Ran 2 tests for test/DeployMainnetProductionTimelock.t.sol:DeployProductionTimelockNonCanonicalBuildTest
+[PASS] testPolicyRejectsNonCanonicalRuntime() (gas: 6535828)
+[PASS] testRejectsNonCanonicalBuildBeforeBroadcast() (gas: 4784256)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 580.50µs (344.79µs CPU time)
+
+Ran 1 test for test/DeployMainnetProductionTimelock.t.sol:DeployProductionTimelockTest
+[SKIP: skipped] setUp() (gas: 0)
+Suite result: ok. 0 passed; 0 failed; 1 skipped; finished in 502.62µs (0.00ns CPU time)
+
+Ran 9 tests for test/DeployPILAllocatorPhaseA.t.sol:DeployPILAllocatorPhaseATest
+[PASS] test_DeployContractsUsesProductionScriptPath() (gas: 2625239)
+[PASS] test_DeploymentSaltPrefersPilaSalt() (gas: 12259)
+[PASS] test_DeploymentSaltRequiresExplicitSaltOnMainnet() (gas: 11564)
+[PASS] test_EnvUint32RejectsOverflow() (gas: 13293)
+[PASS] test_LoadConfigReadsJpydfManifestAndPilaEnv() (gas: 133095)
+[PASS] test_ManifestJsonIsMachineReadable() (gas: 225203)
+[PASS] test_RequireConfigAllowsMainnetContractAdminRoles() (gas: 116562)
+[PASS] test_RequireConfigRejectsInvalidMerklWeights() (gas: 27431)
+[PASS] test_RequireConfigRejectsMainnetCodelessAdminRoles() (gas: 77574)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 3.96ms (3.54ms CPU time)
+
+Ran 26 tests for test/ERC4626Strategy.t.sol:ERC4626StrategyTest
+[PASS] test_Allocate_ERC4626ShareRoundingUsesProtectedCushion() (gas: 14461298)
+[PASS] test_Allocate_RecoversAndSkipsWhenERC4626MintsZeroShares() (gas: 14193134)
+[PASS] test_Allocate_RecoversAndSkipsWhenERC4626ReturnDoesNotMatchShareDelta() (gas: 14276706)
+[PASS] test_Allocate_RevertsAndRollsBackWhenERC4626ShareRoundingBreaksFullBacking() (gas: 14425489)
+[PASS] test_AssetLossReflectedInEstimateAndVaultTotal() (gas: 14349171)
+[PASS] test_ClaimMerklRewards_PushesUnderlyingRewardToVaultWithoutReducingPrincipal() (gas: 14906672)
+[PASS] test_ClaimMerklRewards_RejectsERC4626ShareTokenBeforeDistributorCall() (gas: 14440733)
+[PASS] test_ClaimMerklRewards_RevertsWhenTokenBatchTooLarge() (gas: 14445784)
+[PASS] test_ClaimMerklRewards_SweepsERC4626RewardToTreasuryWithoutAccountingImpact() (gas: 15562326)
+[PASS] test_EmergencyWithdrawFromERC4626_DoesNotTransientlyDiscountBacking() (gas: 14267096)
+[PASS] test_EmergencyWithdrawFromERC4626_DonationAfterLossPreservesRemainingOwnShares() (gas: 14454340)
+[PASS] test_EmergencyWithdrawFromERC4626_DrainsAndPushesToVault() (gas: 14233489)
+[PASS] test_EmergencyWithdrawFromERC4626_PartialRecoveryAccountsReturnedPrincipal() (gas: 15436990)
+[PASS] test_EmergencyWithdrawFromERC4626_RevertsWhenRedeemAssetDeltaMismatch() (gas: 14340754)
+[PASS] test_ExternalAuditInfo07_ReplacesVenueWithFreshStrategyWithoutImplementationUpgrade() (gas: 20461490)
+[PASS] test_Initialize_RevertsOnERC4626AssetMismatch() (gas: 6065597)
+[PASS] test_Initialize_RevertsOnNonContractERC4626Vault() (gas: 4158442)
+[PASS] test_Initialize_RevertsOnZeroUpgrader() (gas: 5330497)
+[PASS] test_SendProfitToVault_HarvestsSharePriceYieldWithoutReducingPrincipal() (gas: 14391240)
+[PASS] test_SendToVault_RespectsERC4626WithdrawLimit() (gas: 14395929)
+[PASS] test_SendToVault_RevertsWhenERC4626WithdrawAssetDeltaMismatch() (gas: 14342054)
+[PASS] test_SendToVault_RevertsWhenERC4626WithdrawBurnsZeroShares() (gas: 14370961)
+[PASS] test_SendToVault_RevertsWhenERC4626WithdrawReturnDoesNotMatchShareDelta() (gas: 14386967)
+[PASS] test_ShareDonationDoesNotInflateRealizedYield() (gas: 14373528)
+[PASS] test_SweepRewardToken_RejectsERC4626ShareToken() (gas: 14027243)
+[PASS] test_SweepRewardToken_RewardStillSweepsToTreasury() (gas: 14711178)
+Suite result: ok. 26 passed; 0 failed; 0 skipped; finished in 17.06ms (16.19ms CPU time)
+
+Ran 34 tests for test/archive/EtherfiWeETHStrategy.t.sol:EtherfiWeETHStrategyTest
+[PASS] test_Allocate_DepositsWethIntoWeETHAndValuesInWeth() (gas: 18183455)
+[PASS] test_ClaimEtherfiWithdrawals_RevertsWhenBatchTooLarge() (gas: 17847122)
+[PASS] test_ClaimSurplusAfterPendingDiscountCanBeRecoveredAsProfit() (gas: 18506806)
+[PASS] test_ClaimUsesActualEthReceivedWhenEtherfiReturnsLessThanPending() (gas: 18423573)
+[PASS] test_DonatedWeETHDoesNotInflateValuation() (gas: 18209657)
+[PASS] test_Initialize_RevertsOnMismatchedAdapterEETH() (gas: 17366417)
+[PASS] test_Initialize_RevertsOnMismatchedAdapterLiquidityPool() (gas: 17006462)
+[PASS] test_Initialize_RevertsOnMismatchedAdapterWeETH() (gas: 17643764)
+[PASS] test_Initialize_RevertsOnMismatchedAdapterWithdrawRequestNFT() (gas: 18334356)
+[PASS] test_Initialize_RevertsOnMismatchedLiquidityPoolWithdrawRequestNFT() (gas: 18330127)
+[PASS] test_Initialize_RevertsOnMismatchedWeETHEETH() (gas: 17484899)
+[PASS] test_Initialize_RevertsOnMismatchedWeETHLiquidityPool() (gas: 17126452)
+[PASS] test_Initialize_RevertsOnMismatchedWithdrawRequestNFTEETH() (gas: 17486483)
+[PASS] test_Initialize_RevertsOnMismatchedWithdrawRequestNFTLiquidityPool() (gas: 17127881)
+[PASS] test_Initialize_RevertsOnNonContractWithdrawAdapter() (gas: 16587655)
+[PASS] test_Initialize_RevertsWhenAdapterDoesNotExposeDfIdentity() (gas: 16734156)
+[PASS] test_RawEthDonationBeforeClaimDoesNotInflateIdleOrYield() (gas: 18441229)
+[PASS] test_RequestClaimAndSendToVault_ReturnsClaimedWeth() (gas: 18408230)
+[PASS] test_RequestEtherfiWithdrawal_RevertsWhenAdapterDoesNotMintRequestToStrategy() (gas: 17858565)
+[PASS] test_RequestEtherfiWithdrawal_RevertsWhenPendingRequestLimitReached() (gas: 39096208)
+[PASS] test_RequestEtherfiWithdrawal_RoundsTinyEETHRequestUpToOneWeETHAtom() (gas: 18427630)
+[PASS] test_SetPendingWithdrawalValuationBps_DiscountsAndRoundsEtherfiPendingValue() (gas: 18434967)
+[PASS] test_SetPendingWithdrawalValuationBps_RequiresWriteoffRole() (gas: 17824976)
+[PASS] test_SetPendingWithdrawalValuationBps_RevertsAboveDenominator() (gas: 17821018)
+[PASS] test_SetPendingWithdrawalValuationBps_RevertsDiscountBeforeAllocationPause() (gas: 18421418)
+[PASS] test_SweepRewardToken_RejectsPositionTokens() (gas: 17895416)
+[PASS] test_VaultCanAllocateAcrossAaveAndEtherfiFiftyFifty() (gas: 23334787)
+[PASS] test_WeETHWithdrawAdapter_DonationBaselineDoesNotAffectResidualChecks() (gas: 4086226)
+[PASS] test_WeETHWithdrawAdapter_RevertsOnMismatchedLiquidityPoolWithdrawRequestNFT() (gas: 4548397)
+[PASS] test_WeETHWithdrawAdapter_RevertsOnMismatchedWeETHEETH() (gas: 3703259)
+[PASS] test_WeETHWithdrawAdapter_RevertsOnZeroRequest() (gas: 3829818)
+[PASS] test_WeETHWithdrawAdapter_RevertsWhenPoolLeavesResidualEETH() (gas: 4051896)
+[PASS] test_WeETHWithdrawAdapter_RevertsWhenUnwrapLeavesResidualWeETH() (gas: 3977257)
+[PASS] test_WeETHWithdrawAdapter_UnwrapsWeETHAndRequestsNativeEtherfiWithdrawal() (gas: 4085342)
+Suite result: ok. 34 passed; 0 failed; 0 skipped; finished in 32.92ms (31.98ms CPU time)
+
+Ran 9 tests for test/ExchangeApprovalHygiene.t.sol:ExchangeApprovalHygieneTest
+[PASS] test_UniV4ConstructorRejectsInvalidAddressesAndIdenticalTokens() (gas: 2671611)
+[PASS] test_UniV4SwapFromJpydfClearsResidualPermit2AndTokenAllowancesForZeroFirstTokens() (gas: 4111647)
+[PASS] test_UniV4SwapFromJpydfRejectsRouterReentrancy() (gas: 4044530)
+[PASS] test_UniV4SwapFromJpydfRevertsWhenAmountExceedsV4Uint128() (gas: 3841515)
+[PASS] test_UniV4SwapFromJpydfRevertsWhenRouterUnderpaysOutput() (gas: 3254288)
+[PASS] test_UniV4SwapToJpydfRejectsRouterReentrancy() (gas: 4019623)
+[PASS] test_UniV4SwapToJpydfReturnsActualOutputAndClearsPermit2AndTokenAllowances() (gas: 4015272)
+[PASS] test_UniV4SwapToJpydfRevertsWhenAmountExceedsV4Uint128() (gas: 3841590)
+[PASS] test_UniV4SwapToJpydfRevertsWhenRouterUnderpaysOutput() (gas: 3234400)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 2.88ms (2.65ms CPU time)
+
+Ran 2 tests for test/ExternalAuditGas01BackingRatio.t.sol:ExternalAuditGas01BackingRatioTest
+[PASS] test_Max32SupportedSkyStrategiesAllocateStaysWithinBoundedGas() (gas: 10657877)
+Logs:
+  Gas01 empty allocate gas: 36305
+  Gas01 one Sky Strategy allocate gas: 316342
+  Gas01 five distinct Sky Strategies allocate gas: 1444172
+  Gas01 32 distinct Sky Strategies allocate gas: 9057759
+
+[PASS] test_Max32SupportedSkyStrategiesBackingRatioStaysWithinBoundedGas() (gas: 2038451)
+Logs:
+  Gas01 empty backingRatio gas: 35234
+  Gas01 one Sky Strategy backingRatio gas: 76505
+  Gas01 five distinct Sky Strategies backingRatio gas: 241589
+  Gas01 32 distinct Sky Strategies backingRatio gas: 1358419
+  Gas01 warm repeat of 32-Strategy backingRatio gas: 287916
+  Gas01 32-Strategy loop gas above empty baseline: 1323185
+  Gas01 marginal gas per Strategy: 41349
+  Gas01 conservative 8-branch cold-pass upper bound: 10867352
+  Gas01 conservative 8-branch two-pass upper bound: 13170680
+  Gas01 conservative 10-branch two-pass upper bound: 16463350
+
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 26.51ms (8.98ms CPU time)
+
+Ran 2 tests for test/ExternalAuditGas02ShutdownAssert.t.sol:ExternalAuditGas02ShutdownAssertTest
+[PASS] test_ShutdownNonzeroUpfrontFeeStillPanics() (gas: 36821)
+[PASS] test_ShutdownZeroFeeReturnsZero() (gas: 40192)
+Logs:
+  shutdown valid-call gas 1466
+
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 6.58ms (61.08µs CPU time)
+
+Ran 4 tests for test/ExternalAuditInfo06AddressesRegistryWiring.t.sol:ExternalAuditInfo06AddressesRegistryWiringTest
+[PASS] test_PostDeployVerifierAcceptsAll18DistinctCodeBackedAddresses() (gas: 2865685)
+[PASS] test_PostDeployVerifierRejectsCodelessAddress() (gas: 2831616)
+[PASS] test_PostDeployVerifierRejectsFieldMismatch() (gas: 2873559)
+[PASS] test_PostDeployVerifierRejectsZeroAddress() (gas: 2807177)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 5.46ms (602.17µs CPU time)
+
+Ran 2 tests for test/ExternalAuditLow07ScaleSpan.t.sol:ExternalAuditLow07ScaleSpanTest
+[PASS] test_ExtremeFourScaleTailIsBoundedDust() (gas: 2143954)
+Logs:
+  scales 4
+  SCALE_SPAN=2 coll gain 99996000209991600335986560525078
+  omitted coll tail 12500
+  SCALE_SPAN=2 yield gain 999960002099916003359865605250
+  omitted yield tail 125
+
+[PASS] test_RealisticFourScaleTailRoundsToZero() (gas: 2143068)
+Logs:
+  scales 4
+  SCALE_SPAN=2 coll gain 249999375126562183
+  omitted coll tail 0
+  SCALE_SPAN=2 yield gain 2499993751265621
+  omitted yield tail 0
+
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 9.95ms (3.47ms CPU time)
+
+Ran 4 tests for test/GasPool.t.sol:GasPoolTest
+[PASS] test_ConfiguredCoreCallerCanUseAllowanceForGasCompensation() (gas: 243397)
+[PASS] test_ConstructorApprovesOnlyCoreCompensationCallers() (gas: 204204)
+[PASS] test_NoExternalFallbackSurface() (gas: 201415)
+[PASS] test_UnprivilegedCallerCannotPullGasCompensationWeth() (gas: 244033)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 460.75µs (181.79µs CPU time)
+
+Ran 1 test for test/GuardianL01Finalization.t.sol:GuardianL01FinalizationTest
+[PASS] testFuzz_GuardianL01_DepositCannotBlockFinalization(uint96) (runs: 256, μ: 450411, ~: 450312)
+Logs:
+  Bound result 153196718739
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 112.11ms (106.72ms CPU time)
+
+Ran 6 tests for test/GuardianL03GasCap.t.sol:GuardianL03GasCapTest
+[PASS] testFuzz_CapAndProportionalOffset(uint256,bool) (runs: 256, μ: 113194751, ~: 113194500)
+Logs:
+  Bound result 47
+
+[PASS] test_DusdcFullOffset() (gas: 115059366)
+[PASS] test_DusdcPartialOffset() (gas: 115240223)
+[PASS] test_DwstethFullOffset() (gas: 115059344)
+[PASS] test_DwstethPartialOffset() (gas: 115240224)
+[PASS] test_RejectsZeroOrExcessiveCap() (gas: 124114642)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 1.63s (1.63s CPU time)
+
+Ran 9 tests for test/GuardianOraclePolicy.t.sol:GuardianOraclePolicyTest
+[PASS] testFuzz_GraceWindowCanMissLiquidationWhenJpyStrengthens(uint32) (runs: 256, μ: 719779, ~: 719844)
+Logs:
+  Bound result 175507
+
+[PASS] testFuzz_GraceWindowCanWrongfullyLiquidateWhenJpyWeakens(uint32) (runs: 256, μ: 734724, ~: 734789)
+Logs:
+  Bound result 175507
+  fresh ICR: 1121710584662545483
+  stale ICR: 1110492091314658269
+
+[PASS] test_30hBlocksAllRiskIncreasesButFreshRoundReopens() (gas: 527597)
+[PASS] test_54hStopsLiquidationAndSafeActionsRemainAvailable() (gas: 839374)
+[PASS] test_FreshFxAvoidsWrongfulPermanentShutdown() (gas: 212782)
+[PASS] test_OtherInputFailureStopsLiquidationInsideGraceWindow() (gas: 240091)
+[PASS] test_PausingAt30hCanLeaveUncoveredDebtDuringGraceWindow() (gas: 696243)
+Logs:
+  uncovered JPYdf before liquidation: 3442643880194833416691
+
+[PASS] test_SafeAddAndRepayNeverCallUnavailableOracle() (gas: 270816)
+[PASS] test_StaleShutdownWaitsForFreshFxAndDebtKeepsAccruing() (gas: 520401)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 334.07ms (327.28ms CPU time)
+
+Ran 1 test for test/HintHelpers.t.sol:HintHelpersTest
+[PASS] test_GetApproxHintNeverReturnsZombies(uint256) (runs: 256, μ: 3764000, ~: 3763784)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 496.91ms (490.23ms CPU time)
+
+Ran 6 tests for test/verification-20260815/HintHelpersVerification.t.sol:HintHelpersVerification
+[PASS] testBatchFeePredictionsMatchOpenJoinAndBatchRateChange() (gas: 1791764)
+[PASS] testPredictAdjustInterestAndDebtFeesMatchActualCharges() (gas: 952551)
+[PASS] testPredictOpenTroveFeeMatchesActualDebtCharge() (gas: 777219)
+[PASS] testPredictRemoveFromBatchFeeIsZeroForNoRateChangeOrAfterCooldown() (gas: 1164741)
+[PASS] testPredictRemoveFromBatchFeeMatchesActualDebtCharge() (gas: 1111600)
+[PASS] testReferenceViewsApproxHintForceQuoteAndInvalidIndexAreSafe() (gas: 834974)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 9.38ms (2.67ms CPU time)
+
+Ran 2 tests for test/InterestRouterForwarder.t.sol:InterestRouterForwarderJpydfIntegrationTest
+[PASS] test_RevertWhen_ConstructorRecipientIsAnyJpydfProtocolAddress() (gas: 277219)
+[PASS] test_RevertWhen_SetRecipientIsAnyJpydfProtocolAddress() (gas: 113888)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 482.92µs (146.17µs CPU time)
+
+Ran 11 tests for test/InterestRouterForwarder.t.sol:InterestRouterForwarderTest
+[PASS] test_OnlyOwnerCanUpdateRecipient() (gas: 89733)
+[PASS] test_OwnershipTransferIsTwoStepAndRenounceDisabled() (gas: 35276)
+[PASS] test_RevertWhen_ConstructorArgsAreZero() (gas: 110790)
+[PASS] test_RevertWhen_ConstructorRecipientIsInvalidForJpydf() (gas: 69170)
+[PASS] test_RevertWhen_NewRecipientIsInvalidForJpydfAndKeepCurrentRouteLive() (gas: 111543)
+[PASS] test_RevertWhen_NonOwnerUpdatesRecipient() (gas: 14291)
+[PASS] test_RevertWhen_NonPendingOwnerAcceptsOwnership() (gas: 41385)
+[PASS] test_RevertWhen_RecipientIsZero() (gas: 13146)
+[PASS] test_RouteForwardsFullBalancePermissionlessly() (gas: 80046)
+[PASS] test_RouteReturnsZeroWhenEmpty() (gas: 14344)
+[PASS] test_TransferOwnershipToZeroCancelsPendingOwner() (gas: 33080)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 876.00µs (597.13µs CPU time)
+
+Ran 5 tests for test/JpySharedShutdownLatch.t.sol:JpySharedShutdownLatchTest
+[PASS] test_activeFeedDeploymentRecoversAfterFreshJpyRound() (gas: 1383328)
+[PASS] test_directCallCannotConsumeTheSharedShutdownSignal() (gas: 256964)
+[PASS] test_expiredSharedProviderRejectsNewActiveFeedDeployments() (gas: 916283)
+[PASS] test_newerStaleRoundDoesNotInheritThePreviousFreezeOnset() (gas: 211486)
+[PASS] test_proxyCallStillShutsDownTheBranch() (gas: 177587)
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 1.56ms (978.17µs CPU time)
+
+Ran 16 tests for test/JpyUsdRateProvider.t.sol:JpyUsdRateProviderTest
+[PASS] test_constructorRejectsNoCodeOracle() (gas: 40755)
+[PASS] test_constructorRejectsStaleInitialResponse() (gas: 53638)
+[PASS] test_constructorRejectsUnexpectedDecimals() (gas: 50128)
+[PASS] test_constructorRejectsZeroStaleness() (gas: 41332)
+[PASS] test_expirationRemainsLatchedUntilOracleIsFresh() (gas: 92967)
+[PASS] test_freshRecoveryAfterExpirationClearsLatch() (gas: 80839)
+[PASS] test_invalidRoundDoesNotAdvanceTheAnchor() (gas: 69514)
+[PASS] test_invalidRoundWhileCacheFreshStartsAtObservationAndRecovers() (gas: 61654)
+[PASS] test_permissionlessHealthyFetchRefreshesOneSharedCache() (gas: 51251)
+[PASS] test_recoveredProviderCanExpireAgainDuringALaterOutage() (gas: 114592)
+[PASS] test_runtimeDecimalsGasGriefingBubblesInsufficientGas() (gas: 523148)
+[PASS] test_runtimeDecimalsMismatchDoesNotAdoptFreshRoundAndRecoveryRemainsPossible() (gas: 66709)
+[PASS] test_runtimeDecimalsMismatchDoesNotAdoptStaleButNewerRound() (gas: 70772)
+[PASS] test_runtimeDecimalsRevertDoesNotAdoptFreshRound() (gas: 62817)
+[PASS] test_staleButNewerRoundIsAdoptedAndAnchorsTheFreeze() (gas: 88297)
+[PASS] test_staleRoundAnchorsFreezeToSharedCachedBoundary() (gas: 54856)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 1.45ms (1.26ms CPU time)
+
+Ran 19 tests for test/JpydfToken.t.sol:JpydfTokenTest
+[PASS] test_BridgeAdminCanCancelAndTransferTwoStep() (gas: 157789)
+[PASS] test_BridgeAdminCannotRenounceWithLiveMinter() (gas: 129672)
+[PASS] test_BridgeAdminEntryPointsRejectNonAdminCallers() (gas: 164070)
+[PASS] test_BridgeAdminTransferRejectsOwner() (gas: 2029449)
+[PASS] test_BridgeConstructorRejectsInvalidRoles() (gas: 343129)
+[PASS] test_BridgeMintRejectsProtocolRecipients() (gas: 127602)
+[PASS] test_BridgeMinterLifecycleUsesTimelockAndSelfBurn() (gas: 224902)
+[PASS] test_BridgeMinterProposalRejectsInvalidStateTransitions() (gas: 183664)
+[PASS] test_BridgeReadinessEventsExposeLifecyclePayloads() (gas: 293693)
+[PASS] test_BridgeReadinessIsDormantAfterCoreSetup() (gas: 58331)
+[PASS] test_BridgeRolesMustBeContractsAndSeparated() (gas: 323777)
+[PASS] test_CoreAddressRegistrationRequiresContracts() (gas: 2085336)
+[PASS] test_InfiniteApprovalPersistsAfterTransfer() (gas: 847492)
+[PASS] test_MainnetUsesProductionIdentity() (gas: 2042708)
+[PASS] test_NonMainnetKeepsProductionIdentity() (gas: 2034196)
+[PASS] test_RecipientHelpersMatchTransferProtection() (gas: 71864)
+[PASS] test_RevertWhen_RequireValidRecipientInvalid() (gas: 17560)
+[PASS] test_TransferFromProtectionRejectsProtocolRecipients() (gas: 806476)
+[PASS] test_TransferProtectionRejectsProtocolRecipients() (gas: 819433)
+Suite result: ok. 19 passed; 0 failed; 0 skipped; finished in 9.83ms (3.52ms CPU time)
+
+Ran 2 tests for test/verification-20260815/JpydfTokenBrandingVerification.t.sol:JpydfTokenBrandingVerification
+[PASS] testCoreReferenceViewsReflectRenouncedDeployment() (gas: 18469)
+[PASS] testNameSymbolAndEip712DomainUseJpydfBrand() (gas: 29422)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 6.65ms (84.54µs CPU time)
+
+Ran 50 tests for test/archive/LidoStrategy.t.sol:LidoStrategyTest
+[PASS] test_Allocate_RecoversAndSkipsWhenWstETHReturnDoesNotMatchBalanceDelta() (gas: 17005308)
+[PASS] test_Allocate_StakesWethIntoLidoAndTracksEstimate() (gas: 17060980)
+[PASS] test_BaseEmergencyWithdraw_ReducesLidoOwnIdleTracking() (gas: 17326950)
+[PASS] test_ClaimLidoWithdrawals_AllowsNonAllocatorAndRejectsUnknownRequest() (gas: 17294079)
+[PASS] test_ClaimLidoWithdrawals_PendingAccountingTracksPartialClaim() (gas: 17451809)
+[PASS] test_ClaimLidoWithdrawals_PermissionlessClaimReflectsFinalizedLoss() (gas: 17296762)
+[PASS] test_ClaimLidoWithdrawals_RevertsForMultiRequestWithoutHints() (gas: 17491596)
+[PASS] test_ClaimLidoWithdrawals_RevertsOnHintLengthMismatch() (gas: 17397268)
+[PASS] test_ClaimLidoWithdrawals_RevertsWhenHintedBatchTooLarge() (gas: 16659264)
+[PASS] test_ClaimLidoWithdrawals_UsesHintedBatchForMultipleRequests() (gas: 17417001)
+[PASS] test_ClaimSurplusAfterPendingDiscountCanBeRecoveredAsProfit() (gas: 17387454)
+[PASS] test_DonationDoesNotInflateRealizedYield() (gas: 17078246)
+[PASS] test_EmergencyWithdrawFromLido_ClampsOversizedCustomRequestCap() (gas: 21417598)
+[PASS] test_EmergencyWithdrawFromLido_IgnoresDonatedPositionTokens() (gas: 17414785)
+[PASS] test_EmergencyWithdrawFromLido_PushesIdleAndRequestsRemainingStETH() (gas: 17584734)
+[PASS] test_EmergencyWithdrawFromLido_PushesIdleWhenQueueRequestFails() (gas: 17346823)
+[PASS] test_EmergencyWithdrawFromLido_PushesOnlyOwnIdleAndIgnoresRawEthDonation() (gas: 17616548)
+[PASS] test_EmergencyWithdrawFromLido_RequestsOnlyBoundedChunk() (gas: 21418294)
+[PASS] test_EmergencyWithdrawFromLido_RespectsCustomRequestCap() (gas: 17396597)
+[PASS] test_Initialize_AllowsZeroReferral() (gas: 8106886)
+[PASS] test_Initialize_ApprovesWithdrawalQueue() (gas: 16637672)
+[PASS] test_Initialize_RevertsOnInvalidWithdrawalQueueBounds() (gas: 7907326)
+[PASS] test_Initialize_RevertsOnMismatchedWstETHStETH() (gas: 8552538)
+[PASS] test_Initialize_RevertsOnNonContractWithdrawalQueue() (gas: 6997115)
+[PASS] test_Initialize_RevertsOnZeroLido() (gas: 7904875)
+[PASS] test_Initialize_RevertsOnZeroWithdrawalQueue() (gas: 6991998)
+[PASS] test_Initialize_RevertsOnZeroWstETH() (gas: 7904911)
+[PASS] test_PendingWithdrawalValuationBps_UnconfiguredStorageDefaultsToFullValue() (gas: 17438395)
+[PASS] test_RebaseYieldIsVisibleButNotWithdrawableUntilClaimed() (gas: 17044038)
+[PASS] test_RequestAndClaim_ReflectsLossThenSendToVaultReducesPrincipal() (gas: 17362831)
+[PASS] test_RequestLidoWithdrawal_AfterRebaseUsesWstETHAmountsAndTracksStETHValue() (gas: 17402308)
+[PASS] test_RequestLidoWithdrawal_RejectsNonAllocator() (gas: 17048380)
+[PASS] test_RequestLidoWithdrawal_RevertsBelowMin() (gas: 17050782)
+[PASS] test_RequestLidoWithdrawal_RevertsWhenAmountExceedsStaked() (gas: 17049237)
+[PASS] test_RequestLidoWithdrawal_RevertsWhenPendingRequestLimitReached() (gas: 34045700)
+[PASS] test_RequestLidoWithdrawal_RevertsWhenQueueDoesNotMintRequestToStrategy() (gas: 17184631)
+[PASS] test_RequestLidoWithdrawal_RevertsWhenRequestBatchTooLarge() (gas: 17054889)
+[PASS] test_RequestLidoWithdrawal_SplitsTracksPendingAndKeepsPrincipal() (gas: 17541372)
+[PASS] test_SendToVault_UsesOnlyOwnClaimedWeth() (gas: 17040844)
+[PASS] test_SendToVault_UsesOnlyOwnClaimedWethWhenDonatedWethExists() (gas: 17335568)
+[PASS] test_SetPendingWithdrawalValuationBps_AllowsRestoreAfterAllocationUnpause() (gas: 17263537)
+[PASS] test_SetPendingWithdrawalValuationBps_DiscountsPendingLidoValue() (gas: 17341685)
+[PASS] test_SetPendingWithdrawalValuationBps_RequiresWriteoffRole() (gas: 16633175)
+[PASS] test_SetPendingWithdrawalValuationBps_RevertsAboveDenominator() (gas: 16629140)
+[PASS] test_SetPendingWithdrawalValuationBps_RevertsDiscountBeforeAllocationPause() (gas: 17243602)
+[PASS] test_SetPendingWithdrawalValuationBps_RoundsPendingDustDown() (gas: 17312956)
+[PASS] test_SetReferral_AllowsZeroAddress() (gas: 16992332)
+[PASS] test_SetReferral_AppliesToNextSubmit() (gas: 17029460)
+[PASS] test_SweepRewardToken_RejectsPositionTokensButSweepsReward() (gas: 17439052)
+[PASS] test_WethDonationDoesNotInflateRealizedYieldOrPushAsProfit() (gas: 17102315)
+Suite result: ok. 50 passed; 0 failed; 0 skipped; finished in 43.44ms (42.49ms CPU time)
+
+Ran 1 test for test/verification-20260815/LiquityBaseVerification.t.sol:LiquityBaseVerification
+[PASS] testConstructorWiringAggregateViewsAndEvents() (gas: 603434)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 130.54µs (61.04µs CPU time)
+
+Ran 1 test for test/LocalAaveVenue.t.sol:LocalAaveVenueTest
+[PASS] test_SupplyPlacesLiquidityAtATokenAndWithdrawReturnsIt() (gas: 1685945)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 206.04µs (116.96µs CPU time)
+
+Ran 2 tests for test/LocalLidoTokens.t.sol:LocalLidoTokensTest
+[PASS] test_StakeLimitAndPauseSignalsMatchSubmitBehavior() (gas: 87011)
+[PASS] test_SubmitAndWrapMatchesConfiguredRate() (gas: 141319)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 277.62µs (79.71µs CPU time)
+
+Ran 9 tests for test/MinDebtJPYdf.t.sol:MinDebtJPYdfTest
+[PASS] testMinDebtConstantIsOneHundredThousand() (gas: 3635)
+[PASS] testOpenTroveAboveMinDebtSucceeds() (gas: 784882)
+[PASS] testOpenTroveAtMinDebtSucceeds() (gas: 1205697)
+[PASS] testOpenTroveBelowMinDebtReverts() (gas: 76761)
+[PASS] testOpenTroveJustBelowMinDebtReverts() (gas: 497158)
+[PASS] testProductionBuildRejectsLastTroveCloseOffMainnet() (gas: 943943)
+[PASS] testProductionKeepsStabilityPoolSplit() (gas: 851975)
+[PASS] testProductionRejectsLastTroveCloseOnMainnet() (gas: 944306)
+[PASS] testRepayCapsAtMinDebt() (gas: 982073)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 10.34ms (3.73ms CPU time)
+
+Ran 3 tests for test/MorphoV2BackingRatio.t.sol:MorphoV2BackingRatioTest
+[PASS] test_Max32MorphoV2StrategiesAllocateStaysWithinBoundedGas() (gas: 6063394)
+Logs:
+  MorphoV2 empty allocate gas: 36305
+  MorphoV2 one Strategy allocate gas: 175284
+  MorphoV2 five distinct Strategies allocate gas: 738882
+  MorphoV2 32 distinct Strategies allocate gas: 4543903
+
+[PASS] test_Max32MorphoV2StrategiesBackingRatioStaysWithinBoundedGas() (gas: 1655826)
+Logs:
+  MorphoV2 empty backingRatio gas: 35234
+  MorphoV2 one Strategy backingRatio gas: 67835
+  MorphoV2 five distinct Strategies backingRatio gas: 198239
+  MorphoV2 32 distinct Strategies backingRatio gas: 1080979
+  MorphoV2 warm repeat of 32-Strategy backingRatio gas: 234476
+  MorphoV2 32-Strategy loop gas above empty baseline: 1045745
+  MorphoV2 marginal gas per Strategy: 32679
+  MorphoV2 conservative 8-branch cold-pass upper bound: 8647832
+  MorphoV2 conservative 8-branch two-pass upper bound: 10523640
+  MorphoV2 conservative 10-branch two-pass upper bound: 13154550
+
+[PASS] test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero() (gas: 14277124)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 19.84ms (6.76ms CPU time)
+
+Ran 38 tests for test/MorphoV2Strategy.t.sol:MorphoV2StrategyTest
+[PASS] testFuzz_GuardianL05_InsufficientReceiptRollsBackEverything(uint96) (runs: 256, μ: 15094737, ~: 15095030)
+Logs:
+  Bound result 153196718739
+
+[PASS] test_AllocateAndSendToVault_WorkDespiteHardZeroMaxViews() (gas: 14962061)
+[PASS] test_Allocate_RecoversAndSkipsWhenMorphoDepositReturnDoesNotMatchShareDelta() (gas: 14830364)
+[PASS] test_Allocate_RecoversAndSkipsWhenMorphoVaultMintsZeroShares() (gas: 14711782)
+[PASS] test_Allocate_RecoversWhenLiquidityAdapterCapHit() (gas: 14772701)
+[PASS] test_Allocate_RecoversWhenReceiveGateCloses() (gas: 14770915)
+[PASS] test_Allocate_RevertsAndRollsBackWhenMorphoShareRoundingBreaksFullBacking() (gas: 14983902)
+[PASS] test_AssetLossReflectedImmediatelyInEstimateAndVaultTotal() (gas: 14906560)
+[PASS] test_DepositIntoMorphoVault_SelfOnly() (gas: 14552139)
+[PASS] test_EmergencyWithdrawFromMorphoV2_FullDrainPushesToVaultSameTx() (gas: 14790942)
+[PASS] test_EmergencyWithdrawFromMorphoV2_PartialDonationRecoveryKeepsOwnShares() (gas: 14981459)
+[PASS] test_EmergencyWithdrawFromMorphoV2_PartialRecoveryViaMaxSharesAccountsReturnedPrincipal() (gas: 14844392)
+[PASS] test_EmergencyWithdrawFromMorphoV2_RecoversDonatedSharesAfterFullUnwind() (gas: 14860547)
+[PASS] test_EmergencyWithdrawFromMorphoV2_RevertsWhenRedeemAssetDeltaMismatch() (gas: 14912284)
+[PASS] test_ForceDeallocate_ChargesDonatedSharesBeforeTrackedShares() (gas: 15101480)
+[PASS] test_ForceDeallocate_RevertsAndRollsBackWhenBackingFallsBelowCallerFloor() (gas: 15094643)
+[PASS] test_ForceDeallocate_RevertsWhenPenaltyExceedsBound() (gas: 14990443)
+[PASS] test_ForceDeallocate_StrategyEntryIsVaultOnly() (gas: 14875876)
+[PASS] test_ForceDeallocate_VaultEntryRequiresWriteoffRole() (gas: 14878855)
+[PASS] test_ForceDeallocate_WithinBoundResyncsOwnSharesAndDropsValuation() (gas: 15083373)
+[PASS] test_ForceDeallocate_ZeroPenaltyVaultBurnsNothing() (gas: 15015127)
+[PASS] test_GuardianL05_AtomicRecoveryRetainsStrategyReentrancyGuard() (gas: 15281119)
+[PASS] test_GuardianL05_ClosedSendGateAndZeroMinimumCannotCommitPenalty() (gas: 15063493)
+[PASS] test_GuardianL05_RecoveryIsAtomicAcrossSeparatedRoles() (gas: 15036321)
+[PASS] test_Initialize_RevertsOnMorphoVaultAssetMismatch() (gas: 6593560)
+[PASS] test_Initialize_RevertsOnNonContractMorphoVault() (gas: 4533828)
+[PASS] test_Initialize_RevertsOnPenaltyBoundAboveProtocolMax() (gas: 5954730)
+[PASS] test_Reentrancy_DuringVenueDepositIsBlocked() (gas: 15154985)
+[PASS] test_Reentrancy_DuringVenueWithdrawIsBlocked() (gas: 15221902)
+[PASS] test_SendProfitToVault_HarvestsSharePriceYieldWithoutReducingPrincipal() (gas: 14945994)
+[PASS] test_SendToVault_RetriesSmallerAmountWhenRequestedLiquidityIsShort() (gas: 14949322)
+[PASS] test_SendToVault_ReturnsZeroFailSoftWhenLiquidityShort() (gas: 14910824)
+[PASS] test_SendToVault_ReturnsZeroFailSoftWhenSendGateCloses() (gas: 14945010)
+[PASS] test_SendToVault_ReturnsZeroFailSoftWhenWithdrawBurnsZeroShares() (gas: 15141711)
+[PASS] test_SendToVault_ReturnsZeroFailSoftWhenWithdrawReturnDoesNotMatchShareDelta() (gas: 15199250)
+[PASS] test_ShareDonationDoesNotInflateRealizedYield() (gas: 14931105)
+[PASS] test_SweepRewardToken_RejectsMorphoShareToken() (gas: 14577042)
+[PASS] test_WithdrawFromMorphoVault_SelfOnly() (gas: 14552232)
+Suite result: ok. 38 passed; 0 failed; 0 skipped; finished in 245.97ms (245.10ms CPU time)
+
+Ran 5 tests for test/MultiTroveGetter.t.sol:LiquidationCandidateGetterTest
+[PASS] test_GetLiquidationCandidatesWithLastZombie_AppendsLiquidatableZombie() (gas: 2041647)
+[PASS] test_GetLiquidationCandidates_PaginatesBySortedListCursor() (gas: 2889576)
+[PASS] test_GetLiquidationCandidates_ReturnsUndercollateralizedTroves() (gas: 2920177)
+[PASS] test_RevertWhen_CollateralIndexIsInvalid() (gas: 765730)
+[PASS] test_RevertWhen_CollateralRegistryIsZero() (gas: 36418)
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 14.51ms (8.35ms CPU time)
+
+Ran 4 tests for test/verification-20260815/MultiTroveGetterVerification.t.sol:MultiTroveGetterVerification
+[PASS] testInvalidCollateralIndexReverts() (gas: 20911)
+[PASS] testQueriesAreReadOnlyAndNonCustodial() (gas: 2955315)
+[PASS] testReadsSortedTroveSlicesFromHeadAndTail() (gas: 2950504)
+[PASS] testReturnsDebtDistributionAscendingAndResumesAtCursor() (gas: 2923243)
+Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 17.17ms (10.95ms CPU time)
+
+Ran 16 tests for test/PILAllocator.t.sol:PILAllocatorTest
+[PASS] test_DistributeBlocksReentrantHookAndContinues() (gas: 708833)
+[PASS] test_DistributeIsolatesFailingHookAfterTransfer() (gas: 549393)
+[PASS] test_DistributeIsolatesRevertBombHookAfterTransfer() (gas: 948746)
+[PASS] test_DistributePushesByFullWeightAndRepeatedCallNoops() (gas: 593362)
+[PASS] test_DistributeReturnsZeroWhenBelowThresholdOrNoWeights() (gas: 227108)
+[PASS] test_GuardianCanBeUpdatedByOwner() (gas: 31007)
+[PASS] test_PauseUnpauseAndOwnership() (gas: 52619)
+[PASS] test_RegisterInitiativeValidatesJpydfRecipientAndCallsHook() (gas: 159918)
+[PASS] test_RevertWhen_ConstructorMinDistributeIsZero() (gas: 69404)
+[PASS] test_RevertWhen_ConstructorTokenIsNotContract() (gas: 65211)
+[PASS] test_RevertWhen_RegisteringInvalidJpydfRecipient() (gas: 39894)
+[PASS] test_RevertWhen_RegisteringMoreThanMaxInitiatives() (gas: 2732510)
+[PASS] test_SetWeightsCanDeactivateBySettingAllWeightsZero() (gas: 293801)
+[PASS] test_SetWeightsRejectsDuplicatesAndInvalidTotalWeight() (gas: 367749)
+[PASS] test_TransferOwnershipZeroCancelsPendingOwner() (gas: 33372)
+[PASS] test_UnregisterRemovesWeightAndInitiative() (gas: 314932)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 3.86ms (3.38ms CPU time)
+
+Ran 11 tests for test/PriceFeedPlaceholder.t.sol:PriceFeedPlaceholderTest
+[PASS] test_activationToRealFeedRequiresEmergencyWhenPriceGuardExceeded() (gas: 1571505)
+[PASS] test_fetchPrice_returnsSentinelNoFailure() (gas: 8828)
+[PASS] test_fetchPrice_throughProxy_doesNotShutDown() (gas: 1432771)
+[PASS] test_fetchRedemptionPrice_returnsSentinelNoFailure() (gas: 8784)
+[PASS] test_fetchRedemptionPrice_throughProxy_doesNotShutDown() (gas: 1434924)
+[PASS] test_fetchUrgentRedemptionPrice_returnsSentinelNoFailure() (gas: 8783)
+[PASS] test_fetchUrgentRedemptionPrice_throughProxy_doesNotShutDown() (gas: 1432108)
+[PASS] test_lastGoodPrice_returnsSentinel() (gas: 8267)
+[PASS] test_proxyAcceptsPlaceholderAsSource() (gas: 1429274)
+[PASS] test_repeatedRedemptionScans_neverShutDown() (gas: 1460971)
+[PASS] test_sentinelIsNeitherZeroNorMax() (gas: 10542)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 699.12µs (566.92µs CPU time)
+
+Ran 8 tests for test/PriceFeedProxy.t.sol:PriceFeedProxyOracleFailureTest
+[PASS] testFetchPriceHandlesOracleFailureViaProxy() (gas: 47671)
+[PASS] testFetchRedemptionPriceHandlesOracleFailureViaProxy() (gas: 42653)
+[PASS] testLastGoodPricePreservedThroughFailure() (gas: 57911)
+[PASS] testOnlyOwnerCanResume() (gas: 43589)
+[PASS] testRepeatedCallsAfterShutdownReturnLastGoodPrice() (gas: 51629)
+[PASS] testResumeRequiresActiveOracleFailureShutdown() (gas: 15834)
+[PASS] testResumeRequiresHealthyCurrentSource() (gas: 75559)
+[PASS] testSourceSwapViaEmergencyAfterOracleFailure() (gas: 253437)
+Suite result: ok. 8 passed; 0 failed; 0 skipped; finished in 487.50µs (260.58µs CPU time)
+
+Ran 76 tests for test/PriceFeedProxy.t.sol:PriceFeedProxyTest
+[PASS] testAcceptOwnershipClearsPendingOwner() (gas: 30528)
+[PASS] testAcceptOwnershipCompletesTransfer() (gas: 31680)
+[PASS] testAcceptOwnershipEmitsTransferredEvent() (gas: 32623)
+[PASS] testAcceptOwnershipRevertsForNonPending() (gas: 39709)
+[PASS] testAcceptOwnershipRevertsWithNoPendingTransfer() (gas: 13198)
+[PASS] testBrickedSourceFallsBackForNormalPathsButRejectsUrgentAfterSwitch() (gas: 320270)
+[PASS] testCancelSourceProposal() (gas: 54048)
+[PASS] testCancelSourceProposalEmitsEvent() (gas: 50372)
+[PASS] testCancelSourceProposalRevertsForNonOwner() (gas: 67844)
+[PASS] testCancelSourceProposalRevertsWithNoProposal() (gas: 12841)
+[PASS] testConfirmSourceAfterTimelock() (gas: 89609)
+[PASS] testConfirmSourceClearsProposal() (gas: 88444)
+[PASS] testConfirmSourceEmergencyBypassesCachedPriceGuardWhenOldSourceFails() (gas: 239578)
+[PASS] testConfirmSourceEmergencyBypassesPriceJumpGuard() (gas: 218974)
+[PASS] testConfirmSourceEmergencyCanReplaceGasBurningOldSource() (gas: 241566)
+[PASS] testConfirmSourceEmitsEvent() (gas: 89573)
+[PASS] testConfirmSourceRejectsSourceWithBrokenUrgentPath() (gas: 192499)
+[PASS] testConfirmSourceRevertsBeforeTimelock() (gas: 66923)
+[PASS] testConfirmSourceRevertsForNonOwner() (gas: 69012)
+[PASS] testConfirmSourceRevertsWhenHealthyOldSourcePriceJumpsTooFar() (gas: 244541)
+[PASS] testConfirmSourceRevertsWhenNewSourceFetchReverts() (gas: 191255)
+[PASS] testConfirmSourceRevertsWhenOnlyUrgentPriceJumpsTooFar() (gas: 299808)
+[PASS] testConfirmSourceRevertsWhenUnhealthyOldSourceCachedPriceJumpsTooFar() (gas: 267357)
+[PASS] testConfirmSourceRevertsWithNoProposal() (gas: 12857)
+[PASS] testConfirmSourceUsesCachedPricesWithoutImplicitEmergencyBypass() (gas: 105760)
+[PASS] testConfirmSourceUsesSeparateCachedRedemptionPriceWhenOldSourceFails() (gas: 554533)
+[PASS] testConstructorEmitsEvents() (gas: 1411759)
+[PASS] testConstructorRevertsOnZeroBorrowerOperations() (gas: 71094)
+[PASS] testConstructorRevertsOnZeroInitialPrice() (gas: 211696)
+[PASS] testConstructorRevertsOnZeroOwner() (gas: 71060)
+[PASS] testConstructorRevertsOnZeroSource() (gas: 68568)
+[PASS] testConstructorRevertsWhenInitialLastGoodPriceReverts() (gas: 193639)
+[PASS] testConstructorSetsBorrowerOperations() (gas: 10846)
+[PASS] testConstructorSetsOwner() (gas: 12851)
+[PASS] testConstructorSetsSource() (gas: 12882)
+[PASS] testFetchPriceDelegatesToSource() (gas: 23209)
+[PASS] testFetchPriceFallsBackToCachedPriceWhenSourceFullyBricked() (gas: 241780)
+[PASS] testFetchPriceReflectsPriceChanges() (gas: 34101)
+[PASS] testFetchPriceRejectsMaxUint() (gas: 47270)
+[PASS] testFetchPriceRejectsZero() (gas: 37619)
+[PASS] testFetchPriceReturnsOracleFailure() (gas: 59421)
+[PASS] testFetchRedemptionPriceDelegatesToSource() (gas: 30201)
+[PASS] testFetchRedemptionPriceRejectsMaxUint() (gas: 48938)
+[PASS] testFetchRedemptionPriceRejectsZero() (gas: 39320)
+[PASS] testFetchRedemptionPriceReturnsOracleFailure() (gas: 58469)
+[PASS] testFetchUrgentRedemptionPriceDelegatesToSource() (gas: 18648)
+[PASS] testFetchUrgentRedemptionPriceRejectsMaxUint() (gas: 24647)
+[PASS] testFetchUrgentRedemptionPriceRejectsOracleFailure() (gas: 50565)
+[PASS] testFetchUrgentRedemptionPriceRejectsZero() (gas: 19819)
+[PASS] testFixedFeedToChainlinkUpgrade() (gas: 1751980)
+[PASS] testLastGoodPriceDelegatesToSource() (gas: 15799)
+[PASS] testLastGoodPriceFallsBackWhenSourceBricked() (gas: 228396)
+[PASS] testLastGoodPriceUpdatesAfterFetch() (gas: 35655)
+[PASS] testMultipleTimelockSwaps() (gas: 147214)
+[PASS] testNewOwnerCanActAfterAccept() (gas: 78606)
+[PASS] testNewOwnerCannotActBeforeAccept() (gas: 39917)
+[PASS] testOldOwnerCannotActAfterAccept() (gas: 32244)
+[PASS] testOldOwnerStillControlsBeforeAccept() (gas: 92037)
+[PASS] testOracleUpgradeWBTCtoCBTC() (gas: 1751948)
+[PASS] testOverwriteProposalEmitsCancellation() (gas: 229504)
+[PASS] testProposeSourceDoesNotChangeActiveSource() (gas: 80870)
+[PASS] testProposeSourceEmitsEvent() (gas: 66705)
+[PASS] testProposeSourceRevertsForNonOwner() (gas: 15497)
+[PASS] testProposeSourceRevertsOnSameSource() (gas: 17625)
+[PASS] testProposeSourceRevertsOnZeroAddress() (gas: 10886)
+[PASS] testProposeSourceSetsState() (gas: 66804)
+[PASS] testRedemptionFallbackDoesNotUseNormalSourceLastGoodPrice() (gas: 269013)
+[PASS] testRenounceOwnershipDoesNotCancelPendingProposal() (gas: 71881)
+[PASS] testRenounceOwnershipDoesNotClearPendingOwner() (gas: 36888)
+[PASS] testRenounceOwnershipIsDisabled() (gas: 72463)
+[PASS] testTimelockDelay() (gas: 8398)
+[PASS] testTransferOwnershipCanBeOverwritten() (gas: 38036)
+[PASS] testTransferOwnershipEmitsStartedEvent() (gas: 39899)
+[PASS] testTransferOwnershipRevertsForNonOwner() (gas: 13450)
+[PASS] testTransferOwnershipSetsPendingOwner() (gas: 40940)
+[PASS] testTransferOwnershipWithZeroAddressCancelsPending() (gas: 32024)
+Suite result: ok. 76 passed; 0 failed; 0 skipped; finished in 6.47ms (6.07ms CPU time)
+
+Ran 7 tests for test/PriceFeedProxyGasGrief.t.sol:PriceFeedProxyGasGriefTest
+[PASS] test_constructorUrgentGasGuardRevert_isBubbled() (gas: 407791)
+[PASS] test_fix_gasGuardRevert_isBubbled_notShutdown() (gas: 1719796)
+[PASS] test_fix_gasGuardRevert_isBubbled_notShutdown_redemption() (gas: 1719772)
+[PASS] test_fix_gasGuardRevert_isBubbled_notShutdown_urgentRedemption() (gas: 1719706)
+[PASS] test_regression_fourByteNonGasError_shutsDown_notBubbled() (gas: 1673744)
+[PASS] test_regression_genuineOracleFailure_stillShutsDown() (gas: 1734763)
+[PASS] test_regression_sameSelectorExtraData_shutsDown_notBubbled() (gas: 1689712)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 581.46µs (475.83µs CPU time)
+
+Ran 10 tests for test/PriceFeedProxyInvalidFallback.t.sol:PriceFeedProxyInvalidFallbackTest
+[PASS] test_C1_handleFailedFetch_rejectsMaxSourceLastGood() (gas: 1470727)
+[PASS] test_C1_lastGoodPriceView_rejectsMaxSourceLastGood() (gas: 1443825)
+[PASS] test_C2_confirmSource_rejectsFailureFlaggedSource() (gas: 1785621)
+[PASS] test_C2_constructor_rejectsFailureFlaggedSource() (gas: 404659)
+[PASS] test_C2_constructor_rejectsInvalidPriceOnLiveFetch() (gas: 344934)
+[PASS] test_C2_constructor_stillToleratesRevertingCachedPaths() (gas: 1689470)
+[PASS] test_F4_constructor_rejectsFailureFlaggedUrgentPath() (gas: 407272)
+[PASS] test_F4_constructor_rejectsMaxUrgentPrice() (gas: 387215)
+[PASS] test_F4_constructor_rejectsRevertingUrgentPath() (gas: 406960)
+[PASS] test_F4_constructor_rejectsZeroUrgentPrice() (gas: 367366)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 640.54µs (523.71µs CPU time)
+
+Ran 14 tests for test/PriceFeedProxyJpyRedemptionAge.t.sol:PriceFeedProxyJpyRedemptionAgeTest
+[PASS] test_agedQuoteNeverReplacesRedemptionCache() (gas: 88313)
+[PASS] test_agedSourceCanBeEmergencySwitchedWithoutCachingItsQuote() (gas: 479766)
+[PASS] test_agedSourceCanBeNormallySwitchedWithinDeviationWithoutCachingItsQuote() (gas: 501288)
+[PASS] test_bothConfirmationPathsRejectMissingProvenanceAtomically() (gas: 199705)
+[PASS] test_constructorRejectsMissingMalformedAndAgedProvenance() (gas: 922134)
+[PASS] test_exactBoundaryStopsOnlyNormalRedemptionWithoutFailureAlarmOrPause() (gas: 51557)
+[PASS] test_firstFreshSourceCallReopensRedemptionAutomatically() (gas: 76608)
+[PASS] test_realSourceFailureStillUsesExistingPausePathWhenAged() (gas: 68209)
+[PASS] test_redemptionAllowedOneSecondBeforeBoundary() (gas: 41059)
+[PASS] test_resumeCanClearIndependentPauseWhenRuntimeProvenanceIsUnavailable() (gas: 129478)
+[PASS] test_resumeCanClearIndependentPauseWithoutCachingAgedQuote() (gas: 113292)
+[PASS] test_runtimeProvenanceGasBurnIsBoundedAndStopsOnlyNormalRedemption() (gas: 85191)
+[PASS] test_runtimeProvenanceReadFailureStopsOnlyNormalRedemption() (gas: 55448)
+[PASS] test_runtimeProvenanceReturnBombIsBoundedAndStopsOnlyNormalRedemption() (gas: 70030)
+Suite result: ok. 14 passed; 0 failed; 0 skipped; finished in 819.21µs (596.00µs CPU time)
+
+Ran 5 tests for test/PriceFeedProxyMisEncodedSource.t.sol:PriceFeedProxyMisEncodedSourceTest
+[PASS] test_C1_confirmRejectsAsymmetricMisEncoded() (gas: 1579388)
+[PASS] test_C1_confirmRejectsSymmetricMisEncoded() (gas: 1582789)
+[PASS] test_C2_constructorRejectsAsymmetricMisEncoded() (gas: 206538)
+[PASS] test_C2_constructorRejectsSymmetricMisEncoded() (gas: 209855)
+[PASS] test_mechanism_misEncodedReturnsTooFewBytes() (gas: 100215)
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 360.50µs (253.62µs CPU time)
+
+Ran 7 tests for test/PriceFeedProxyRealFeedIntegration.t.sol:PriceFeedProxyRealFeedIntegrationTest
+[PASS] test_realFeed_fetchRedemptionPrice_delegatesThroughProxy() (gas: 46030)
+[PASS] test_realFeed_lastGoodPrice_readsThroughProxy() (gas: 40211)
+[PASS] test_realFeed_normalFetch_delegatesThroughProxy() (gas: 47837)
+[PASS] test_realFeed_repeatedCallsAfterFailure_returnLastGoodPrice() (gas: 87073)
+[PASS] test_realFeed_sourceSwapViaEmergency_betweenRealFeeds() (gas: 841797)
+[PASS] test_realFeed_staleOracle_proxyCatchesAndShutsDown() (gas: 60897)
+[PASS] test_realFeed_zeroAnswer_proxyCatchesAndShutsDown() (gas: 57942)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 592.33µs (352.50µs CPU time)
+
+Ran 2 tests for test/PriceFeedProxyShutdownAlarm.t.sol:PriceFeedProxyShutdownAlarmTest
+[PASS] test_correctWire_noAlarm_andShutdownCalled() (gas: 1600073)
+[PASS] test_miswire_shutdownRevert_emitsAlarm_servesLastGood_noRevert() (gas: 1577300)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 298.54µs (198.38µs CPU time)
+
+Ran 11 tests for test/PriceFeedProxySourceValidation.t.sol:PriceFeedProxySourceValidationTest
+[PASS] test_confirmSource_rechecksAndRejectsInjectedPriceFeedProxy() (gas: 3078389)
+[PASS] test_constructor_revertsOnEOASource() (gas: 72613)
+[PASS] test_constructor_revertsOnPriceFeedProxySource() (gas: 1467081)
+[PASS] test_constructor_revertsOnZeroSource() (gas: 68540)
+[PASS] test_constructor_succeedsOnContractSource() (gas: 1406403)
+[PASS] test_proposeSource_revertsOnAnotherPriceFeedProxy() (gas: 2798827)
+[PASS] test_proposeSource_revertsOnEOASource() (gas: 1410869)
+[PASS] test_proposeSource_revertsOnSelf() (gas: 1407890)
+[PASS] test_proposeSource_revertsOnZeroSource() (gas: 1406598)
+[PASS] test_proposeThenConfirm_succeedsForContractSource() (gas: 1533064)
+[PASS] test_revertingButDeployedSource_isAllowed_andFetchDoesNotRevert() (gas: 1540093)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 1.24ms (1.06ms CPU time)
+
+Ran 3 tests for test/verification-20260815/ReadHelpersVerification.t.sol:ReadHelpersVerification
+[PASS] testDebtInFrontHelperExposesConfiguredReferences() (gas: 462862)
+[PASS] testRedemptionHelperBindsConfiguredBranch() (gas: 1838529)
+[PASS] testRedemptionHelperRejectsWrongConstructorRegistries() (gas: 140509)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 6.88ms (214.00µs CPU time)
+
+Ran 8 tests for test/RedemptionHelper.t.sol:RedemptionHelperTest
+[PASS] test_HelperMixedRedemptionRefundsUnavailableBranchShare() (gas: 2833843)
+[PASS] test_NormalRedemptionOracleFailure_DirectAndHelperSpendNothing() (gas: 1725784)
+[PASS] test_RedeemCollateral_ForwardsRedeemedColl() (gas: 3921253)
+[PASS] test_RedeemCollateral_RefundsRemainingJpydf() (gas: 4613599)
+[PASS] test_RedeemCollateral_RevertsWhenRedeemedCollLtMin() (gas: 4910105)
+[PASS] test_SimulateRedemption(uint256,(uint256,uint256,uint256)[20],uint256[3],uint256[3],uint256,uint256) (runs: 256, μ: 18184991, ~: 18219049)
+[PASS] test_SimulationKeepsFailedBranchInCollateralRegistryAllocationDenominator() (gas: 2729169)
+[PASS] test_TruncateRedemption(uint256,(uint256,uint256,uint256)[20],uint256[3],uint256[3],uint256,uint256) (runs: 256, μ: 18240310, ~: 18277153)
+Suite result: ok. 8 passed; 0 failed; 0 skipped; finished in 14.31s (14.30s CPU time)
+
+Ran 2 tests for test/RedemptionHelperOracleFailure.t.sol:RedemptionHelperOracleFailureTest
+[PASS] test_simulationExcludesRedemptionFailureBeforeComputingProportions() (gas: 77809)
+[PASS] test_truncateReturnsZeroIfSecondRedemptionReadFails() (gas: 95169)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 353.25µs (111.25µs CPU time)
+
+Ran 20 tests for test/RiskParamsFinalization.t.sol:RiskParamsFinalizationTest
+[PASS] testFuzz_GuardianL03_CapFinalizesOnceAndCannotChange(uint256) (runs: 256, μ: 203086, ~: 202850)
+Logs:
+  Bound result 552353547970959665811
+
+[PASS] test_ChildSyncFailureRollsBackRegistryAndOtherChild() (gas: 181169)
+[PASS] test_EmptyReservedBranchCannotEnterTerminalShutdown() (gas: 76854)
+[PASS] test_FinalizationRejectsEveryConstructorRange() (gas: 45060)
+[PASS] test_FinalizationRejectsEveryCrossParameterInvariant() (gas: 41759)
+[PASS] test_FinalizationRejectsEveryShutdownState() (gas: 332429)
+[PASS] test_FinalizationRejectsNonemptyCoreState() (gas: 143625)
+[PASS] test_FinalizationRejectsNonzeroCapOrSupply() (gas: 70418)
+[PASS] test_FinalizationRequiresDTokenAndVaultBoundToExpectedUnderlying() (gas: 116224)
+[PASS] test_FinalizationSynchronizesRiskParamsAndGasCap() (gas: 220805)
+[PASS] test_FinalizedBranchPassesStabilityPoolLifecycleGuard() (gas: 408336)
+[PASS] test_FinalizerIsAuthorizedAndFinalizationIsOneShot() (gas: 201815)
+[PASS] test_GuardianI09_RedistributionCoverageBoundary() (gas: 215458)
+[PASS] test_GuardianL03_FinalizationRejectsInvalidGasCaps() (gas: 34023)
+[PASS] test_GuardianL04_ExactSpCoverageBoundary() (gas: 215894)
+[PASS] test_OnlyRegistryCanSynchronizeChildCopies() (gas: 17964)
+[PASS] test_ReversibleOraclePauseCanRecoverThenFinalize() (gas: 281495)
+[PASS] test_UnfinalizedBranchCannotAcceptStabilityPoolDeposit() (gas: 1841702)
+[PASS] test_UnfinalizedBranchCannotOpenTrove() (gas: 18164)
+[PASS] test_ZeroFinalizerPreservesDeployTimeFinalizedBranches() (gas: 1606514)
+Suite result: ok. 20 passed; 0 failed; 0 skipped; finished in 66.59ms (61.12ms CPU time)
+
+Ran 10 tests for test/SkyUsdcSUsdsConverter.t.sol:SkyUsdcSUsdsConverterTest
+[PASS] testFuzz_PreviewReturnsMaximumAffordableUsdc(uint128,uint64) (runs: 256, μ: 45912, ~: 46291)
+Logs:
+  Bound result 660
+  Bound result 89
+
+[PASS] test_ConstructorBindsWrapperTokens() (gas: 17331)
+[PASS] test_ConstructorRejectsNonUsdcGemDecimals() (gas: 1185872)
+[PASS] test_ConversionRejectsWrapperReportedAmountMismatch() (gas: 178636)
+[PASS] test_ConvertUsdcToUsds_AppliesTinAndLeavesNoResidueOrAllowance() (gas: 186254)
+[PASS] test_ConvertUsdcToUsds_RevertsOnHaltAndMinOut() (gas: 184312)
+[PASS] test_ConvertUsdsToUsdc_UsesBudgetAndRefundsUnspentDust() (gas: 209270)
+[PASS] test_PreviewAndConversionFailClosedWhenBuyRouteHaltedOrFeeInvalid() (gas: 127455)
+[PASS] test_PreviewUsdsToUsdc_AccountsForFeeFloorAtOneUsdcAtom() (gas: 43251)
+[PASS] test_RouteHaltStatusDistinguishesExplicitHaltFromInvalidFee() (gas: 45481)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 11.97ms (11.59ms CPU time)
+
+Ran 22 tests for test/SkyUsdcSUsdsStrategy.t.sol:SkyUsdcSUsdsStrategyTest
+[PASS] test_Allocate_ConvertsUsdcToSUsdsAndValuesInUsdc() (gas: 16529193)
+[PASS] test_DonatedSUsdsSharesDoNotInflateValuation() (gas: 16563038)
+[PASS] test_EmergencyConvertCannotBypassMaxConversionLoss() (gas: 16601722)
+[PASS] test_EmergencyConvertRevertsWhenUsdsDustWouldReturnZeroUsdc() (gas: 16677356)
+[PASS] test_EmergencyConvertTracksActualUsdsSpentWhenConverterUsesBudget() (gas: 16624703)
+[PASS] test_EmergencyRedeemThenConvertReturnsPrincipalToVault() (gas: 16460324)
+[PASS] test_EmergencyWithdrawCannotBypassMaxConversionLoss() (gas: 16685765)
+[PASS] test_EmergencyWithdrawFromSky_RefundedUsdsBudgetRemainsTracked() (gas: 16627135)
+[PASS] test_GuardianL07_ConversionSurplusIsReturnedPrincipalNotYield() (gas: 16635930)
+[PASS] test_GuardianL08_KnownCustodyCoversLiabilitiesDuringValuationOutage() (gas: 16607088)
+[PASS] test_GuardianL10_ReturnInvalidatesExhaustedCacheBeforeLaterPreviewOutage() (gas: 16666067)
+[PASS] test_HaltedRouteValuationDoesNotRecognizeUnrealizedYield() (gas: 16540589)
+[PASS] test_Initialize_RevertsOnNonContractConverter() (gas: 6878034)
+[PASS] test_Initialize_RevertsWhenUnderlyingIsNotUsdcDecimals() (gas: 7506526)
+[PASS] test_PriceFeedDoesNotShutDownBranchAfterHaltedRouteCacheExpires() (gas: 18446794)
+[PASS] test_PricingRemainsAvailablePastCacheWhileSkyRouteHalted() (gas: 16569588)
+[PASS] test_PricingUsesFreshCacheWhenSkyQuoteUnavailable() (gas: 16568513)
+[PASS] test_SUsdsYieldDustBelowUsdcAtomDoesNotInflateOrSendProfit() (gas: 16693999)
+[PASS] test_SendProfitToVault_HarvestsSUsdsYieldAsUsdcWithoutReducingPrincipal() (gas: 16655024)
+[PASS] test_SendToVault_RedeemsSUsdsAndReturnsUsdc() (gas: 16643662)
+[PASS] test_SendToVault_RefundedUsdsBudgetRemainsTracked() (gas: 16708192)
+[PASS] test_SweepRewardToken_RejectsUsdsAndSUsds() (gas: 16176307)
+Suite result: ok. 22 passed; 0 failed; 0 skipped; finished in 19.41ms (18.75ms CPU time)
+
+Ran 3 tests for test/archive/SkyUsdcSUsdsYieldZapper.t.sol:SkyUsdcSUsdsYieldZapperTest
+[PASS] test_SkyRoute_ConvertsUsdcThroughUsdsAndSusdsForOpenReferralAddCollAndSlippage() (gas: 99874802)
+[PASS] test_SkyRoute_RevertsWhenConverterLeavesUsdcResidue() (gas: 97014604)
+[PASS] test_SkyRoute_RevertsWhenOwnerIsNotSender() (gas: 96856974)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 16.54ms (14.99ms CPU time)
+
+Ran 2 tests for test/SlitherTriageHardening.t.sol:SlitherTriageHardeningTest
+[PASS] testFixedAssetReaderRejectsZeroPointer() (gas: 37922)
+[PASS] testMintAggInterestAndAccountForTroveChangeEmitsAggregateDebtEvents() (gas: 46710)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 6.66ms (56.58µs CPU time)
+
+Ran 6 tests for test/SortedTroves.t.sol:SortedTrovesTest
+[PASS] test_CanReInsert((uint256,(uint256,uint256),uint256,uint256)[9],(uint256,uint256,(uint256,uint256))[9]) (runs: 256, μ: 2344356, ~: 2331926)
+Logs:
+  Bound result 0
+  Bound result 0
+  Bound result 3
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 6
+  Bound result 1
+  Bound result 1
+  Bound result 5
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 7
+  Bound result 0
+  Bound result 1
+  Bound result 10
+  Bound result 4
+  Bound result 1
+  Bound result 1
+  Bound result 2
+  Bound result 2
+  Bound result 2
+  Bound result 7
+  Bound result 10
+  Bound result 4
+  Bound result 11
+  Bound result 2
+  Bound result 0
+  Bound result 16
+  Bound result 6
+  Bound result 1
+  Bound result 12
+  Bound result 0
+  Bound result 2
+  Bound result 13
+  Bound result 12
+  Bound result 6
+  Bound result 15
+  Bound result 19
+  Bound result 5
+  Bound result 1
+  Bound result 5
+  Bound result 2
+  Bound result 1
+  Bound result 18
+  Bound result 1
+  Bound result 6
+  Bound result 9
+  Bound result 4
+  Bound result 0
+  Bound result 6
+  Forward list:
+    Trove 7 annualInterestRate 115792089237316195423570985008687907853269984665640564039457584007913129639933
+    Trove 9 annualInterestRate 115792089237316195423570985008687907853269984665640564039457584007913129639933
+    Trove 8 annualInterestRate 19661334474521248211567846708758667585707966498073483207081092990057475701935
+    Trove 3 annualInterestRate 180750782247072223865036176060972046887629962174131994986973121260
+    Trove 6 annualInterestRate 180750782247072223865036176060972046887629962174131994986973121260
+    Trove 2 annualInterestRate 153011257631182816461980032576661948001754421030600875095168
+    Trove 5 annualInterestRate 15054531534366019163029074339688865870534329254110602480953
+    Trove 1 annualInterestRate 50186266178921112338935794
+    Trove 4 annualInterestRate 15787224000973281509547133
+  Reverse list:
+    Trove 4
+    Trove 1
+    Trove 5
+    Trove 2
+    Trove 6
+    Trove 3
+    Trove 8
+    Trove 9
+    Trove 7
+  Batch IDs:
+     0x0000000000000000000000000000000000000003
+     0x0000000000000000000000000000000000000003
+     0x0000000000000000000000000000000000000004
+     0x0000000000000000000000000000000000000001
+     0x0000000000000000000000000000000000000001
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000002
+
+[PASS] test_CanRemoveBatchedTroves((uint256,(uint256,uint256),uint256,uint256)[9],uint256[9],uint256) (runs: 256, μ: 1686147, ~: 1653806)
+Logs:
+  Bound result 9
+  Bound result 0
+  Bound result 3
+  Bound result 0
+  Bound result 1
+  Bound result 5
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 1
+  Bound result 0
+  Bound result 0
+  Bound result 7
+  Bound result 2
+  Bound result 1
+  Bound result 7
+  Bound result 7
+  Bound result 1
+  Bound result 9
+  Bound result 0
+  Bound result 0
+  Bound result 4
+  Bound result 12
+  Bound result 1
+  Bound result 4
+  Bound result 0
+  Bound result 6
+  Bound result 0
+  Bound result 1
+  Bound result 2
+  Bound result 3
+  Bound result 0
+  Bound result 1
+  Bound result 0
+  Bound result 0
+
+[PASS] test_CanRemoveIndividualTroves((uint256,(uint256,uint256))[9],uint256[9],uint256) (runs: 256, μ: 1250449, ~: 1224321)
+Logs:
+  Bound result 1
+  Bound result 2
+  Bound result 1
+  Bound result 1
+  Bound result 4
+  Bound result 4
+  Bound result 6
+  Bound result 8
+  Bound result 5
+  Bound result 3
+  Bound result 11
+  Bound result 8
+  Bound result 4
+  Bound result 11
+  Bound result 8
+  Bound result 13
+  Bound result 10
+  Bound result 19
+  Bound result 6
+  Bound result 1
+  Forward list:
+    Trove 5 annualInterestRate 3378801907704994345941392091977527426538288251035995335518152147
+    Trove 1 annualInterestRate 72071022933816970131800863315994819052467125459493176
+    Trove 4 annualInterestRate 764589061474241422461460133
+    Trove 6 annualInterestRate 284019512788770932942258
+    Trove 3 annualInterestRate 4039909256398826982235
+    Trove 9 annualInterestRate 45142688238128
+    Trove 7 annualInterestRate 22267846428774
+    Trove 8 annualInterestRate 28051067
+  Reverse list:
+    Trove 8
+    Trove 7
+    Trove 9
+    Trove 3
+    Trove 6
+    Trove 4
+    Trove 1
+    Trove 5
+
+[PASS] test_FindsValidInsertPosition((uint256,(uint256,uint256),uint256,uint256)[9],(uint256,(uint256,uint256))) (runs: 256, μ: 1796276, ~: 1774996)
+Logs:
+  Bound result 2
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 2
+  Bound result 0
+  Bound result 2
+  Bound result 5
+  Bound result 0
+  Bound result 10
+  Bound result 4
+  Bound result 0
+  Bound result 10
+  Bound result 4
+  Bound result 0
+  Bound result 5
+  Bound result 15
+  Bound result 0
+  Bound result 16
+  Bound result 2
+  Bound result 2
+  Bound result 0
+  Bound result 15
+  Bound result 5
+  Bound result 0
+  Bound result 0
+
+[PASS] test_SortsBatchedTrovesByAnnualInterestRate((uint256,(uint256,uint256),uint256,uint256)[9]) (runs: 256, μ: 2076513, ~: 2055402)
+Logs:
+  Bound result 0
+  Bound result 3
+  Bound result 0
+  Bound result 0
+  Bound result 5
+  Bound result 0
+  Bound result 1
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 1
+  Bound result 9
+  Bound result 1
+  Bound result 0
+  Bound result 7
+  Bound result 0
+  Bound result 8
+  Bound result 0
+  Bound result 0
+  Bound result 17
+  Bound result 4
+  Bound result 1
+  Bound result 0
+  Bound result 0
+  Forward list:
+    Trove 4 annualInterestRate 4438245527649542472123436919119941914681958934300583846447850412578753018876
+    Trove 7 annualInterestRate 1099000000000000000000
+    Trove 9 annualInterestRate 37500000000000000
+    Trove 3 annualInterestRate 3514649356
+    Trove 5 annualInterestRate 1000000000
+    Trove 1 annualInterestRate 123456789
+    Trove 6 annualInterestRate 1296000
+    Trove 8 annualInterestRate 4096
+    Trove 2 annualInterestRate 3985
+  Reverse list:
+    Trove 2
+    Trove 8
+    Trove 6
+    Trove 1
+    Trove 5
+    Trove 3
+    Trove 9
+    Trove 7
+    Trove 4
+  Batch IDs:
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000003
+     0x0000000000000000000000000000000000000001
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000002
+     0x0000000000000000000000000000000000000000
+     0x0000000000000000000000000000000000000000
+
+[PASS] test_SortsIndividualTrovesByAnnualInterestRate((uint256,(uint256,uint256))[9]) (runs: 256, μ: 1528033, ~: 1528710)
+Logs:
+  Bound result 1
+  Bound result 1
+  Bound result 0
+  Bound result 1
+  Bound result 4
+  Bound result 6
+  Bound result 2
+  Bound result 5
+  Bound result 0
+  Bound result 10
+  Bound result 8
+  Bound result 6
+  Bound result 0
+  Bound result 9
+  Bound result 0
+  Bound result 0
+  Bound result 0
+  Bound result 2
+  Forward list:
+    Trove 6 annualInterestRate 2260807013523208562646698972638834
+    Trove 7 annualInterestRate 1250000000000000000
+    Trove 3 annualInterestRate 1030000000000000000
+    Trove 4 annualInterestRate 990000000000000000
+    Trove 8 annualInterestRate 200000000000000000
+    Trove 1 annualInterestRate 3198
+    Trove 9 annualInterestRate 2160
+    Trove 5 annualInterestRate 360
+    Trove 2 annualInterestRate 39
+  Reverse list:
+    Trove 2
+    Trove 5
+    Trove 9
+    Trove 1
+    Trove 8
+    Trove 4
+    Trove 3
+    Trove 7
+    Trove 6
+
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 1.19s (1.19s CPU time)
+
+Ran 3 tests for test/verification-20260815/SortedTrovesConstructorVerification.t.sol:SortedTrovesConstructorVerification
+[PASS] testConstructorWiringEventsAndSentinel() (gas: 2970388)
+[PASS] testInvalidOperationRevertStrings() (gas: 3059891)
+[PASS] testWriteCallerGuardsAndNodeExistenceCoherence() (gas: 2987970)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 589.04µs (439.58µs CPU time)
+
+Ran 5 tests for test/verification-20260815/TroveNFTVerification.t.sol:TroveNFTVerification
+[PASS] testConstructorMetadataAndBindings() (gas: 1274161)
+[PASS] testMintBurnCallerGuardsAndDuplicateMint() (gas: 54000)
+[PASS] testMintDoesNotCallReceiverCallback() (gas: 122622)
+[PASS] testTokenURIRejectsNonexistentTrove() (gas: 42387)
+[PASS] testTroveManagerMintBurnsAndERC721Events() (gas: 138028)
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 6.44ms (279.00µs CPU time)
+
+Ran 9 tests for test/basicOps.t.sol:BasicOps
+[PASS] testAdjustTrove() (gas: 875928)
+[PASS] testCloseTrove() (gas: 1039698)
+[PASS] testLiquidation() (gas: 1231609)
+[PASS] testOpenTrove() (gas: 760377)
+[PASS] testOpenTroveFailsWithoutAllowance() (gas: 290137)
+[PASS] testOpenTroveFailsWithoutBalance() (gas: 320140)
+[PASS] testRedeem() (gas: 1284350)
+[PASS] testSPDeposit() (gas: 977787)
+[PASS] testSPWithdrawal() (gas: 977470)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 9.35ms (2.78ms CPU time)
+
+Ran 30 tests for test/batchManagementFee.t.sol:BatchManagementFeeTest
+[PASS] testAddTroveToBatchDoesNotIncreaseTroveDebtByFee() (gas: 1692568)
+[PASS] testAddTroveToBatchIncreasesDebtInActivePoolByFee() (gas: 1692708)
+[PASS] testAddTroveToBatchMintsFeeForBatch() (gas: 1671082)
+[PASS] testAdjustTroveEmitsBatchManagementFeeMintedForDefiLlamaAccounting() (gas: 1694248)
+[PASS] testAdjustTroveIncreasesDebtInActivePoolByFee() (gas: 1660237)
+[PASS] testAdjustTroveIncreasesTroveDebtByFee() (gas: 1667853)
+[PASS] testAdjustTroveMintsFeeForBatch() (gas: 1658371)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithCloseTrove() (gas: 1449038)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithLiquidateTroveOffset() (gas: 1867658)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithLiquidateTroveRedistribute() (gas: 1693692)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithOpenTrove() (gas: 1621609)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithRedemption() (gas: 1773347)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithRemoveBatch() (gas: 1656895)
+[PASS] testAfterBatchManagementFeeAccrualEntireSystemDebtMatchesWithSwitchBatch() (gas: 2023935)
+[PASS] testChangeBatchInterestRateIncreasesDebtInActivePoolByFee() (gas: 1630822)
+[PASS] testChangeBatchInterestRateIncreasesTroveDebtByFee() (gas: 1638401)
+[PASS] testChangeBatchInterestRateMintsFeeForBatch() (gas: 1628919)
+[PASS] testChangeBatchInterestRateUpdatesAggBatchWeightedMgmtFeeCorrectly() (gas: 1636663)
+[PASS] testChangeBatchInterestRateUpdatesBatchWeightedMgmtFeeCorrectly() (gas: 1632107)
+[PASS] testCloseTroveBatchManagementFeeDoesNotIncreaseDebtInActivePool() (gas: 1485678)
+[PASS] testCloseTroveIncreasesTroveDebtFee() (gas: 1486810)
+[PASS] testCloseTroveMintsFeeForBatch() (gas: 1476096)
+[PASS] testPrematureChangeBatchInterestRateUpdatesAggBatchWeightedMgmtFeeCorrectly() (gas: 1700257)
+[PASS] testPrematureChangeBatchInterestRateUpdatesBatchWeightedMgmtFeeCorrectly() (gas: 1716998)
+[PASS] testRemoveTroveFromBatchIncreasesDebtInActivePoolByFee() (gas: 1645264)
+[PASS] testRemoveTroveFromBatchIncreasesTroveDebtByFee() (gas: 1651530)
+[PASS] testRemoveTroveFromBatchMintsFeeForBatch() (gas: 1643283)
+[PASS] testSwitchTroveBatchIncreasesDebtInActivePoolByFee() (gas: 1964828)
+[PASS] testSwitchTroveBatchIncreasesTroveDebtByFee() (gas: 1967072)
+[PASS] testSwitchTroveBatchMintsFeeForBatches() (gas: 1941099)
+Suite result: ok. 30 passed; 0 failed; 0 skipped; finished in 24.65ms (17.88ms CPU time)
+
+Ran 11 tests for test/borrowerOperations.t.sol:BorrowerOperationsTest
+[PASS] testAdjustInterestRateChargesUpfrontFeeWhenPremature() (gas: 1019007)
+[PASS] testAdjustInterestRateFailsIfNotNew() (gas: 788407)
+[PASS] testAdjustInterestRateRevertsWhenUpfrontFeeExceedsUserProvidedLimit() (gas: 808000)
+[PASS] testCloseLastTroveReverts() (gas: 956293)
+[PASS] testOpenTroveChargesUpfrontFee() (gas: 785244)
+[PASS] testOpenTroveRevertsIfUpfrontFeeExceedsUserProvidedLimit() (gas: 74033)
+[PASS] testRepayingTooMuchDebtCapsAtMinDebt() (gas: 954298)
+[PASS] testWithdrawBoldChargesUpfrontFee() (gas: 874429)
+[PASS] testWithdrawBoldRevertsIfUpfrontFeeExceedsUserProvidedLimit() (gas: 807449)
+[PASS] testWithdrawingTooMuchCollateralReverts() (gas: 784119)
+[PASS] testZeroAdjustmentReverts() (gas: 781714)
+Suite result: ok. 11 passed; 0 failed; 0 skipped; finished in 9.82ms (3.36ms CPU time)
+
+Ran 28 tests for test/borrowerOperationsOnBehalfTroveManagament.t.sol:BorrowerOperationsOnBehalfTroveManagamentTest
+[PASS] testAddCollWithAddManager() (gas: 1016813)
+[PASS] testAddCollWithoutAddManager() (gas: 883064)
+[PASS] testCanSetAddManagerOnOpenTrove() (gas: 773885)
+[PASS] testCanSetRemoveManagerOnOpenTrove() (gas: 795300)
+[PASS] testCanSetRemoveManagerWithOtherAsReceiverOnOpenTrove() (gas: 797424)
+[PASS] testCanSetRemoveManagerWithRemoveManagerAsReceiverOnOpenTrove() (gas: 795322)
+[PASS] testCanWipeOutRemoveManager() (gas: 787057)
+[PASS] testCannotReopenTrove() (gas: 1209068)
+[PASS] testCloseTroveByManagerWithRemoveManager() (gas: 1229881)
+[PASS] testCloseTroveByOtherWithRemoveManager() (gas: 1349619)
+[PASS] testCloseTroveByOwnerWithRemoveManager() (gas: 1222980)
+[PASS] testCloseTroveWithoutRemoveManager() (gas: 1468653)
+[PASS] testReceiverForRemoveManager() (gas: 96331)
+[PASS] testRepayBoldWithAddManager() (gas: 1259516)
+[PASS] testRepayBoldWithoutAddManager() (gas: 1012682)
+[PASS] testSetAddManager() (gas: 795552)
+[PASS] testSetAddManagerFailsFromNonOwner() (gas: 779766)
+[PASS] testSetRemoveManager() (gas: 817090)
+[PASS] testSetRemoveManagerFailsFromNonOwner() (gas: 784530)
+[PASS] testSetRemoveManagerWithOtherAsReceiver() (gas: 818357)
+[PASS] testSetRemoveManagerWithRemoveManagerAsReceiver() (gas: 816207)
+[PASS] testSetRemoveManagerWithZeroReceiver() (gas: 796215)
+[PASS] testSetRemoveManagerWithZeroReceiverOnOpenTrove() (gas: 775243)
+[PASS] testWipeOutAddManager() (gas: 782059)
+[PASS] testWithdrawBoldWithRemoveManager() (gas: 993883)
+[PASS] testWithdrawBoldWithoutRemoveManager() (gas: 942812)
+[PASS] testWithdrawCollWithRemoveManager() (gas: 949551)
+[PASS] testWithdrawCollWithoutRemoveManager() (gas: 895782)
+Suite result: ok. 28 passed; 0 failed; 0 skipped; finished in 16.57ms (9.66ms CPU time)
+
+Ran 16 tests for test/criticalThreshold.t.sol:CriticalThresholdTest
+[PASS] testIncreaseDebtWithAddCollWithFinalTCRAboveCT() (gas: 1257294)
+[PASS] testNewTrovesWithFinalTCRAboveCT() (gas: 1559764)
+[PASS] testNoCollWithdrawalWithLowRepaymentBelowCT() (gas: 1201894)
+[PASS] testNoCollWithdrawalWithNoRepaymentBelowCT() (gas: 1234010)
+[PASS] testNoIncreaseDebtAloneWithFinalTCRBelowCT() (gas: 1268529)
+[PASS] testNoIncreaseDebtWithAddCollWithFinalTCRBelowCT() (gas: 1218102)
+[PASS] testNoIncreaseDebtWithWithdrawCollBelowCT() (gas: 1217413)
+[PASS] testNoNewTrovesWithFinalTCRBelowCT() (gas: 1196418)
+[PASS] testNoPrematureInterestRateAdjustmentIfItWouldPullTCRBelowCCR() (gas: 1303487)
+[PASS] testPrematureInterestRateAdjustmentDisallowedIfTCRAlreadyBelowCCR() (gas: 1212050)
+[PASS] testSafeAdjustmentImprovesICRBelowMCRFromAbove100AddingColl() (gas: 1298662)
+[PASS] testSafeAdjustmentImprovesICRBelowMCRFromAbove100Repaying() (gas: 1291368)
+[PASS] testSafeAdjustmentImprovesICRBelowMCRFromBelow100AddingColl() (gas: 1293392)
+[PASS] testSafeAdjustmentImprovesICRBelowMCRFromBelow100Repaying() (gas: 1286122)
+[PASS] testTrovesAreNotLiquidatedBetweenMCRAndCT() (gas: 1196060)
+[PASS] testWithdrawCollAlongWithRepaymentBelowCT() (gas: 1239136)
+Suite result: ok. 16 passed; 0 failed; 0 skipped; finished in 15.10ms (8.67ms CPU time)
+
+Ran 18 tests for test/deployment.t.sol:Deployment
+[PASS] testActivePoolHasCorrectBorrowerOpsAddress() (gas: 10646)
+[PASS] testActivePoolHasCorrectDefaultPoolAddress() (gas: 10667)
+[PASS] testActivePoolHasCorrectInterestRouterAddress() (gas: 10624)
+[PASS] testActivePoolHasCorrectStabilityPoolAddress() (gas: 10648)
+[PASS] testActivePoolHasCorrectTroveManagerAddress() (gas: 10689)
+[PASS] testBorrowerOperationsHasCorrectActivePoolAddress() (gas: 12787)
+[PASS] testContractsDeployed() (gas: 43578)
+Logs:
+  ActivePool addr:  0xb7105DCE7dc1F1c362EDe4a58eFCFfA3b9Ec2923
+  BorrowerOps addr:  0xF91188d209B90E4a9dC6fd831FF2a8c9E5F10F7D
+  CollSurplusPool addr:  0x02Aae64205d7c70F7882e80De26A806CA7DcC0d5
+  DefaultPool addr:  0xfd17C843c0B8BbacAcC033bcB843e4A8dcFB95d1
+  GasPool addr:  0xA67EE82F46A0bD56267695C7d0f3206F283063aA
+  SortedTroves addr:  0x44DDD01346731744cd39d2463293cf4d931e36D7
+  StabilityPool addr:  0x41A3B7880658C6d522362dafc8786575e5D01008
+  TroveManager addr:  0x90B21D78237136d7CCB0C423D6740D16EA7848CF
+  JpydfToken addr:  0x58dF0850063c7bbAA9eBC8557907a0E79721135B
+
+[PASS] testDefaultPoolHasCorrectActivePoolAddress() (gas: 10623)
+[PASS] testDefaultPoolHasCorrectTroveManagerAddress() (gas: 10687)
+[PASS] testSortedTrovesHasCorrectBorrowerOperationsAddress() (gas: 10645)
+[PASS] testSortedTrovesHasCorrectTroveManagerAddress() (gas: 10668)
+[PASS] testStabilityPoolHasCorrectActivePoolAddress() (gas: 12810)
+[PASS] testStabilityPoolHasCorrectCorrectJpydfTokenAddress() (gas: 10667)
+[PASS] testStabilityPoolHasCorrectTroveManagerAddress() (gas: 10623)
+[PASS] testTroveManagerHasCorrectActivePoolAddress() (gas: 12918)
+[PASS] testTroveManagerHasCorrectBorrowerOpsAddress() (gas: 12875)
+[PASS] testTroveManagerHasCorrectSPAddress() (gas: 12836)
+[PASS] testTroveManagerHasCorrectSortedTrovesAddress() (gas: 12898)
+Suite result: ok. 18 passed; 0 failed; 0 skipped; finished in 6.82ms (218.04µs CPU time)
+
+Ran 10 tests for test/events.t.sol:StabilityPoolEventsTest
+[PASS] test_ClaimAllCollGainsEmitsDepositOperation() (gas: 5723964)
+[PASS] test_ClaimAllCollGainsEmitsDepositUpdated() (gas: 5730373)
+[PASS] test_ProvideToSPAndClaimEmitsDepositOperation() (gas: 5633893)
+[PASS] test_ProvideToSPAndClaimEmitsDepositUpdated() (gas: 5633679)
+[PASS] test_ProvideToSPNoClaimEmitsDepositOperation() (gas: 5642286)
+[PASS] test_ProvideToSPNoClaimEmitsDepositUpdated() (gas: 5642325)
+[PASS] test_WithdrawFromSPAndClaimEmitsDepositOperation() (gas: 5629137)
+[PASS] test_WithdrawFromSPAndClaimEmitsDepositUpdated() (gas: 5628886)
+[PASS] test_WithdrawFromSPNoClaimEmitsDepositOperation() (gas: 5643053)
+[PASS] test_WithdrawFromSPNoClaimEmitsDepositUpdated() (gas: 5642958)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 99.53ms (92.95ms CPU time)
+
+Ran 18 tests for test/events.t.sol:TroveEventsTest
+[PASS] test_AdjustTroveEmitsTroveOperation() (gas: 867291)
+[PASS] test_AdjustTroveEmitsTroveUpdated() (gas: 878216)
+[PASS] test_AdjustTroveInterestRateEmitsTroveOperation() (gas: 829258)
+[PASS] test_AdjustTroveInterestRateEmitsTroveUpdated() (gas: 839913)
+[PASS] test_ApplyTroveInterestPermissionlessEmitsTroveOperation() (gas: 815905)
+[PASS] test_ApplyTroveInterestPermissionlessEmitsTroveUpdated() (gas: 826583)
+[PASS] test_BatchLiquidateTrovesEmitsLiquidation() (gas: 3915486)
+[PASS] test_BatchLiquidateTrovesEmitsTroveOperationForEachLiquidatedTrove() (gas: 3132113)
+[PASS] test_BatchLiquidateTrovesEmitsTroveUpdatedForEachLiquidatedTrove() (gas: 3102578)
+[PASS] test_CloseTroveEmitsTroveOperation() (gas: 1039655)
+[PASS] test_CloseTroveEmitsTroveUpdated() (gas: 1039194)
+[PASS] test_LiquidateEmitsLiquidation() (gas: 2200442)
+[PASS] test_LiquidateEmitsTroveOperation() (gas: 2208525)
+[PASS] test_LiquidateEmitsTroveUpdated() (gas: 2199013)
+[PASS] test_OpenTroveEmitsTroveOperation() (gas: 768969)
+[PASS] test_OpenTroveEmitsTroveUpdated() (gas: 768788)
+[PASS] test_RedeemCollateralEmitsTroveOperationForEachRedeemedTrove() (gas: 1513140)
+[PASS] test_RedeemCollateralEmitsTroveUpdatedForEachRedeemedTrove() (gas: 1538876)
+Suite result: ok. 18 passed; 0 failed; 0 skipped; finished in 50.47ms (43.85ms CPU time)
+
+Ran 57 tests for test/interestBatchManagement.t.sol:InterestBatchManagementTest
+[PASS] testAnZombieTroveGoesBackToTheBatch() (gas: 1983376)
+[PASS] testApplyBatchInterestPermissionlessDoesntChangeEntireDebt() (gas: 1262738)
+[PASS] testApplyBatchInterestPermissionlessIncreasesRecordedDebtByAccruedInterest() (gas: 1267236)
+[PASS] testApplyBatchInterestPermissionlessReducesAccruedInterestTo0() (gas: 1252963)
+[PASS] testApplyBatchInterestPermissionlessReinsertsIntoSortedTrovesIfInBatch() (gas: 1503032)
+[PASS] testApplyBatchInterestPermissionlessSetsLastDebtUpdateTimeToNow() (gas: 1244313)
+[PASS] testApplyTroveInterestPermissionlessUpdatesRedistributionIfInBatch() (gas: 1756892)
+[PASS] testCannotAdjustInsideABatchIfBelowMCRPlusBCR1() (gas: 1560821)
+[PASS] testCannotAdjustInsideABatchIfBelowMCRPlusBCR2() (gas: 1563309)
+[PASS] testCannotAdjustInterestOfBatchedTrove() (gas: 1116460)
+[PASS] testCannotBorrowInsideABatchIfBelowMCRPlusBCR() (gas: 1562945)
+[PASS] testCannotChangeBatchInterestRateOutsideOwnRange() (gas: 1119388)
+[PASS] testCannotChangeBatchToWrongInterestRate() (gas: 1119208)
+[PASS] testCannotGameUpfrontFeeByJoiningABatchAndChangingInterest() (gas: 1231641)
+[PASS] testCannotIncreaseBatchManagementFee() (gas: 1120162)
+[PASS] testCannotJoinBatchAfterOpeningIfBelowMCRPlusBCR() (gas: 1390981)
+[PASS] testCannotOpenAndJoinIfBelowMCRPlusBCR() (gas: 976628)
+[PASS] testCannotSetBatchManagerIfTroveDoesNotExist() (gas: 195262)
+[PASS] testCannotSetBatchManagerIfTroveIsClosed() (gas: 1338900)
+[PASS] testCannotSetBatchManagerIfTroveIsLiquidated() (gas: 1400266)
+[PASS] testCannotSetBatchManagerIfTroveIsZombie() (gas: 1099604)
+[PASS] testCannotSetExsitingBatchManager() (gas: 184979)
+[PASS] testCannotSetUnregisteredBatchManager() (gas: 776133)
+[PASS] testCannotWithdrawCollateralInsideABatchIfBelowMCRPlusBCR() (gas: 1559036)
+[PASS] testChangeBatchInterestRate() (gas: 1254038)
+[PASS] testChangeBatchInterestRateDoesNotApplyRedistributionGains() (gas: 1734702)
+[PASS] testJoinABatchWithDifferentInterestAndLeaveToDifferentInterestChargesUpfrontFeeTwice() (gas: 1219552)
+[PASS] testJoinABatchWithDifferentInterestAndLeaveToSameInterestChargesUpfrontFeeOnlyOnce() (gas: 1186597)
+[PASS] testJoinABatchWithSameInterestAndLeaveToDifferentInterestChargesUpfrontFeeTwice() (gas: 1219550)
+[PASS] testJoinABatchWithSameInterestAndLeaveToSameInterestChargesUpfrontFeeOnlyOnce() (gas: 1186650)
+[PASS] testJoinBatchBatchManagerChargesUpfrontFeeIfBatchShortChangeTroveNotSameInterestRate() (gas: 1238437)
+[PASS] testJoinBatchBatchManagerChargesUpfrontFeeIfTroveAndBatchShortChangeSameInterestRate() (gas: 1225754)
+[PASS] testJoinBatchBatchManagerChargesUpfrontFeeIfTroveShortChangeBatchNotSameInterestRate() (gas: 1199025)
+[PASS] testJoinBatchBatchManagerDoesNotChargeUpfrontFeeIfNotTroveNorBatchShortChangeSameInterestRate() (gas: 1199968)
+[PASS] testJoinBatchManagerCannotBeUsedToDo2ConsecutiveChangesForFree() (gas: 1257550)
+[PASS] testLowerBatchManagementFee() (gas: 1245011)
+[PASS] testLowerBatchManagementFeeDoesNotApplyRedistributionGains() (gas: 1633505)
+[PASS] testOnlyBatchManagerCanChangeBatchInterestRate() (gas: 1120035)
+[PASS] testOnlyBatchManagerCanLowerBatchManagementFee() (gas: 1119627)
+[PASS] testOnlyBorrowerCanSetBatchManager() (gas: 1234345)
+[PASS] testOpenTroveAndJoinBatchManagerChargesProperUpfrontFeeSimple() (gas: 1600155)
+[PASS] testOpenTroveAndJoinBatchManagerChargesProperUpfrontFeeWithDifferentInterestRates() (gas: 2026130)
+[PASS] testRemoveBatchManagerFailsIfNewRateIsTooHigh() (gas: 1138957)
+[PASS] testRemoveBatchManagerFailsIfNewRateIsTooLow() (gas: 1138540)
+[PASS] testRemoveBatchManagerFailsIfTroveNotInBatch() (gas: 783792)
+[PASS] testRemovesBatchManagerProperlyWithDifferentNewInterestRate() (gas: 1084242)
+[PASS] testRemovesBatchManagerProperlyWithSameNewInterestRate() (gas: 1059028)
+[PASS] testSafeAdjustmentInsideBatchCanRemainBelowMCRPlusBCR() (gas: 1643877)
+[PASS] testSetBatchManagerRemovesIndividualDelegate() (gas: 1220354)
+[PASS] testSetsBatchManagerProperlyAfterOpening() (gas: 1214060)
+[PASS] testSetsBatchManagerProperlyOnOpen() (gas: 1134780)
+[PASS] testSwitchBatchManagerBackAndForthCannotBeUsedToDo2ConsecutiveChangesForFree() (gas: 1966942)
+[PASS] testSwitchBatchManagerChargesUpfrontFeeIfJoinedOldLessThanCooldownAgo() (gas: 1496368)
+[PASS] testSwitchBatchManagerChargesUpfrontFeeIfJoinedOldMoreThanCooldownAgo() (gas: 1496388)
+[PASS] testSwitchBatchManagerChargesUpfrontFeeIfOldBatchChangedFeeLessThanCooldownAgo() (gas: 1537134)
+[PASS] testSwitchBatchManagerDoesNotChargeTroveUpfrontFeeIfBatchChangesRateWithoutUpfrontFee() (gas: 1418201)
+[PASS] testSwitchFromOldToNewBatchManager() (gas: 2581536)
+Suite result: ok. 57 passed; 0 failed; 0 skipped; finished in 32.92ms (26.18ms CPU time)
+
+Ran 27 tests for test/interestIndividualDelegation.t.sol:InterestIndividualDelegationTest
+[PASS] testAfterBorrowerAdjustTroveDelegateCanAdjustInterestRateAfterMinPeriodHasPassed() (gas: 946733)
+[PASS] testAfterBorrowerAdjustTroveDelegateCantAdjustInterestRateUntilMinPeriodHasPassed() (gas: 906347)
+[PASS] testAfterDelegateAdjustsRateCantAdjustInterestRateUntilMinPeriodHasPassed() (gas: 906775)
+[PASS] testAfterDelegateAdjustsRateTheyCanAdjustInterestRateAgainAfterMinPeriodHasPassed() (gas: 947125)
+[PASS] testAfterOpenTroveDelegateCanAdjustInterestRateAfterMinPeriodHasPassed() (gas: 903088)
+[PASS] testAfterOpenTroveDelegateCantAdjustInterestRateUntilMinPeriodHasPassed() (gas: 858658)
+[PASS] testBorrowerCanSetDelegatesMinInterestRateChangePeriod() (gas: 847853)
+[PASS] testDelegateCanSetInterestInTheRange() (gas: 892974)
+[PASS] testDelegateCannotSetInterestAboveMax() (gas: 838447)
+[PASS] testDelegateCannotSetInterestBelowMin() (gas: 838602)
+[PASS] testInterestUpdateByDelegateAfterCooldown() (gas: 890433)
+[PASS] testInterestUpdateByDelegatePremature() (gas: 909560)
+[PASS] testOnlyBorrowerCanRemoveDelegate() (gas: 834406)
+[PASS] testOnlyBorrowerCanSetDelegate() (gas: 784337)
+[PASS] testOwnerCanSetInterestAboveMax() (gas: 887491)
+[PASS] testOwnerCanSetInterestBelowMin() (gas: 888397)
+[PASS] testRemovesDelegateProperly() (gas: 794396)
+[PASS] testSetDelegateRemovesBatchManager() (gas: 1263297)
+[PASS] testSetDelegateRevertsIfMaxTooHigh() (gas: 939810)
+[PASS] testSetDelegateRevertsIfMinEqMax() (gas: 939551)
+[PASS] testSetDelegateRevertsIfMinGtMax() (gas: 939616)
+[PASS] testSetDelegateRevertsIfMinTooLow() (gas: 938944)
+[PASS] testSetDelegateRevertsIfNewInterestRateNotInRangeAbove() (gas: 1254392)
+[PASS] testSetDelegateRevertsIfNewInterestRateNotInRangeBelow() (gas: 1253962)
+[PASS] testSetDelegateRevertsIfTroveIsClosed() (gas: 1171570)
+[PASS] testSetDelegateRevertsIfTroveIsZombie() (gas: 1102818)
+[PASS] testSetsDelegateProperly() (gas: 827794)
+Suite result: ok. 27 passed; 0 failed; 0 skipped; finished in 14.32ms (7.50ms CPU time)
+
+Ran 92 tests for test/interestRateAggregate.t.sol:InterestRateAggregate
+[PASS] testActivePoolCalculatesApproxAvgInterestRate() (gas: 1551968)
+[PASS] testAddCollAdjustsWeightedDebtSumCorrectly() (gas: 847598)
+[PASS] testAddCollMintsAggInterestToSP() (gas: 843799)
+[PASS] testAddCollReducesPendingAggInterestTo0() (gas: 837359)
+[PASS] testAddCollUpdatesLastAggUpdateTimeToNow() (gas: 837299)
+[PASS] testAddCollWithNoRedistGainsIncreasesAggRecordedDebtByPendingAggInterest() (gas: 838170)
+[PASS] testAdjustTroveInterestRateAdjustsWeightedDebtSumCorrectly() (gas: 870662)
+[PASS] testAdjustTroveInterestRateMintsAggInterestToSP() (gas: 869240)
+[PASS] testAdjustTroveInterestRateReducesPendingAggInterestTo0() (gas: 862754)
+[PASS] testAdjustTroveInterestRateUpdatesLastAggUpdateTimeToNow() (gas: 862563)
+[PASS] testAdjustTroveInterestRateWithNoPendingDebtGainIncreasesAggRecordedDebtByPendingAggInterest() (gas: 846357)
+[PASS] testApplyTroveInterestPermissionlessAdjustsWeightedDebtSumCorrectly() (gas: 839523)
+[PASS] testApplyTroveInterestPermissionlessMintsPendingAggInterestToSP() (gas: 839838)
+[PASS] testApplyTroveInterestPermissionlessReducesPendingAggInterestTo0() (gas: 833271)
+[PASS] testApplyTroveInterestPermissionlessUpdatesLastAggUpdateTimeToNow() (gas: 833191)
+[PASS] testApplyTroveInterestPermissionlessWithNoRedistGainsIncreasesAggRecordedDebtByPendingAggInterest() (gas: 834106)
+[PASS] testBatchLiquidateTrovesPureOffsetChangesAggRecordedInterestCorrectly() (gas: 2208365)
+[PASS] testBatchLiquidateTrovesPureOffsetMintsAggInterestToSP() (gas: 2205454)
+[PASS] testBatchLiquidateTrovesPureOffsetReducesAggPendingInterestTo0() (gas: 2191828)
+[PASS] testBatchLiquidateTrovesPureOffsetRemovesLiquidatedTrovesWeightedRecordedDebtsFromWeightedRecordedDebtSum() (gas: 2201420)
+[PASS] testBatchLiquidateTrovesPureOffsetUpdatesLastAggInterestUpdateTimeToNow() (gas: 2191620)
+[PASS] testBatchLiquidateTrovesPureRedistChangesAggRecordedInterestCorrectly() (gas: 1913599)
+[PASS] testBatchLiquidateTrovesPureRedistMintsAggInterestToSP() (gas: 1903464)
+[PASS] testBatchLiquidateTrovesPureRedistReducesAggPendingInterestTo0() (gas: 1897025)
+[PASS] testBatchLiquidateTrovesPureRedistRemovesLiquidatedTrovesWeightedRecordedDebtsFromWeightedRecordedDebtSum() (gas: 1906659)
+[PASS] testBatchLiquidateTrovesPureRedistUpdatesLastAggInterestUpdateTimeToNow() (gas: 1896894)
+[PASS] testBatchLiquidateTrovesPureRedistWithNoRedistGainAddsLiquidatedTrovesEntireDebtsToDefaultPoolDebtSum() (gas: 1908282)
+[PASS] testCalcPendingAggInterestReturns0For0TimePassedSinceLastUpdate() (gas: 1162280)
+[PASS] testCalcPendingAggInterestReturns0When0AggRecordedDebt() (gas: 34714)
+[PASS] testCalcPendingAggInterestReturnsCorrectInterestForGivenPeriod() (gas: 1171356)
+[PASS] testCalcTroveAccruedInterestReturns0For0TimePassed() (gas: 1167459)
+[PASS] testCalcTroveAccruedInterestReturns0When0AggRecordedDebt() (gas: 1060944)
+[PASS] testCalcTroveAccruedInterestReturnsCorrectInterestForGivenPeriod() (gas: 1181722)
+[PASS] testClaimAllCollGainsIncreasesAggRecordedDebtByPendingAggInterest() (gas: 2414428)
+[PASS] testClaimAllCollGainsMintsAggInterestToSP() (gas: 2419119)
+[PASS] testClaimAllCollGainsReducesPendingAggInterestTo0() (gas: 2413698)
+[PASS] testClaimAllCollGainsUpdatesLastAggUpdateTimeToNow() (gas: 2413580)
+[PASS] testCloseTroveAddsPendingAggInterestAndSubtractsRecordedDebtPlusInterestFromAggRecordedDebt() (gas: 1069210)
+[PASS] testCloseTroveMintsInterestToSP() (gas: 1062138)
+[PASS] testCloseTroveReducesAggWeightedDebtSumByTrovesWeightedRecordedDebt() (gas: 1063781)
+[PASS] testCloseTroveReducesBorrowerBoldBalByEntireTroveDebtLessGasComp() (gas: 1061344)
+[PASS] testCloseTroveReducesPendingAggInterestTo0() (gas: 1057686)
+[PASS] testCloseTroveUpdatesLastAggUpdateTimeToNow() (gas: 1057474)
+[PASS] testGetCurrentICRReturnsCorrectValueForNoInterest() (gas: 781769)
+[PASS] testGetCurrentICRReturnsCorrectValueWithAccruedInterest() (gas: 782667)
+[PASS] testGetCurrentICRReturnsInfinityForNonExistentTrove() (gas: 47649)
+[PASS] testGetEntireSystemDebtReturns0For0TrovesOpen() (gas: 42526)
+[PASS] testGetEntireSystemDebtWithNoInterestAndNoRedistGainsReturnsSumOfTroveRecordedDebts() (gas: 1556119)
+[PASS] testGetEntireSystemDebtWithNoRedistGainsReturnsSumOfTroveRecordedDebtsPlusIndividualInterests() (gas: 1569935)
+[PASS] testGetTCRIncorporatesAllTroveInterestForSystemWithMultipleTroves() (gas: 1549968)
+[PASS] testGetTCRIncorporatesTroveInterestForSystemWithSingleTrove() (gas: 782493)
+[PASS] testGetTCRReturnsICRofTroveForSystemWithOneTrove() (gas: 790670)
+[PASS] testGetTCRReturnsMaxUint256ForEmptySystem() (gas: 53719)
+[PASS] testGetTCRReturnsSizeWeightedRatioForSystemWithMultipleTroves() (gas: 1544288)
+[PASS] testMintAggInterestRevertsWhenNotCalledByBOorTM() (gas: 57133)
+[PASS] testNoDoubleInterestOnPendingRedistribution() (gas: 2015069)
+Logs:
+  Trove D debt (initial)  : 1498191.780821917808219178
+  Trove D debt (post-1y)  : 2996383.561643835616438356
+  Trove D debt (post-liq) : 11985534.246575342465743356
+  Trove D debt (post-adj) : 11985534.246575342465743356
+
+[PASS] testOpenTroveEmitsAggregateInterestMintedForDefiLlamaAccounting() (gas: 1209387)
+[PASS] testOpenTroveIncreasesRecordedAggDebtByAggPendingInterestPlusTroveDebt() (gas: 1171424)
+[PASS] testOpenTroveIncreasesWeightedSumByCorrectWeightedDebt() (gas: 1170551)
+[PASS] testOpenTroveMintsInterestToSP() (gas: 1556730)
+[PASS] testOpenTroveReducesPendingAggInterestTo0() (gas: 1158995)
+[PASS] testOpenTroveUpdatesTheLastAggUpdateTime() (gas: 1159300)
+[PASS] testRedemptionMintsPendingAggInterestToSP() (gas: 1972156)
+[PASS] testRedemptionReducesPendingAggInterestTo0() (gas: 2009094)
+[PASS] testRedemptionUpdatesLastAggUpdateTimeToNow() (gas: 1967527)
+[PASS] testRedemptionWithNoRedistGainsChangesAggRecordedDebtCorrectly() (gas: 1968485)
+[PASS] testRedemptionWithNoRedistGainsChangesWeightedDebtSumCorrectly() (gas: 2012803)
+[PASS] testRepayBoldAdjustsWeightedDebtSumCorrectly() (gas: 844601)
+[PASS] testRepayBoldMintsAggInterestToSP() (gas: 841160)
+[PASS] testRepayBoldReducesPendingAggInterestTo0() (gas: 834748)
+[PASS] testRepayBoldUpdatesLastAggUpdateTimeToNow() (gas: 834581)
+[PASS] testRepayBoldWithNoRedistGainsIncreasesAggRecordedDebtByPendingAggInterestMinusBorrowerDebtChange() (gas: 835576)
+[PASS] testSPDepositDoesNotChangeAggWeightedDebtSum() (gas: 942112)
+[PASS] testSPDepositIncreasesAggRecordedDebtByPendingAggInterest() (gas: 944182)
+[PASS] testSPDepositMintsInterestToSP() (gas: 947975)
+[PASS] testSPDepositReducesPendingAggInterestTo0() (gas: 943446)
+[PASS] testSPDepositUpdatesLastAggUpdateTimeToNow() (gas: 943256)
+[PASS] testSPWithdrawalDoesNotChangeAggWeightedDebtSum() (gas: 1083811)
+[PASS] testSPWithdrawalIncreasesAggRecordedDebtByPendingAggInterest() (gas: 1083880)
+[PASS] testSPWithdrawalMintsInterestToSP() (gas: 1117480)
+[PASS] testSPWithdrawalReducesPendingAggInterestTo0() (gas: 1083100)
+[PASS] testSPWithdrawalUpdatesLastAggUpdateTimeToNow() (gas: 1082930)
+[PASS] testWithdrawBoldAdjustsWeightedDebtSumCorrectly() (gas: 875229)
+[PASS] testWithdrawBoldMintsAggInterestAndUpfrontFeeToSP() (gas: 888381)
+[PASS] testWithdrawBoldReducesPendingAggInterestTo0() (gas: 867376)
+[PASS] testWithdrawBoldUpdatesLastAggUpdateTimeToNow() (gas: 867296)
+[PASS] testWithdrawBoldWithNoRedistGainsIncreasesAggRecordedDebtByPendingAggInterestPlusBorrowerDebtChange() (gas: 883208)
+[PASS] testWithdrawCollAdjustsWeightedDebtSumCorrectly() (gas: 860579)
+[PASS] testWithdrawCollMintsAggInterestToSP() (gas: 856827)
+[PASS] testWithdrawCollReducesPendingAggInterestTo0() (gas: 850340)
+[PASS] testWithdrawCollUpdatesLastAggUpdateTimeToNow() (gas: 850216)
+[PASS] testWithdrawCollWithNoRedistGainsIncreasesAggRecordedDebtByPendingAggInterest() (gas: 851110)
+Suite result: ok. 92 passed; 0 failed; 0 skipped; finished in 48.79ms (42.04ms CPU time)
+
+Ran 38 tests for test/interestRateBasic.t.sol:InterestRateBasic
+[PASS] testAddCollDoesntChangeEntireTroveDebt() (gas: 843467)
+[PASS] testAddCollIncreasesRecordedTroveDebtByAccruedInterest() (gas: 843623)
+[PASS] testAddCollReducesTroveAccruedInterestTo0() (gas: 842658)
+[PASS] testAddCollSetsTroveLastDebtUpdateTimeToNow() (gas: 840920)
+[PASS] testAdjustTroveDoesNotChangeListPositions() (gas: 2589219)
+[PASS] testAdjustTroveInterestRateDoesNotChangeEntireTroveDebtUnlessPremature() (gas: 857825)
+[PASS] testAdjustTroveInterestRateIncreasesRecordedDebtByAccruedInterestAndUpfrontFee() (gas: 926613)
+[PASS] testAdjustTroveInterestRateInsertsToCorrectPositionInSortedList() (gas: 2570708)
+[PASS] testAdjustTroveInterestRateSetsCorrectNewRate() (gas: 1798908)
+[PASS] testAdjustTroveInterestRateSetsReducesPendingInterestTo0() (gas: 865976)
+[PASS] testAdjustTroveInterestRateSetsTroveLastDebtUpdateTimeToNow() (gas: 864362)
+[PASS] testApplyTroveInterestPermissionlessDoesntChangeEntireTroveDebt() (gas: 837312)
+[PASS] testApplyTroveInterestPermissionlessIncreasesRecordedTroveDebtByAccruedInterest() (gas: 835531)
+[PASS] testApplyTroveInterestPermissionlessReducesTroveAccruedInterestTo0() (gas: 834556)
+[PASS] testApplyTroveInterestPermissionlessRevertsIfTroveHasZeroDebt() (gas: 896693)
+[PASS] testApplyTroveInterestPermissionlessSetsTroveLastDebtUpdateTimeToNow() (gas: 832931)
+[PASS] testApplyTroveInterestPermissionlessUpdatesRedistribution() (gas: 1323912)
+[PASS] testOpenTroveInsertsToCorrectPositionInSortedList() (gas: 2311758)
+[PASS] testOpenTroveMintsUpfrontFeeToInterestReceivers() (gas: 781263)
+[PASS] testOpenTroveSetsInterestRate() (gas: 1162373)
+[PASS] testOpenTroveSetsTroveLastDebtUpdateTimeToNow() (gas: 1170331)
+[PASS] testRedemptionChangesRecordedTroveDebtByAccruedInterestMinusRedeemedAmount() (gas: 2048955)
+[PASS] testRedemptionReducesEntireTroveDebtByRedeemedAmount() (gas: 2047961)
+[PASS] testRedemptionReducesTroveAccruedInterestTo0() (gas: 2045145)
+[PASS] testRedemptionSetsTroveLastDebtUpdateTimeToNow() (gas: 2043507)
+[PASS] testRepayJpydfChangesRecordedTroveDebtByAccruedInterestMinusRepaidAmount() (gas: 841773)
+[PASS] testRepayJpydfReducesEntireTroveDebtByRepaidAmount() (gas: 840820)
+[PASS] testRepayJpydfReducesTroveAccruedInterestTo0() (gas: 839972)
+[PASS] testRepayJpydfSetsTroveLastDebtUpdateTimeToNow() (gas: 838357)
+[PASS] testRevertWhenAdjustInterestRateFromNonOwner() (gas: 790553)
+[PASS] testWithdrawBoldIncreasesEntireTroveDebtByWithdrawnAmountPlusUpfrontFee() (gas: 888531)
+[PASS] testWithdrawBoldIncreasesRecordedTroveDebtByAccruedInterestPlusWithdrawnAmountPlusUpfrontFee() (gas: 886210)
+[PASS] testWithdrawBoldReducesTroveAccruedInterestTo0() (gas: 870663)
+[PASS] testWithdrawBoldSetsTroveLastDebtUpdateTimeToNow() (gas: 868940)
+[PASS] testWithdrawCollDoesntChangeEntireTroveDebt() (gas: 856384)
+[PASS] testWithdrawCollIncreasesRecordedTroveDebtByAccruedInterest() (gas: 856558)
+[PASS] testWithdrawCollReducesTroveAccruedInterestTo0() (gas: 855605)
+[PASS] testWithdrawCollSetsTroveLastDebtUpdateTimeToNow() (gas: 853938)
+Suite result: ok. 38 passed; 0 failed; 0 skipped; finished in 24.30ms (17.55ms CPU time)
+
+Ran 3 tests for test/liquidationCosts.t.sol:LiquidationCostsTest
+[PASS] testBatchLiquidationsManyUnderwaterTrovesPartialOffsetAndRedistribution() (gas: 110239006)
+[PASS] testBatchLiquidationsOffset() (gas: 109653054)
+[PASS] testBatchLiquidationsRedistribution() (gas: 108846771)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 464.66ms (458.10ms CPU time)
+
+Ran 6 tests for test/liquidations.t.sol:LiquidationsTest
+[PASS] testCollGasCompensationStableMinDebtIsNotCapBound() (gas: 11989)
+[PASS] testCollGasCompensationStillCapsExtremeTroves() (gas: 10940)
+[PASS] testLiquidationMix() (gas: 1621253)
+[PASS] testLiquidationOffsetNoSurplus() (gas: 1387616)
+[PASS] testLiquidationOffsetWithSurplus() (gas: 1410988)
+[PASS] testLiquidationRedistributionNoSurplus() (gas: 1291773)
+Suite result: ok. 6 passed; 0 failed; 0 skipped; finished in 8.77ms (2.41ms CPU time)
+
+Ran 2 tests for test/liquidationsLST.t.sol:LiquidationsLSTTest
+[PASS] testLiquidationFuzz(uint256,uint256) (runs: 256, μ: 1712185, ~: 1713043)
+Logs:
+  Bound result 1000000000000000011763
+  Bound result 3355
+
+[PASS] testLiquidationRedistributionWithSurplus() (gas: 1341331)
+Suite result: ok. 2 passed; 0 failed; 0 skipped; finished in 230.23ms (223.53ms CPU time)
+
+Ran 1 test for test/multicollateral.t.sol:CsBold013
+[PASS] test_WontRedeemMoreThanTotalUnbacked_UnlessTotalUnbackedIsZero() (gas: 4565341)
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 20.26ms (4.36ms CPU time)
+
+Ran 7 tests for test/multicollateral.t.sol:MulticollateralTest
+[PASS] testMultiCollRedemptionIncreasesRedeemerETHBalanceByCorrespondingETHLessTheETHFee() (gas: 3906230)
+[PASS] testMultiCollateralDeployment() (gas: 53263)
+[PASS] testMultiCollateralRedemption() (gas: 3839658)
+[PASS] testMultiCollateralRedemptionFuzz(uint256,uint256,uint256,uint256,uint256) (runs: 256, μ: 3714101, ~: 3722816)
+Logs:
+  Bound result 5000000000
+  Bound result 300000000000000000000
+  Bound result 8000000
+  Bound result 750000000000000000000000
+  Bound result 1000000000000000000
+  749897325830621972660 fee1
+  7497474900436102764476 fee2
+  74989732583062446592 fee3
+  300246286636112624771 fee4
+  5249699999999994992000000 redeemAmount
+  1501438356164378561643835 testValues1.unbackedPortion
+  5255453424657529238575340 totalUnbacked
+  1499794651661243945320172 partial redeem amount 1
+
+[PASS] testMultiCollateralRedemptionMaxSPAmount() (gas: 3726779)
+Logs:
+  0 fee1
+  0 fee2
+  0 fee3
+  0 fee4
+  1 redeemAmount
+  1438356164383561643835 testValues1.unbackedPortion
+  5753424657534246575341 totalUnbacked
+  0 partial redeem amount 1
+
+[PASS] testMultiCollateralRedemptionWithZeroUnbacked() (gas: 3881319)
+[PASS] testMultiCollateralRedemptionWithZeroUnbackedLowSCRButNoShutdown() (gas: 3814547)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 469.09ms (452.34ms CPU time)
+
+Ran 3 tests for test/rebasingBatchShares.t.sol:RebasingBatchShares
+[PASS] testBatchRebaseToSystemInsolvency() (gas: 203978932)
+Logs:
+  Troves And Batch
+  Batch Debt:            0
+  Batch Shares:          0
+  debt / shares ratio:   0
+  Ratio too high?        false
+  We have more than 2X MIN_DEBT of rebase it took us blocks: 2560
+  Troves And Batch
+  Batch Debt:            0
+  Batch Shares:          0
+  debt / shares ratio:   0
+  Ratio too high?        false
+
+[PASS] testDeflateDebtLeavingSharesConstant() (gas: 12602683)
+Logs:
+  batchDebtShares: 104792110273972602739726
+  debt: 104792210061741233111278
+  allBatchDebtSharesBefore: 104792110273972602739726
+  
+   repay to force rounding
+  batchDebtShares: 104792110273972602739726
+  debt: 104792210061741233111078
+  allBatchDebtSharesAfter: 104792110273972602739726
+  
+  deltas
+  batchDebtShares: 0
+  debt: 200
+  allBatchDebtSharesBefore: 0
+
+[PASS] test_WhenBatchSharesRatioIsTooHigh_CanKickTroveFromBatch() (gas: 103496149)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 560.90ms (554.06ms CPU time)
+
+Ran 45 tests for test/redemptions.t.sol:Redemptions
+[PASS] testBaseRateDecayCannotBeSlowedDown() (gas: 5972118)
+[PASS] testCannotRedeemZero() (gas: 8877)
+[PASS] testFullRedemptionDoesntCloseTroves() (gas: 1901825)
+[PASS] testFullRedemptionLeavesTrovesWithDebtEqualToZero() (gas: 1908482)
+[PASS] testFullRedemptionSkipsTrovesAtZeroDebt() (gas: 2004986)
+[PASS] testFullyRedeemedTroveBecomesZombieTrove() (gas: 1971440)
+[PASS] testRedemption1TroveLeavesCollFeeInActivePool() (gas: 2049342)
+[PASS] testRedemption1TroveLeavesCollFeeInTrove() (gas: 2048949)
+[PASS] testRedemption3TroveLeavesCollFeesInActivePool() (gas: 1942518)
+[PASS] testRedemption3TroveLeavesCollFeesInTroves() (gas: 1964238)
+[PASS] testRedemptionAfterRedistributionInBatch() (gas: 2231558)
+[PASS] testRedemptionIncludesAccruedTroveInterest() (gas: 1980059)
+[PASS] testRedemptionIsInOrderOfInterestRate() (gas: 2059091)
+[PASS] testRedemptionZombieBoundaryIsStrictlyBelowMinDebt() (gas: 2046986)
+[PASS] testRedemptionsWithNoPartialLeaveNoPointerToZombieTroves() (gas: 1918401)
+[PASS] testTroveRedeemedToAboveMIN_DEBTDoesNotBecomesZombieTrove() (gas: 1991433)
+[PASS] testTroveRedeemedToBelowMIN_DEBTBecomesZombieTrove() (gas: 1971402)
+[PASS] testZombieBorrowerCanCloseZombieTrove() (gas: 1960430)
+[PASS] testZombieBorrowerCanDrawFreshDebtToAboveMIN_DEBT() (gas: 2343542)
+[PASS] testZombieBorrowerDrawsFreshDebtToAboveMIN_DEBTReducesPendingInterestTo0() (gas: 2359123)
+[PASS] testZombieTroveAccruedInterestCanBePermissionlesslyAppliedAndResuscitated() (gas: 2101598)
+[PASS] testZombieTroveAccruedInterestCanBePermissionlesslyAppliedButStaysZombie() (gas: 2049902)
+[PASS] testZombieTroveBorrowerCanNotAddColl() (gas: 1974923)
+[PASS] testZombieTroveBorrowerCanNotChangeInterestRate() (gas: 1983225)
+[PASS] testZombieTroveBorrowerCanNotDrawFreshDebtToBelowMIN_DEBT() (gas: 4091040)
+[PASS] testZombieTroveBorrowerCanNotRepayDebt() (gas: 2025038)
+[PASS] testZombieTroveBorrowerCanNotUseNormalAdjustTroveFunction() (gas: 2005800)
+[PASS] testZombieTroveBorrowerCanNotUseNormalWithdrawBoldFunction() (gas: 1975112)
+[PASS] testZombieTroveCanActAsLastTrove() (gas: 2210748)
+[PASS] testZombieTroveCanBeLiquidated() (gas: 2539321)
+[PASS] testZombieTroveCanStillBeRedeemedFrom() (gas: 2105228)
+[PASS] testZombieTroveDrawingFreshDebtToAboveMIN_DEBTChangesStatusToActive() (gas: 2346689)
+[PASS] testZombieTroveDrawingFreshDebtToAboveMIN_DEBTInsertsItToSortedList() (gas: 2351478)
+[PASS] testZombieTrovePointerGetsResetIfLastOneIsFullyRedemeed() (gas: 2014594)
+Logs:
+  redeem again
+  50000000000000000000000 redeemAmount
+
+[PASS] testZombieTrovePointerGetsResetIfTroveIsClosed() (gas: 2014071)
+[PASS] testZombieTrovePointerGetsResetIfTroveIsClosedFromABatch() (gas: 3213821)
+[PASS] testZombieTrovePointerGetsResetIfTroveIsLiquidated() (gas: 2109465)
+[PASS] testZombieTrovePointerGetsResetIfTroveIsResuscitatedManuallyByOwner() (gas: 2134852)
+[PASS] testZombieTrovePointerGetsResetIfTroveIsResuscitatedViaInterest() (gas: 2174037)
+[PASS] testZombieTrovePointerIsPreservedIfItIsSkippedAndNoNewZombieIsProduced() (gas: 3040105)
+[PASS] testZombieTrovesAccrueInterest() (gas: 1994907)
+[PASS] testZombieTrovesCanAccrueInterestThatBringThemAboveMIN_DEBT() (gas: 1988873)
+[PASS] testZombieTrovesCanReceiveRedistGains() (gas: 2439046)
+[PASS] testZombieTrovesCanReceiveRedistGainsThatBringThemAboveMIN_DEBT() (gas: 2447675)
+[PASS] testZombieTrovesRemovedFromSortedList() (gas: 1985125)
+Suite result: ok. 45 passed; 0 failed; 0 skipped; finished in 76.18ms (69.13ms CPU time)
+
+Ran 35 tests for test/archive/sUSDSPriceFeed.t.sol:SUSDSPriceFeedTest
+[PASS] test_afterShutdown_returnsLastGoodPrice() (gas: 1050391)
+[PASS] test_backingRatioDiscountsFetchAndRedemptionPrice() (gas: 1013728)
+[PASS] test_backingRatioFailureShutsDownAtLastGoodPrice() (gas: 1082864)
+[PASS] test_backingRatioGasGriefing_bubblesInsufficientGas() (gas: 1520921)
+[PASS] test_canonicalRateRevert_shutsDown() (gas: 1057031)
+[PASS] test_canonicalRateZero_shutsDown() (gas: 1035351)
+[PASS] test_compositeJpyConversionUsesFullPrecisionMulDiv() (gas: 1014287)
+[PASS] test_constructorReverts_ifCollateralVaultHasNoCode() (gas: 158650)
+[PASS] test_constructorReverts_ifJpyDecimalsNot8() (gas: 50086)
+[PASS] test_constructorReverts_ifSusdsAssetDecimalsNot18() (gas: 236351)
+[PASS] test_constructorReverts_ifSusdsAssetHasNoCode() (gas: 158575)
+[PASS] test_constructorReverts_ifSusdsDecimalsNot18() (gas: 157655)
+[PASS] test_constructorReverts_ifSusdsHasNoCode() (gas: 147181)
+[PASS] test_constructorReverts_ifUsdsOracleDeadAtDeploy() (gas: 240612)
+[PASS] test_jpyConversion() (gas: 995934)
+[PASS] test_jpyFreezeExpires_shutsDownAtLastGoodPrice() (gas: 1125076)
+[PASS] test_jpyFreeze_emitsFrozenAndUnfrozenEvents() (gas: 1040332)
+[PASS] test_jpyFreeze_setsAndClearsFrozenSince() (gas: 1039088)
+[PASS] test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() (gas: 1093411)
+[PASS] test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() (gas: 1052194)
+[PASS] test_jpyStaleBeforeFirstCallPastFreezeWindowShutsDownImmediately() (gas: 1093074)
+[PASS] test_jpyUsdFreeze_thenRecovers_repricesWithLiveRate() (gas: 1049789)
+[PASS] test_jpyUsdFreeze_tracksLiveUsdsLeg() (gas: 1043633)
+[PASS] test_jpyUsdStale_substitutesLastGoodRate_noShutdown() (gas: 1041125)
+[PASS] test_jpyUsdStalenessBoundary_substitutesNoShutdown() (gas: 1039496)
+[PASS] test_jpyUsdWeekendCloseWithinThreshold_keepsPrimary() (gas: 1006984)
+[PASS] test_jpyUsdZeroPrice_substitutesNoShutdown() (gas: 1036396)
+[PASS] test_jpyUsdZeroRoundId_substitutesNoShutdown() (gas: 1038856)
+[PASS] test_rateAffectsPrice() (gas: 999206)
+[PASS] test_redemptionPriceEqualsPrice() (gas: 1007720)
+[PASS] test_usdsUsdFutureTimestamp_shutsDown() (gas: 1052381)
+[PASS] test_usdsUsdStale_duringJpyStale_stillShutsDown() (gas: 1048830)
+[PASS] test_usdsUsdStale_shutsDown() (gas: 1042186)
+[PASS] test_usdsUsdZeroPrice_shutsDown() (gas: 1033748)
+[PASS] test_zeroBackingRatioReturnsNearZeroNonSentinelPrice() (gas: 996216)
+Suite result: ok. 35 passed; 0 failed; 0 skipped; finished in 4.02ms (3.67ms CPU time)
+
+Ran 10 tests for test/archive/sUSDSPriceFeedProxyIntegration.t.sol:SUSDSPriceFeedProxyIntegrationTest
+[PASS] test_direct_failure_endStateMatchesProxy() (gas: 1176864)
+[PASS] test_proxy_canonicalRateRevert_shutsDown() (gas: 139905)
+[PASS] test_proxy_canonicalRateZero_shutsDown() (gas: 114668)
+[PASS] test_proxy_healthy_appliesBackingRatio() (gas: 102469)
+[PASS] test_proxy_healthy_servesCompositeJpyPrice() (gas: 91763)
+[PASS] test_proxy_jpyFreezeExpires_proxyShutsDownAndServesLastGood() (gas: 188828)
+[PASS] test_proxy_jpyStale_substitutesNoShutdown() (gas: 136024)
+[PASS] test_proxy_jpyWeekendCloseWithinThreshold_staysHealthy() (gas: 97862)
+[PASS] test_proxy_redemption_failureDegradesToLastGood() (gas: 133641)
+[PASS] test_proxy_usdsStale_shutsDownAndServesLastGood() (gas: 116055)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 1.12ms (665.58µs CPU time)
+
+Ran 66 tests for test/shutdown.t.sol:ShutdownTest
+[PASS] testApproxAvgInterestRateIs0AfterShutdown() (gas: 1512131)
+[PASS] testCanCloseLastTroveAfterShutdown() (gas: 925581)
+[PASS] testCanCloseTroveAfterShutdown() (gas: 1231832)
+[PASS] testCanCloseTroveAfterShutdownWhenUrgentProxyPriceIsUnavailable() (gas: 2660668)
+[PASS] testCanShutdownBranchesSeparately() (gas: 3340169)
+[PASS] testCanShutdownOnlyOnce() (gas: 840186)
+[PASS] testCanUrgentRedeemFullyAboveMCR() (gas: 1539933)
+[PASS] testCanUrgentReedemFullyBelow100() (gas: 1520090)
+[PASS] testCanUrgentReedemFullyBelowMCR() (gas: 1540688)
+[PASS] testCanUrgentReedemPartiallyAboveMCR() (gas: 1555046)
+[PASS] testCanUrgentReedemPartiallyBelow100() (gas: 1554922)
+[PASS] testCanUrgentReedemPartiallyBelowMCR() (gas: 1555845)
+[PASS] testCannotAddCollAfterShutdown() (gas: 844574)
+[PASS] testCannotAdjustInterestAfterShutdown() (gas: 842761)
+[PASS] testCannotAdjustZombieTroveAfterShutdown() (gas: 1496457)
+[PASS] testCannotApplyTroveInterestPermissionlesslyAfterShutdown() (gas: 842486)
+[PASS] testCannotLiquidateLastTroveAfterShutdown() (gas: 874138)
+[PASS] testCannotLowerBatchManagementFeeAfterShutdown() (gas: 1006174)
+[PASS] testCannotMakeCombinedRiskReducingAdjustmentAfterPermanentShutdown() (gas: 844692)
+[PASS] testCannotOpenTroveAfterShutdown() (gas: 848135)
+[PASS] testCannotRegisterBatchManagerAfterShutdown() (gas: 843178)
+[PASS] testCannotRemoveFromBatchAfterShutdown() (gas: 842726)
+[PASS] testCannotRepayBoldAfterShutdown() (gas: 844595)
+[PASS] testCannotSetBatchManagerAnnualInterestRateAfterShutdown() (gas: 1006422)
+[PASS] testCannotSetIndividualDelegateAfterShutdown() (gas: 845211)
+[PASS] testCannotSetInterestBatchManagerAfterShutdown() (gas: 844858)
+[PASS] testCannotSwitchBatchManagerAfterShutdown() (gas: 1421915)
+[PASS] testCannotUrgentRedeemWithoutEnoughBalance() (gas: 888304)
+[PASS] testCannotUrgentRedeemWithoutShutdown() (gas: 1552437)
+[PASS] testCannotUrgentRedeemZero() (gas: 843192)
+[PASS] testCannotWithdrawBoldAfterShutdown() (gas: 844576)
+[PASS] testCannotWithdrawCollAfterShutdown() (gas: 844530)
+[PASS] testCloseTroveWaitsForCurrentOracleRecoveryButNotOwnerResume() (gas: 1215130)
+[PASS] testIndividualTrovesDontAcrrueInterestAfterShutdown() (gas: 1532671)
+[PASS] testInterestContinuesDuringOracleFailureShutdown() (gas: 807337)
+[PASS] testOnlyRegisteredPriceFeedCanTriggerOrResumeOracleFailureShutdown() (gas: 62713)
+[PASS] testOracleFailureShutdownBlocksLiquidationUntilSourceRecovers() (gas: 1267950)
+[PASS] testOracleFailureShutdownIsTemporaryAndResumable() (gas: 66233)
+[PASS] testOracleFailureShutdownMakesBranchNonRedeemable() (gas: 812796)
+[PASS] testPendingAggInterestRemainsZeroAfterShutdown() (gas: 1511607)
+[PASS] testPermanentShutdownSupersedesOracleFailureShutdown() (gas: 856356)
+[PASS] testRecoveredOracleAllowsAddCollBeforeResume() (gas: 837955)
+[PASS] testRecoveredOracleAllowsCombinedRiskReducingAdjustmentBeforeResume() (gas: 870725)
+[PASS] testRecoveredOracleAllowsRepayBeforeResume() (gas: 837531)
+[PASS] testRecoveredOracleAllowsRiskReducingZombieReactivationAfterDebtRecovers() (gas: 1551250)
+[PASS] testRecoveredOracleDoesNotAllowZombieDebtIncreaseBeforeResume() (gas: 1456872)
+[PASS] testRecoveredOracleRejectsEveryRiskIncreasingAdjustmentBeforeResume() (gas: 821279)
+[PASS] testRiskReducingAdjustmentDoesNotRequireLiveOracle() (gas: 872057)
+[PASS] testSetShutdownFlagOnActivePoolRevertWhenNotCalledByTM() (gas: 1492266)
+[PASS] testSetShutdownSetsShutdownFlagsAndTime() (gas: 1494954)
+[PASS] testShutdownZerosMintsPendingAggInterestToSP() (gas: 1517375)
+[PASS] testShutdownZerosPendingAggInterest() (gas: 1509648)
+[PASS] testTroveAfterUrgentRedemptionEarnsNoInterest() (gas: 1581958)
+[PASS] testTroveAfterUrgentRedemptionHas0AccruedInterest() (gas: 1580423)
+[PASS] testTroveWith0InterestAccrues0InterestShutdown() (gas: 1503985)
+[PASS] testUnavailableOracleAllowsRiskReductionInsideBatchBeforeResume() (gas: 1257545)
+[PASS] testUrgentRedeemOf0DebtTroveDoesntUpdateTrovesLastUpdateTime() (gas: 1563546)
+[PASS] testUrgentRedeemOfClosedTroveDoesntUpdateTrovesLastUpdateTime() (gas: 1434137)
+[PASS] testUrgentRedeemRevertsIfMinNotReached() (gas: 932850)
+[PASS] testUrgentRedemptionAppliesInterestEarnedUpToShutdownTimeToTrove() (gas: 1573971)
+[PASS] testUrgentRedemptionMintsNoInterestToSP() (gas: 1566929)
+[PASS] testUrgentRedemptionReducesAggRecordedDebtByRedeemedAmount() (gas: 1562921)
+[PASS] testUrgentRedemptionReducesAggWeightedDebtSumByNetWeightedAmountRemoved() (gas: 1571182)
+[PASS] testUrgentRedemptionUsesDedicatedPrice() (gas: 1244321)
+[PASS] test_GuardianI01_ManagementFeeCanBeWaivedDuringOraclePause() (gas: 1229199)
+[PASS] test_Issue_UrgentRedemptionDoesNotUpdateBatchedTroveDebt() (gas: 1375871)
+Suite result: ok. 66 passed; 0 failed; 0 skipped; finished in 45.95ms (27.96ms CPU time)
+
+Ran 99 tests for test/stabilityPool.t.sol:SPTest
+[PASS] testClaimAllCollGainsDoesNotChangeCompoundedDeposit() (gas: 2362227)
+[PASS] testClaimAllCollGainsDoesntChangeCurrentCollGain() (gas: 2395391)
+[PASS] testClaimAllCollGainsIncreasesUserBalanceByStashedCollGain() (gas: 2399014)
+[PASS] testClaimAllCollGainsRevertsWhenUserHasNoCollGains() (gas: 2381772)
+[PASS] testClaimAllCollGainsRevertsWhenUserHasNoDeposit() (gas: 2394384)
+[PASS] testClaimAllCollGainsZerosStashedCollGain() (gas: 2395394)
+[PASS] testGetDepositorJpydfGain_1SPDepositor1RewardEvent_EarnsAllSPYield() (gas: 2437336)
+[PASS] testGetDepositorJpydfGain_1SPDepositor2RewardEvent_EarnsAllSPYield() (gas: 2484278)
+[PASS] testGetDepositorJpydfGain_2SPDepositor1Liq1FreshDeposit_EarnFairShareOfSPYield() (gas: 2598088)
+[PASS] testGetDepositorJpydfGain_2SPDepositor1LiqFreshDeposit_EarnFairShareOfSPYield() (gas: 3001312)
+[PASS] testGetDepositorJpydfGain_2SPDepositor1LiqScaleChangeFreshDeposit_EarnFairShareOfSPYield() (gas: 2981083)
+[PASS] testGetDepositorJpydfGain_2SPDepositor1RewardEvent_EarnFairShareOfSPYield() (gas: 2469033)
+[PASS] testGetDepositorJpydfGain_2SPDepositor2LiqScaleChangesFreshDeposit_EarnFairShareOfSPYield() (gas: 3998553)
+[PASS] testGetDepositorJpydfGain_2SPDepositor2RewardEvent_EarnFairShareOfSPYield() (gas: 2522123)
+[PASS] testHighFractionLiqWithLowPDoesNotDecreasePBelow1e9(uint256,uint256) (runs: 256, μ: 2574382, ~: 2574986)
+Logs:
+  Bound result 99000000000000000000000011482
+  Bound result 37852397260283821924056
+
+[PASS] testHighFractionLiqWithLowPTriggersTwoScaleChanges_Cheat_Fuzz(uint256,uint256) (runs: 256, μ: 2577566, ~: 2577626)
+Logs:
+  Bound result 99000000000000000000000011482
+  99000000000000000000000011482 stabilityPool.P()
+  99000000000000000000000011482 _cheatP
+  Bound result 37852397260273972602748905638426
+
+[PASS] testJpydfRewardSumDoesntChangeWhenNoYieldMinted() (gas: 2391534)
+[PASS] testJpydfRewardSumIncreasesWhenDepositToppedUp() (gas: 2834403)
+[PASS] testJpydfRewardSumIncreasesWhenDepositWithdrawn() (gas: 2829492)
+[PASS] testJpydfRewardSumIncreasesWhenInterestAppliedPermissionlessly() (gas: 2397944)
+[PASS] testJpydfRewardSumIncreasesWhenNewDepositIsMade() (gas: 2882677)
+[PASS] testJpydfRewardSumIncreasesWhenRedemptionOccurs() (gas: 2486829)
+[PASS] testJpydfRewardSumIncreasesWhenTroveClosed() (gas: 3005835)
+[PASS] testJpydfRewardSumIncreasesWhenTroveDebtAndCollAdjusted() (gas: 2449353)
+[PASS] testJpydfRewardSumIncreasesWhenTroveInterestRateAdjusted() (gas: 2418668)
+[PASS] testJpydfRewardSumIncreasesWhenTroveLiquidated() (gas: 2303381)
+[PASS] testJpydfRewardSumIncreasesWhenTroveOpened() (gas: 2732068)
+[PASS] testJpydfRewardsOwedDoesntChangeWhenSPIsEmpty() (gas: 1164996)
+[PASS] testJpydfRewardsOwedIncreasesWhenDepositToppedUp() (gas: 2833975)
+[PASS] testJpydfRewardsOwedIncreasesWhenDepositWithdrawn() (gas: 2829087)
+[PASS] testJpydfRewardsOwedIncreasesWhenInterestAppliedPermissionlessly() (gas: 2399613)
+[PASS] testJpydfRewardsOwedIncreasesWhenNewDepositIsMade() (gas: 2884309)
+[PASS] testJpydfRewardsOwedIncreasesWhenRedemptionOccurs() (gas: 2488503)
+[PASS] testJpydfRewardsOwedIncreasesWhenTroveClosed() (gas: 3007488)
+[PASS] testJpydfRewardsOwedIncreasesWhenTroveDebtAndCollAdjusted() (gas: 2451059)
+[PASS] testJpydfRewardsOwedIncreasesWhenTroveInterestRateAdjusted() (gas: 2420300)
+[PASS] testJpydfRewardsOwedIncreasesWhenTroveLiquidated() (gas: 2305123)
+[PASS] testJpydfRewardsOwedIncreasesWhenTroveOpened() (gas: 2733710)
+[PASS] testJpydfRewardsOwedOnlyIcreasesByUpfrontFeeYieldWhenNoInterestMinted() (gas: 2735392)
+[PASS] testJpydfRewardsPendingDistributesWhenDepositReachesMinPoolSize() (gas: 1325670)
+[PASS] testJpydfRewardsSumDoesntChangeWhenSPIsEmpty() (gas: 1165398)
+[PASS] testLiqDebtGreaterThanTotalSPLeaves1JPYDFInSP_Fuzz(uint256) (runs: 256, μ: 1979071, ~: 1979386)
+Logs:
+  Bound result 50623353547970959665811
+
+[PASS] testLiqDebtGreaterThanTotalSPRedistributesTheRemainder_Fuzz(uint256) (runs: 256, μ: 1980495, ~: 1980810)
+Logs:
+  Bound result 50623353547970959665811
+
+[PASS] testLiqDebtGreaterThanTotalSSplitsCollGainsCorrectly_Fuzz(uint256) (runs: 256, μ: 2021035, ~: 2021350)
+Logs:
+  Bound result 50623353547970959665811
+
+[PASS] testLiqDebtLessThanSPMinus1JPYDFDoesNotRedistribute_Fuzz(uint256) (runs: 256, μ: 1814010, ~: 1812936)
+Logs:
+  Bound result 260494353547970931825869
+
+[PASS] testLiqDebtLessThanSPMinus1JPYDFLeavesSurplusInSP_Fuzz(uint256) (runs: 256, μ: 1813031, ~: 1811957)
+Logs:
+  Bound result 260494353547970931825869
+
+[PASS] testLiqDebtWithin1JPYDFOfTotalDepositsLeaves1JPYDFinSP_Fuzz(uint256) (runs: 256, μ: 1969340, ~: 1974185)
+Logs:
+  Bound result 353547970959665811
+  353547970959665811 _toRedist
+
+[PASS] testLiqDebtWithin1JPYDFOfTotalDepositsRedistributesRemainder_Fuzz(uint256) (runs: 256, μ: 1981938, ~: 1986784)
+Logs:
+  Bound result 353547970959665811
+  750719531630162740487167 A debt after
+  750719178082191780821917 A debt before
+  353547970959665250 A debt after - A debt before
+  353547970959665811 _toRedist
+
+[PASS] testLiqDebtWithin1JpydfOfTotalDepositsSplitsCollGainsCorrectly_Fuzz() (gas: 2005871)
+[PASS] testLiquidationWithLowPDoesNotDecreaseP_Cheat_Fuzz(uint256,uint256) (runs: 256, μ: 2415916, ~: 2409162)
+Logs:
+  Bound result 99000000000000000000000011482
+  Bound result 38999999999974000006740
+
+[PASS] testLiquidationsWithLowPAllowFurtherRewardsForAllFreshDepositors_Cheat_Fixed() (gas: 3096575)
+Logs:
+  Bound result 99000000000000000002371624268
+  Bound result 37916478429557317643628
+
+[PASS] testLiquidationsWithLowPAllowFurtherRewardsForAllFreshDepositors_Cheat_Fuzz(uint256,uint256) (runs: 256, μ: 3096822, ~: 3096577)
+Logs:
+  Bound result 99000000000000000000000011482
+  Bound result 38999999999974000006740
+
+[PASS] testLiquidationsWithLowPAllowFurtherRewardsForExistingDepositors(uint256,uint256) (runs: 256, μ: 2609055, ~: 2601631)
+Logs:
+  Bound result 99000000000000000000000011482
+  Bound result 38999974000000000006740
+
+[PASS] testOffsetRevertsWhenCallerIsNotTroveManager() (gas: 8706)
+[PASS] testProvideToSPNoClaimAddsJPYDFGainsToDeposit() (gas: 2497316)
+[PASS] testProvideToSPNoClaimAddsJpydfGainsToTotalJpydfDeposits() (gas: 2494574)
+[PASS] testProvideToSPNoClaimReducesDepositorJpydfBalanceByOnlyTheTopUp() (gas: 2495037)
+[PASS] testProvideToSPNoClaimZerosCurrentJpydfGains() (gas: 2496716)
+[PASS] testProvideToSPNoClaim_WithCurrentAndStashedCollGainsDoesntChangeDepositorCollBalance() (gas: 2422846)
+[PASS] testProvideToSPNoClaim_WithCurrentAndStashedCollGainsIncreasedStashedCollGainByCurrentGain() (gas: 2425549)
+[PASS] testProvideToSPNoClaim_WithOnlyCurrentCollGainsDoesntChangeDepositorCollBalance() (gas: 2453224)
+[PASS] testProvideToSPNoClaim_WithOnlyCurrentCollGainsStashesCollGains() (gas: 2451104)
+[PASS] testProvideToSPNoClaim_WithOnlyStashedCollGainDoesntChangeDepositorCollBalance() (gas: 2483016)
+[PASS] testProvideToSPNoClaim_WithOnlyStashedCollGainDoesntChangeStashedCollGain() (gas: 2479262)
+[PASS] testProvideToSPWithClaim_AllowsSameBlockTopUpWithoutCollGain() (gas: 365968)
+[PASS] testProvideToSPWithClaim_FirstDepositSucceeds() (gas: 337462)
+[PASS] testProvideToSPWithClaim_RevertsForSameBlockStashedCollGain() (gas: 2454791)
+[PASS] testProvideToSPWithClaim_RevertsInDepositBlockThenSucceedsNextBlock() (gas: 2452652)
+[PASS] testProvideToSPWithClaim_WithCurrentAndStashedCollGainsSendsTotalCollGainToDepositor() (gas: 2417158)
+[PASS] testProvideToSPWithClaim_WithCurrentAndStashedCollGainsZerosStashedCollBalance() (gas: 2408142)
+[PASS] testProvideToSPWithClaim_WithCurrentJPYDFGainsZerosCurrentJPYDFGains() (gas: 2488339)
+[PASS] testProvideToSPWithClaim_WithOnlyCurrentCollGainsDoesntChangeStashedCollGain() (gas: 2442640)
+[PASS] testProvideToSPWithClaim_WithOnlyCurrentCollGainsSendsTotalCollGainToDepositor() (gas: 2446409)
+[PASS] testProvideToSPWithClaim_WithOnlyCurrentJPYDFGainsSendsTotalJPYDFGainToDepositor() (gas: 2486607)
+[PASS] testProvideToSPWithClaim_WithOnlyStashedCollGainsSendsStashedCollGainToDepositor() (gas: 2471079)
+[PASS] testProvideToSPWithClaim_WithOnlyStashedCollGainsZerosStashedCollBalance() (gas: 2467352)
+[PASS] testSingleDepositorCanWithdrawWhenLeavingAtLeast1JpydfInPool_Fuzz(uint256) (runs: 256, μ: 1006790, ~: 1007006)
+Logs:
+  Bound result 353539619004645259
+
+[PASS] testSingleDepositorCantWithdrawWhenLeavingLessThan1JpydfInPool_Fuzz(uint256) (runs: 256, μ: 989439, ~: 989460)
+Logs:
+  Bound result 299353556322914686064
+
+[PASS] testTriggerJpydfRewardsRevertsWhenCallerIsNotActivePool() (gas: 10777)
+[PASS] testWithdrawFromSPNoClaimAddsJPYDFGainsToDeposit() (gas: 2497950)
+[PASS] testWithdrawFromSPNoClaimAddsJpydfGainsToTotalJpydfDeposits() (gas: 2494763)
+[PASS] testWithdrawFromSPNoClaimReducesDepositorJpydfBalanceByOnlyTheTopUp() (gas: 2495672)
+[PASS] testWithdrawFromSPNoClaimZerosCurrentJpydfGains() (gas: 2497326)
+[PASS] testWithdrawFromSPNoClaim_WithCurrentAndStashedCollGainsDoesntChangeDepositorCollBalance() (gas: 2428929)
+[PASS] testWithdrawFromSPNoClaim_WithCurrentAndStashedCollGainsIncreasedStashedGainByCurrentCollGain() (gas: 2425432)
+[PASS] testWithdrawFromSPNoClaim_WithOnlyCurrentCollGainsDoesntChangeDepositorCollBalance() (gas: 2453814)
+[PASS] testWithdrawFromSPNoClaim_WithOnlyCurrentCollGainsStashesCollGains() (gas: 2451737)
+[PASS] testWithdrawFromSPNoClaim_WithOnlyStashedCollGainDoesntChangeStashedCollGain() (gas: 2479907)
+[PASS] testWithdrawFromSPNoClaim_WithOnlyStashedGainDoesntChangeDepositorCollBalance() (gas: 2483573)
+[PASS] testWithdrawFromSPPWithClaim_WithOnlyStashedCollGainsSendsStashedCollGainToDepositor() (gas: 2469757)
+[PASS] testWithdrawFromSPWithClaim_WithCurrentAndStashedCollGainsSendsTotalCollGainToDepositor() (gas: 2415119)
+[PASS] testWithdrawFromSPWithClaim_WithCurrentAndStashedCollGainsZerosStashedCollBalance() (gas: 2411324)
+[PASS] testWithdrawFromSPWithClaim_WithCurrentJPYDFGainsSendsJPYDFGainToDepositor() (gas: 2481740)
+[PASS] testWithdrawFromSPWithClaim_WithCurrentJPYDFGainsZerosCurrentJpydfGains() (gas: 2483429)
+[PASS] testWithdrawFromSPWithClaim_WithOnlyCurrentCollGainsDoesntChangeStashedCollGain() (gas: 2437739)
+[PASS] testWithdrawFromSPWithClaim_WithOnlyCurrentCollGainsSendsTotalCollGainToDepositor() (gas: 2441535)
+[PASS] testWithdrawFromSPWithClaim_WithOnlyStashedCollGainsZerosStashedCollBalance() (gas: 2465990)
+[PASS] testWithdrawFromSP_RevertsWhenCalledInSameBlockAsDeposit() (gas: 2349736)
+[PASS] test_Issue_ShareOfCollMismatch() (gas: 3096149)
+Logs:
+  Bound result 1000000000000000000000000000
+  Bound result 39242351683521589370180
+
+Suite result: ok. 99 passed; 0 failed; 0 skipped; finished in 5.48s (5.47s CPU time)
+
+Ran 20 tests for test/troveManager.t.sol:TroveManagerTest
+[PASS] testInitialRedemptionBaseRate() (gas: 10534)
+[PASS] testLiquidateLastTroveReverts() (gas: 806162)
+[PASS] testLiquidationSucceedsEvenWhenEncounteringInactiveTroves() (gas: 1951419)
+[PASS] testOnlyBorrowerOperationsCanCallOnAdjustTrove() (gas: 14979)
+[PASS] testOnlyBorrowerOperationsCanCallOnAdjustTroveInsideBatch() (gas: 17710)
+[PASS] testOnlyBorrowerOperationsCanCallOnAdjustTroveInterestRate() (gas: 14988)
+[PASS] testOnlyBorrowerOperationsCanCallOnApplyTroveInterest() (gas: 17200)
+[PASS] testOnlyBorrowerOperationsCanCallOnCloseTrove() (gas: 17598)
+[PASS] testOnlyBorrowerOperationsCanCallOnLowerBatchManagerAnnualFee() (gas: 13917)
+[PASS] testOnlyBorrowerOperationsCanCallOnOpenTrove() (gas: 15448)
+[PASS] testOnlyBorrowerOperationsCanCallOnOpenTroveAndJoinBatch() (gas: 17773)
+[PASS] testOnlyBorrowerOperationsCanCallOnRegisterBatchManager() (gas: 13951)
+[PASS] testOnlyBorrowerOperationsCanCallOnRemoveFromBatch() (gas: 17776)
+[PASS] testOnlyBorrowerOperationsCanCallOnSetBatchManagerAnnualInterestRate() (gas: 13878)
+[PASS] testOnlyBorrowerOperationsCanCallOnSetInterestBatchManager() (gas: 14686)
+[PASS] testOnlyBorrowerOperationsCanCallSetTroveStatusToActive() (gas: 14093)
+[PASS] testOnlyBorrowerOperationsCanCallShutdown() (gas: 13608)
+[PASS] testOnlyCollateralRegistryCanCallRedeem() (gas: 14775)
+[PASS] testRedeemSkipTrovesUnder100pct() (gas: 1703815)
+[PASS] testRedemptionBaseRateAfter2Weeks() (gas: 895764)
+Suite result: ok. 20 passed; 0 failed; 0 skipped; finished in 9.40ms (2.54ms CPU time)
+
+Ran 5 tests for test/troveNFT.t.sol:troveNFTTest
+[PASS] testTroveNFTMetadata() (gas: 50304)
+[PASS] testTroveURI() (gas: 59830160)
+[PASS] testTroveURIAttributes() (gas: 21598544)
+[PASS] test_toLocale() (gas: 10153)
+[PASS] test_toLocaleString() (gas: 449192)
+Suite result: ok. 5 passed; 0 failed; 0 skipped; finished in 146.15ms (130.32ms CPU time)
+
+Ran 102 test suites in 32.53s (32.51s CPU time): 1824 tests passed, 0 failed, 1 skipped (1825 total tests)

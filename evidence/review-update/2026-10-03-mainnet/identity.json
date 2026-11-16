@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "classification": "REVIEW_UPDATE_REQUEST_NOT_AUDIT_ACCEPTANCE",
+  "publicLaunchTarget": "2026-10-15",
+  "implementationRepository": "deltaforesight/jpydf-v2",
+  "deploymentSourceCommit": "e26b2088546c68a84ff84375aa5fd8d638f47eb7",
+  "deploymentContractsSrcTree": "e44ff296fa1fa4a6929e047b548a6d17b490bd47",
+  "guardianBaselineCommit": "6add59dfe50dbfe871802a29c8653e0b09fa9ca2",
+  "guardianBaselineContractsSrcTree": "4d461638a27fccd2f749f7086ec955985d04c2a0",
+  "guardianHistoricalAuditPackageCommit": "5723a6d76279ec13c7cd57e081faf8493db34f15",
+  "releaseObservedAtHandoff": "539332e0c3e88986d6901a153c554bb99f549b73",
+  "releaseHasIdenticalContractsSrc": true,
+  "tokenAndBodyUseSameDeploymentSource": true,
+  "bodyDeploymentReleaseAtExecution": "ac30daea40070ef0f7e0fcb77a17b7c777c074d7",
+  "mainnet": {
+    "chainId": 1,
+    "token": "0xb122f4a154f84708407213d6a715181180012f45",
+    "timelock": "0xf27de84f11e089b838769edfcff9872bc45c84fe",
+    "tokenDeploymentTx": "0x8577410f6f7a6308ee1334de3cd6fcd5c9813ab0f5cf5a0020d60a040a9822ed",
+    "tokenDeploymentBlock": 26081524,
+    "bodyReceiptsVerified": 215,
+    "bodyFirstBlock": 26088848,
+    "bodyLastBlock": 26089085,
+    "bodyAllReceiptsFinalizedAtVerification": true
+  },
+  "delta": {
+    "files": 9,
+    "insertions": 169,
+    "deletions": 23
+  },
+  "evidenceLimits": [
+    "Source equality is not on-chain runtime/creation-bytecode verification.",
+    "Deployment manifest captures deployment-time wiring; later owner/cap changes require separate live readback.",
+    "This package does not assert Guardian approval, formal governance approval, contest start or completion."
+  ]
+}

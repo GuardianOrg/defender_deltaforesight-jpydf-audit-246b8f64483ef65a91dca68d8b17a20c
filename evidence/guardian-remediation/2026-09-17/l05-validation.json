@@ -1,0 +1,35 @@
+{
+  "finding": "L-05",
+  "pr": 126,
+  "reviewedSourceHead": "0ab1f329298e0e1f44d3bb6bc028eda61f31eb88",
+  "finalHead": "34cf7b784efd5bd5a6a8bac6b97721785d3961a2",
+  "mergeCommit": "51b452c45d3c5137f895e205a4d60036832c6943",
+  "sourceSnapshotTree": "8064e2910e0c2ff74bac3a8e6d4b771839326ae1",
+  "reviewer": "Claude Fable (claude-fable-5-1), read-only; approved, no blockers",
+  "checks": {
+    "fastGate": {
+      "passed": 1815,
+      "failed": 0,
+      "skipped": 1
+    },
+    "focusedAfterVaultReentryAssertion": {
+      "passed": 169,
+      "failed": 0,
+      "fuzzRuns": 256
+    },
+    "productionSizeGate": "passed",
+    "runtimeBytes": {
+      "CollateralVault": 23624,
+      "MorphoV2Strategy": 18074,
+      "TroveManager": 24568,
+      "BorrowerOperations": 24559
+    },
+    "solc": "0.8.24",
+    "evm": "cancun",
+    "optimizerRuns": 200,
+    "viaIR": false,
+    "storage": "No production storage declarations changed",
+    "slither": "Both direct solc scans completed. Balance-delta warnings reviewed against Vault/Strategy reentrancy guards and regression tests; permissioned loops, mapping-generated getters, intentional actual-delta accounting and existing ownership-cancellation findings retained."
+  },
+  "followups": "Docs-only 34cf7b7 synchronizes flow/helper/test references and mandates paired Vault+Strategy upgrades in one shared-Timelock batch for existing deployments. No production upgrade executed. ABIs/calldata must be regenerated. Not Guardian-verified."
+}

@@ -1,0 +1,32 @@
+Compiling 1 files with Solc 0.8.24
+Solc 0.8.24 finished in 1.41s
+Compiler run successful!
+
+Ran 3 tests for test/guardian/PrestoRoundingMainnet.t.sol:PrestoRoundingMainnetTest
+[PASS] testFuzz_PrestoPartialRounding(uint96) (runs: 64, μ: 280834, ~: 317670)
+Logs:
+  Bound result 7681
+  withdraw_assets: 7681
+  withdraw_burned_share_units: 7641760534384567
+  withdraw_valuation_loss_base_units: 0
+
+[PASS] test_PrestoHarvestAfterAccrual() (gas: 353196)
+Logs:
+  harvest_assets: 14444787
+  harvest_remaining_value: 100000000000
+  harvest_principal: 100000000000
+
+[PASS] test_PrestoPartialFullAndEmergencyDust() (gas: 503805)
+Logs:
+  withdraw_assets: 12345000001
+  withdraw_burned_share_units: 12281933837341392434786
+  withdraw_valuation_loss_base_units: 0
+  withdraw_assets: 87654999998
+  withdraw_burned_share_units: 87207202138549103609391
+  withdraw_valuation_loss_base_units: 0
+  full_withdraw_residual_principal_base_units: 1
+  emergency_cleanup_share_units: 994891359767
+
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 206.84ms (45.86ms CPU time)
+
+Ran 1 test suite in 220.01ms (206.84ms CPU time): 3 tests passed, 0 failed, 0 skipped (3 total tests)

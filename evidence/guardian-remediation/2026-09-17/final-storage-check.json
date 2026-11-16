@@ -1,0 +1,12 @@
+{
+  "DToken": {
+    "oldFieldsPreserved": true,
+    "matchesReviewedL01Layout": true,
+    "registrySlot": 362
+  },
+  "TroveManager": {
+    "oldFieldsPreserved": true,
+    "matchesReviewedL03Layout": true,
+    "capSlot": 30
+  }
+}

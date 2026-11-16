@@ -1,0 +1,134 @@
+diff --git a/contracts/test/Invariants.t.sol b/contracts/test/Invariants.t.sol
+index 8a05f9678..38aaf8231 100644
+--- a/contracts/test/Invariants.t.sol
++++ b/contracts/test/Invariants.t.sol
+@@ -10,6 +10,7 @@ import {LatestTroveData} from "src/Types/LatestTroveData.sol";
+ import {ISortedTroves} from "src/Interfaces/ISortedTroves.sol";
+ import {IStabilityPool} from "src/Interfaces/IStabilityPool.sol";
+ import {ITroveManager} from "src/Interfaces/ITroveManager.sol";
++import {BorrowerOperations} from "src/BorrowerOperations.sol";
+ import {BatchIdSet} from "./Utils/BatchIdSet.sol";
+ import {Logging} from "./Utils/Logging.sol";
+ import {StringFormatting} from "./Utils/StringFormatting.sol";
+@@ -18,7 +19,7 @@ import {Assertions} from "./TestContracts/Assertions.sol";
+ import {BaseInvariantTest} from "./TestContracts/BaseInvariantTest.sol";
+ import {BaseMultiCollateralTest} from "./TestContracts/BaseMultiCollateralTest.sol";
+ import {TestDeployer} from "./TestContracts/Deployment.t.sol";
+-import {InvariantsTestHandler} from "./TestContracts/InvariantsTestHandler.t.sol";
++import {AdjustedTroveProperties, InvariantsTestHandler} from "./TestContracts/InvariantsTestHandler.t.sol";
+ 
+ library SortedTrovesHelpers {
+     function getBatchOf(ISortedTroves sortedTroves, uint256 troveId) internal view returns (BatchId batchId) {
+@@ -101,6 +102,59 @@ contract InvariantsTest is Assertions, Logging, BaseInvariantTest, BaseMultiColl
+         targetContract(address(handler));
+     }
+ 
++    function testFuzz_RiskReducingAdjustmentBelowMCR(bool batched, uint8 prop) external {
++        prop = uint8(bound(prop, 0, uint8(AdjustedTroveProperties.both)));
++        if (batched) {
++            vm.prank(barb);
++            handler.registerBatchManager(0, 0.01 ether, 0.1 ether, 0.05 ether, 0.01 ether, 1 days);
++            vm.prank(adam);
++            handler.openTroveAndJoinInterestBatchManager(0, 1_000_000 ether, 2 ether, 0, 0, 0);
++        } else {
++            vm.prank(adam);
++            handler.openTrove(0, 1_000_000 ether, 2 ether, 0.05 ether, 0, 0);
++        }
++        handler.setPrice(0, 0.9 ether);
++
++        uint256 troveId = handler.troveIdOf(0, adam);
++        LatestTroveData memory before_ = branches[0].troveManager.getLatestTroveData(troveId);
++        bool addColl = prop != uint8(AdjustedTroveProperties.onlyDebt);
++        bool repay = prop != uint8(AdjustedTroveProperties.onlyColl);
++        // Unused direction flags deliberately point toward risk increase; only actual amounts count.
++        vm.prank(adam);
++        handler.adjustTrove(0, prop, 1 ether, addColl, 1_000 ether, !repay, 1, 0, 0);
++
++        LatestTroveData memory after_ = branches[0].troveManager.getLatestTroveData(troveId);
++        assertEq(after_.entireColl, before_.entireColl + (addColl ? 1 ether : 0));
++        assertApproxEqAbs(after_.entireDebt, before_.entireDebt - (repay ? 1_000 ether : 0), 10);
++        assertLt(
++            branches[0].troveManager.getCurrentICR(troveId, branches[0].priceFeed.getPrice()),
++            branches[0].troveManager.get_MCR()
++        );
++        this.invariant_SystemStateMatchesGhostState();
++        this.invariant_AllBoldBackedByTroveDebt();
++        this.invariant_FundsAreSwept();
++    }
++
++    function testFuzz_RiskReducingAdjustmentRejectsRatioRevert(uint8 errorIndex) external {
++        bytes4[4] memory errors = [
++            BorrowerOperations.ICRBelowMCR.selector,
++            BorrowerOperations.ICRBelowMCRPlusBCR.selector,
++            BorrowerOperations.TCRBelowCCR.selector,
++            BorrowerOperations.RepaymentNotMatchingCollWithdrawal.selector
++        ];
++        vm.prank(adam);
++        handler.openTrove(0, 1_000_000 ether, 2 ether, 0.05 ether, 0, 0);
++        handler.setPrice(0, 0.9 ether);
++        vm.mockCallRevert(
++            address(branches[0].borrowerOperations),
++            abi.encodeWithSelector(BorrowerOperations.addColl.selector),
++            abi.encodeWithSelector(errors[errorIndex % errors.length])
++        );
++        vm.prank(adam);
++        vm.expectRevert("Pure risk reduction must not fail a collateral ratio check");
++        handler.adjustTrove(0, uint8(AdjustedTroveProperties.onlyColl), 1 ether, true, 0, false, 1, 0, 0);
++    }
++
+     // Not a real invariant, but we want to make sure our actors always have empty wallets before a handler call
+     function invariant_FundsAreSwept() external view {
+         for (uint256 i = 0; i < actors.length; ++i) {
+diff --git a/contracts/test/TestContracts/InvariantsTestHandler.t.sol b/contracts/test/TestContracts/InvariantsTestHandler.t.sol
+index 1e21c8427..0413911e5 100644
+--- a/contracts/test/TestContracts/InvariantsTestHandler.t.sol
++++ b/contracts/test/TestContracts/InvariantsTestHandler.t.sol
+@@ -152,6 +152,7 @@ contract InvariantsTestHandler is Assertions, BaseHandler, BaseMultiCollateralTe
+         uint256 maxDebtDec;
+         int256 collDelta;
+         int256 debtDelta;
++        bool riskIncreasing;
+         int256 $collDelta36;
+         uint256 upfrontFee;
+         string functionName;
+@@ -778,6 +779,7 @@ contract InvariantsTestHandler is Assertions, BaseHandler, BaseMultiCollateralTe
+         v.maxDebtDec = v.t.entireDebt > MIN_DEBT ? v.t.entireDebt - MIN_DEBT : 0;
+         v.collDelta = isCollInc ? int256(collChange) : -int256(collChange);
+         v.debtDelta = isDebtInc ? int256(debtChange) : -int256(Math.min(debtChange, v.maxDebtDec));
++        v.riskIncreasing = v.collDelta < 0 || v.debtDelta > 0;
+         v.$collDelta36 = v.collDelta * int256(_price[i]);
+         v.upfrontFee = hintHelpers.predictAdjustTroveUpfrontFee(i, v.troveId, isDebtInc ? debtChange : 0);
+         if (v.upfrontFee > 0) assertGtDecimal(v.debtDelta, 0, 18, "Only debt increase should incur upfront fee");
+@@ -829,10 +831,13 @@ contract InvariantsTestHandler is Assertions, BaseHandler, BaseMultiCollateralTe
+             v.newDebt = v.t.entireDebt.add(v.debtDelta) + v.upfrontFee;
+             assertGeDecimal(v.newDebt, MIN_DEBT, 18, "Should have failed as new debt < MIN_DEBT");
+ 
+-            if (v.batchManager == address(0)) {
+-                assertGeDecimal(v.newICR, MCR[i], 18, "Should have failed as new ICR < MCR");
+-            } else {
+-                assertGeDecimal(v.newICR, MCR[i] + BCR[i], 18, "Should have failed as new ICR < MCR + BCR");
++            // CORE-MOD-014: pure additions/repayments are allowed below MCR, including batched Troves.
++            if (v.riskIncreasing) {
++                if (v.batchManager == address(0)) {
++                    assertGeDecimal(v.newICR, MCR[i], 18, "Should have failed as new ICR < MCR");
++                } else {
++                    assertGeDecimal(v.newICR, MCR[i] + BCR[i], 18, "Should have failed as new ICR < MCR + BCR");
++                }
+             }
+ 
+             if (v.oldTCR >= CCR[i]) {
+@@ -862,6 +867,14 @@ contract InvariantsTestHandler is Assertions, BaseHandler, BaseMultiCollateralTe
+             (selector, v.errorString) = _decodeCustomError(revertData);
+ 
+             // Justify failures
++            if (
++                selector == BorrowerOperations.ICRBelowMCR.selector
++                    || selector == BorrowerOperations.ICRBelowMCRPlusBCR.selector
++                    || selector == BorrowerOperations.TCRBelowCCR.selector
++                    || selector == BorrowerOperations.RepaymentNotMatchingCollWithdrawal.selector
++            ) {
++                assertTrue(v.riskIncreasing, "Pure risk reduction must not fail a collateral ratio check");
++            }
+             if (selector == BorrowerOperations.IsShutDown.selector) {
+                 assertTrue(isShutdown[i], "Shouldn't have failed as branch hadn't been shut down");
+             } else if (selector == BorrowerOperations.ZeroAdjustment.selector) {

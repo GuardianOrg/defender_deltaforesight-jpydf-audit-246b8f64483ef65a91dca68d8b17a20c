@@ -1,0 +1,869 @@
+diff --git a/contracts/src/PriceFeeds/DFPriceFeedBase.sol b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+index 548a16ff..8a0a46d4 100644
+--- a/contracts/src/PriceFeeds/DFPriceFeedBase.sol
++++ b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+@@ -59,12 +59,15 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+     uint256 public lastGoodJpyRate;
+ 
+     // Timestamp the current JPY soft-freeze began, or 0 when the live JPY/USD rate is in
+-    // use. Observability surface for monitoring and the governance recovery path: a
+-    // non-zero value means the branch is operating on a frozen FX rate. Once the freeze
+-    // exceeds MAX_JPY_FREEZE_DURATION, the branch shuts down like any other prolonged
+-    // oracle failure instead of serving an arbitrarily stale FX rate (ORCL-SEC-005).
++    // use. It is bounded by the cached rate's staleness boundary even if no one called the
++    // branch at that time. Once the freeze exceeds MAX_JPY_FREEZE_DURATION, the branch
++    // shuts down instead of serving an arbitrarily stale FX rate (ORCL-SEC-005).
+     uint256 public jpyFrozenSince;
+ 
++    // Chainlink updatedAt paired with lastGoodJpyRate. This provenance makes the freeze
++    // window depend on the cached rate's actual age rather than the first failing call.
++    uint256 public lastGoodJpyUpdatedAt;
++
+     // Emitted when the JPY/USD leg first fails and the feed starts reusing lastGoodJpyRate.
+     event JpyRateFrozen(uint256 timestamp, uint256 frozenRate);
+     // Emitted when JPY/USD recovers and the feed resumes the live rate.
+@@ -169,32 +172,39 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+      *      Example: ETH=$3,000, JPY/USD=0.006667 →
+      *          3000e18 * 1e18 / 6.667e15 ≈ 450,000e18 (= ¥450,000).
+      *
+-     *      Healthy JPY/USD: refresh `lastGoodJpyRate` and convert at the live rate.
+-     *      Failed JPY/USD (stale, reverting, or answer <= 0): reuse `lastGoodJpyRate`
+-     *      while the freeze is younger than MAX_JPY_FREEZE_DURATION. After that, return
+-     *      `jpyFreezeExpired == true` so the caller can use the normal branch shutdown
+-     *      path. `lastGoodJpyRate` is always > 0 at runtime — it is seeded by the healthy
+-     *      deploy-time fetch (a dead JPY oracle at deploy makes this divide by zero and
+-     *      reverts construction) and only ever updated to strictly-positive values — so
+-     *      the division cannot divide by zero.
++     *      Healthy JPY/USD: refresh `lastGoodJpyRate` and its matching Chainlink `updatedAt`.
++     *      On failure, start the freeze at the earlier of first observation and the cached
++     *      rate's staleness boundary. A dormant branch therefore receives no fresh 24h
++     *      window for an already-stale cached rate, while an invalid/reverting read before
++     *      that boundary starts at first observation. Reuse `lastGoodJpyRate` while the
++     *      resulting freeze is younger than MAX_JPY_FREEZE_DURATION; after that, return
++     *      `jpyFreezeExpired == true` so the caller can use the normal branch shutdown path.
++     *      `lastGoodJpyRate` is always > 0 at runtime — it is seeded by the healthy deploy-time
++     *      fetch and only ever updated to strictly-positive values — so the division cannot
++     *      divide by zero.
+      *
+      *      Note: the gas-griefing guard is preserved. An out-of-gas JPY read reverts with
+      *      `InsufficientGasForExternalCall` from inside `_getOracleAnswer` rather than
+      *      returning `down == true`, so it is never silently treated as a freeze.
+      */
+     function _convertUsdPriceToJpyWithFreeze(uint256 _usdPrice) internal returns (uint256, bool) {
+-        (uint256 jpyUsdRate, bool jpyUsdOracleDown) = _getOracleAnswer(jpyUsdOracle);
++        (uint256 jpyUsdRate, bool jpyUsdOracleDown, uint256 updatedAt) = _getOracleAnswerWithTimestamp(jpyUsdOracle);
+ 
+         if (jpyUsdOracleDown) {
+             jpyUsdRate = lastGoodJpyRate;
+             if (jpyFrozenSince == 0) {
+                 jpyFrozenSince = block.timestamp;
+-                emit JpyRateFrozen(block.timestamp, jpyUsdRate);
+-            } else if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
++                if (block.timestamp - lastGoodJpyUpdatedAt >= jpyUsdOracle.stalenessThreshold) {
++                    jpyFrozenSince = lastGoodJpyUpdatedAt + jpyUsdOracle.stalenessThreshold;
++                }
++                emit JpyRateFrozen(jpyFrozenSince, jpyUsdRate);
++            }
++            if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
+                 return (0, true);
+             }
+         } else {
+             lastGoodJpyRate = jpyUsdRate;
++            lastGoodJpyUpdatedAt = updatedAt;
+             if (jpyFrozenSince != 0) {
+                 jpyFrozenSince = 0;
+                 emit JpyRateUnfrozen(block.timestamp, jpyUsdRate);
+diff --git a/contracts/src/PriceFeeds/MainnetPriceFeedBase.sol b/contracts/src/PriceFeeds/MainnetPriceFeedBase.sol
+index 7e0c2e84..4c02d7e1 100644
+--- a/contracts/src/PriceFeeds/MainnetPriceFeedBase.sol
++++ b/contracts/src/PriceFeeds/MainnetPriceFeedBase.sol
+@@ -50,10 +50,20 @@ abstract contract MainnetPriceFeedBase is IMainnetPriceFeed {
+     }
+ 
+     function _getOracleAnswer(Oracle memory _oracle) internal view returns (uint256, bool) {
++        (uint256 scaledPrice, bool oracleIsDown,) = _getOracleAnswerWithTimestamp(_oracle);
++        return (scaledPrice, oracleIsDown);
++    }
++
++    /// @dev Returns the response timestamp alongside the normal oracle result. Callers that
++    ///      cache a healthy answer can retain the matching timestamp as its provenance.
++    function _getOracleAnswerWithTimestamp(Oracle memory _oracle)
++        internal
++        view
++        returns (uint256 scaledPrice, bool oracleIsDown, uint256 updatedAt)
++    {
+         ChainlinkResponse memory chainlinkResponse = _getCurrentChainlinkResponse(_oracle.aggregator);
++        updatedAt = chainlinkResponse.timestamp;
+ 
+-        uint256 scaledPrice;
+-        bool oracleIsDown;
+         // Check oracle is serving an up-to-date and sensible price. If not, shut down this collateral branch.
+         if (!_isValidChainlinkPrice(chainlinkResponse, _oracle.stalenessThreshold)) {
+             oracleIsDown = true;
+@@ -61,7 +71,7 @@ abstract contract MainnetPriceFeedBase is IMainnetPriceFeed {
+             scaledPrice = _scaleChainlinkPriceTo18decimals(chainlinkResponse.answer, _oracle.decimals);
+         }
+ 
+-        return (scaledPrice, oracleIsDown);
++        return (scaledPrice, oracleIsDown, updatedAt);
+     }
+ 
+     function _shutDownAndSwitchToLastGoodPrice(address _failedOracleAddr) internal returns (uint256) {
+diff --git a/contracts/src/PriceFeeds/sUSDSPriceFeed.sol b/contracts/src/PriceFeeds/sUSDSPriceFeed.sol
+index f3ab9874..7367b374 100644
+--- a/contracts/src/PriceFeeds/sUSDSPriceFeed.sol
++++ b/contracts/src/PriceFeeds/sUSDSPriceFeed.sol
+@@ -74,10 +74,12 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+     // here because this feed must inherit CompositePriceFeed; see contract NatSpec).
+     // lastGoodJpyRate: last valid JPY/USD rate (USD per JPY, 18-dec, > 0), reused on
+     // JPY-leg failure instead of shutting the branch down. jpyFrozenSince: onset of the
+-    // current freeze (0 when live). A freeze older than MAX_JPY_FREEZE_DURATION
+-    // is escalated to branch shutdown. See ORCL-SEC-005.
++    // current freeze (0 when live), bounded by the cached rate's staleness boundary. A
++    // freeze older than MAX_JPY_FREEZE_DURATION is escalated to branch shutdown.
+     uint256 public lastGoodJpyRate;
+     uint256 public jpyFrozenSince;
++    // Chainlink updatedAt paired with lastGoodJpyRate; see DFPriceFeedBase.
++    uint256 public lastGoodJpyUpdatedAt;
+ 
+     event JpyRateFrozen(uint256 timestamp, uint256 frozenRate);
+     event JpyRateUnfrozen(uint256 timestamp, uint256 liveRate);
+@@ -90,9 +92,7 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+         uint256 _jpyUsdStalenessThreshold,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+-    )
+-        CompositePriceFeed(_usdsUsdOracleAddress, _susdsAddress, _usdsUsdStalenessThreshold, _borrowerOperationsAddress)
+-    {
++    ) CompositePriceFeed(_usdsUsdOracleAddress, _susdsAddress, _usdsUsdStalenessThreshold, _borrowerOperationsAddress) {
+         _validateRateProvider(_susdsAddress);
+ 
+         if (_collateralVaultAddress.code.length == 0) revert InvalidCollateralVault();
+@@ -188,27 +188,34 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+ 
+     /// @dev Same JPY conversion + soft-freeze as DFPriceFeedBase (see contract NatSpec for
+     ///      why it is duplicated rather than shared). collJpy =
+-    ///      mulDiv(collUsd, 1e18, jpyUsdRate), all 18-dec. Healthy JPY/USD refreshes lastGoodJpyRate; a failed JPY read
+-    ///      (stale, reverting, or answer <= 0) reuses lastGoodJpyRate while the freeze is
+-    ///      younger than MAX_JPY_FREEZE_DURATION. After that, return jpyFreezeExpired == true
+-    ///      so the caller can use the normal branch shutdown path. lastGoodJpyRate is > 0 at
+-    ///      runtime (seeded by the healthy deploy-time fetch, only updated to positive values),
+-    ///      so the division cannot divide by zero.
++    ///      mulDiv(collUsd, 1e18, jpyUsdRate), all 18-dec. Healthy JPY/USD refreshes
++    ///      lastGoodJpyRate and its matching updatedAt. On failure, the freeze starts at the
++    ///      earlier of first observation and the cached rate's staleness boundary. The feed
++    ///      reuses lastGoodJpyRate while the resulting freeze is younger than
++    ///      MAX_JPY_FREEZE_DURATION. After that, return jpyFreezeExpired == true so the caller
++    ///      can use the normal branch shutdown path. lastGoodJpyRate is > 0 at runtime (seeded
++    ///      by the healthy deploy-time fetch, only updated to positive values), so the division
++    ///      cannot divide by zero.
+     ///      The gas-griefing guard is preserved: an OOG JPY read reverts from inside
+     ///      _getOracleAnswer rather than returning down == true.
+     function _convertUsdPriceToJpyWithFreeze(uint256 _usdPrice) internal returns (uint256, bool) {
+-        (uint256 jpyUsdRate, bool jpyUsdOracleDown) = _getOracleAnswer(jpyUsdOracle);
++        (uint256 jpyUsdRate, bool jpyUsdOracleDown, uint256 updatedAt) = _getOracleAnswerWithTimestamp(jpyUsdOracle);
+ 
+         if (jpyUsdOracleDown) {
+             jpyUsdRate = lastGoodJpyRate;
+             if (jpyFrozenSince == 0) {
+                 jpyFrozenSince = block.timestamp;
+-                emit JpyRateFrozen(block.timestamp, jpyUsdRate);
+-            } else if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
++                if (block.timestamp - lastGoodJpyUpdatedAt >= jpyUsdOracle.stalenessThreshold) {
++                    jpyFrozenSince = lastGoodJpyUpdatedAt + jpyUsdOracle.stalenessThreshold;
++                }
++                emit JpyRateFrozen(jpyFrozenSince, jpyUsdRate);
++            }
++            if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
+                 return (0, true);
+             }
+         } else {
+             lastGoodJpyRate = jpyUsdRate;
++            lastGoodJpyUpdatedAt = updatedAt;
+             if (jpyFrozenSince != 0) {
+                 jpyFrozenSince = 0;
+                 emit JpyRateUnfrozen(block.timestamp, jpyUsdRate);
+diff --git a/contracts/test/DFPriceFeed.t.sol b/contracts/test/DFPriceFeed.t.sol
+index 1b3872bc..24f447ba 100644
+--- a/contracts/test/DFPriceFeed.t.sol
++++ b/contracts/test/DFPriceFeed.t.sol
+@@ -594,10 +594,11 @@ contract DFPriceFeedTest is Test {
+         assertEq(feed.jpyFrozenSince(), 0, "not frozen while healthy");
+ 
+         // Enter the freeze.
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), block.timestamp, "freeze onset recorded");
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart, "freeze onset anchored to stale boundary");
+ 
+         // JPY/USD recovers → freeze cleared.
+         jpyUsd.setUpdatedAt(block.timestamp);
+@@ -647,15 +648,33 @@ contract DFPriceFeedTest is Test {
+         assertEq(price, feed.lastGoodPrice());
+     }
+ 
++    function test_jpyStaleBeforeFirstCallPastFreezeWindowShutsDownImmediately() public {
++        collUsd.setPrice(3000e8);
++        DFWETHPriceFeed feed = _deployWeth();
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
++
++        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        collUsd.setUpdatedAt(block.timestamp);
++
++        (uint256 price, bool failure) = feed.fetchPrice();
++
++        assertTrue(failure);
++        assertTrue(bo.shutDownCalled());
++        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(price, feed.lastGoodPrice());
++    }
++
+     function test_jpyFreeze_emitsFrozenAndUnfrozenEvents() public {
+         collUsd.setPrice(3000e8);
+         DFWETHPriceFeed feed = _deployWeth();
+         feed.fetchPrice();
+ 
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+         vm.expectEmit(true, true, true, true, address(feed));
+-        emit DFPriceFeedBase.JpyRateFrozen(block.timestamp, feed.lastGoodJpyRate());
++        emit DFPriceFeedBase.JpyRateFrozen(expectedFreezeStart, feed.lastGoodJpyRate());
+         feed.fetchPrice();
+ 
+         jpyUsd.setUpdatedAt(block.timestamp);
+@@ -769,6 +788,45 @@ contract DFPriceFeedTest is Test {
+         assertEq(price, goodPrice);
+     }
+ 
++    function test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() public {
++        collUsd.setPrice(3000e8);
++        DFWETHPriceFeed feed = _deployWeth();
++        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "constructor stores cached rate provenance");
++
++        vm.warp(block.timestamp + 10 hours);
++        collUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setUpdatedAt(block.timestamp);
++        feed.fetchPrice();
++        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "healthy read refreshes cached rate provenance");
++
++        vm.warp(block.timestamp + 10 hours);
++        collUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setPrice(0);
++
++        (, bool failure) = feed.fetchPrice();
++
++        assertFalse(failure);
++        assertFalse(bo.shutDownCalled());
++        assertEq(feed.jpyFrozenSince(), block.timestamp);
++    }
++
++    function test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() public {
++        collUsd.setPrice(3000e8);
++        DFWETHPriceFeed feed = _deployWeth();
++        uint256 expectedFreezeStart = feed.lastGoodJpyUpdatedAt() + JPY_STALENESS;
++
++        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        collUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setPrice(0);
++
++        (uint256 price, bool failure) = feed.fetchPrice();
++
++        assertTrue(failure);
++        assertTrue(bo.shutDownCalled());
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(price, feed.lastGoodPrice());
++    }
++
+     // =========================================================
+     //  After shutdown, pinned to lastGoodPrice (no further failure flag)
+     // =========================================================
+diff --git a/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol b/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol
+index 59a348da..e953904e 100644
+--- a/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol
++++ b/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol
+@@ -144,6 +144,7 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+     function test_proxy_jpyStale_substitutesNoShutdownAndTracksLivePegLegs() public {
+         proxy.fetchPrice();
+ 
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         wbtcBtc.setPrice(0.9e8);
+         wbtcBtc.setUpdatedAt(block.timestamp);
+@@ -155,7 +156,7 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+         assertFalse(failure);
+         assertFalse(bo.hasBeenShutDown());
+         assertEq(price, 19_800_000e18); // 0.9 * $110,000 / frozen 0.005
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+     }
+ 
+diff --git a/contracts/test/sUSDSPriceFeed.t.sol b/contracts/test/sUSDSPriceFeed.t.sol
+index 8ae86e9c..0b3f1cb6 100644
+--- a/contracts/test/sUSDSPriceFeed.t.sol
++++ b/contracts/test/sUSDSPriceFeed.t.sol
+@@ -335,6 +335,43 @@ contract SUSDSPriceFeedTest is Test {
+         assertEq(price, goodPrice);
+     }
+ 
++    function test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() public {
++        sUSDSPriceFeed feed = _deploy();
++        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "constructor stores cached rate provenance");
++
++        vm.warp(block.timestamp + 10 hours);
++        usdsUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setUpdatedAt(block.timestamp);
++        feed.fetchPrice();
++        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "healthy read refreshes cached rate provenance");
++
++        vm.warp(block.timestamp + 10 hours);
++        usdsUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setPrice(0);
++
++        (, bool failure) = feed.fetchPrice();
++
++        assertFalse(failure);
++        assertFalse(bo.shutDownCalled());
++        assertEq(feed.jpyFrozenSince(), block.timestamp);
++    }
++
++    function test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() public {
++        sUSDSPriceFeed feed = _deploy();
++        uint256 expectedFreezeStart = feed.lastGoodJpyUpdatedAt() + JPY_STALENESS;
++
++        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        usdsUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setPrice(0);
++
++        (uint256 price, bool failure) = feed.fetchPrice();
++
++        assertTrue(failure);
++        assertTrue(bo.shutDownCalled());
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(price, feed.lastGoodPrice());
++    }
++
+     function test_usdsUsdStale_duringJpyStale_stillShutsDown() public {
+         sUSDSPriceFeed feed = _deploy();
+         feed.fetchPrice();
+@@ -355,10 +392,11 @@ contract SUSDSPriceFeedTest is Test {
+         feed.fetchPrice();
+         assertEq(feed.jpyFrozenSince(), 0);
+ 
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         usdsUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
+ 
+         jpyUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+@@ -369,10 +407,11 @@ contract SUSDSPriceFeedTest is Test {
+         sUSDSPriceFeed feed = _deploy();
+         feed.fetchPrice();
+ 
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         usdsUsd.setUpdatedAt(block.timestamp);
+         vm.expectEmit(true, true, true, true, address(feed));
+-        emit sUSDSPriceFeed.JpyRateFrozen(block.timestamp, feed.lastGoodJpyRate());
++        emit sUSDSPriceFeed.JpyRateFrozen(expectedFreezeStart, feed.lastGoodJpyRate());
+         feed.fetchPrice();
+ 
+         jpyUsd.setUpdatedAt(block.timestamp);
+@@ -405,6 +444,22 @@ contract SUSDSPriceFeedTest is Test {
+         assertEq(price, feed.lastGoodPrice());
+     }
+ 
++    function test_jpyStaleBeforeFirstCallPastFreezeWindowShutsDownImmediately() public {
++        sUSDSPriceFeed feed = _deploy();
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
++
++        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        usdsUsd.setUpdatedAt(block.timestamp);
++
++        (uint256 price, bool failure) = feed.fetchPrice();
++
++        assertTrue(failure);
++        assertTrue(bo.shutDownCalled());
++        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(price, feed.lastGoodPrice());
++    }
++
+     function test_jpyUsdWeekendCloseWithinThreshold_keepsPrimary() public {
+         sUSDSPriceFeed feed = _deploy();
+ 
+diff --git a/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol b/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol
+index 1c2223d4..bec23408 100644
+--- a/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol
++++ b/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol
+@@ -174,6 +174,7 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+     // proxy + feed + BO stack no longer permanently dies on a JPY hiccup). ORCL-SEC-005.
+     function test_proxy_jpyStale_substitutesNoShutdown() public {
+         (uint256 good,) = proxy.fetchPrice();
++        uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours); // > JPY staleness (72h)
+         usdsUsd.setUpdatedAt(block.timestamp); // keep USDS fresh -> isolate JPY failure
+ 
+@@ -182,7 +183,7 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+         assertFalse(bo.hasBeenShutDown());
+         assertEq(p, good); // frozen JPY rate × live (unchanged) USDS leg
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
+     }
+ 
+     function test_proxy_jpyFreezeExpires_proxyShutsDownAndServesLastGood() public {
+diff --git a/documents/en/protocol/product/spec/Oracle.md b/documents/en/protocol/product/spec/Oracle.md
+index 66ab2ca7..debe654e 100644
+--- a/documents/en/protocol/product/spec/Oracle.md
++++ b/documents/en/protocol/product/spec/Oracle.md
+@@ -194,7 +194,7 @@ Each DF PriceFeed is implemented as a two-layer composition: (1) **inherit the u
+ | Function | Visibility | Summary | Requirement |
+ | --- | --- | --- | --- |
+ | `_fetchPricePrimary()` | internal | collateral/USD -> JPY conversion -> record `lastGoodPrice` | ORCL-FR-010-013 |
+-| `_convertUsdPriceToJpyWithFreeze(uint256 usdPrice)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | Convert USD->JPY using `jpyUsdOracle`. On healthy read, update `lastGoodJpyRate`; on failure, use it as fallback without immediate shutdown (soft-freeze, bounded by `MAX_JPY_FREEZE_DURATION` 24h; beyond that standard shutdown, `jpyFrozenSince` / `JpyRate{Frozen,Unfrozen}`) | ORCL-FR-010 / ORCL-SEC-005 |
++| `_convertUsdPriceToJpyWithFreeze(uint256 usdPrice)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | Convert USD->JPY using `jpyUsdOracle`. A healthy read stores `lastGoodJpyRate` with its `updatedAt`; a failure uses the cached rate and starts the freeze at the earlier of first observation and that cached rate's stale boundary. The soft-freeze is bounded by `MAX_JPY_FREEZE_DURATION` 24h and then uses standard shutdown | ORCL-FR-010 / ORCL-SEC-005 |
+ | `_getCanonicalRate()` | internal (composite) | sUSDS canonical rate (`convertToAssets(1e18)`) | ORCL-FR-012 |
+ | `_applyBackingRatio(uint256 collJpy)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | Multiply by `collateralVault.backingRatio()` and return actual dToken collateral value. A normal read failure is an oracle failure; a gas guard revert is re-reverted | ORCL-FR-014 |
+ | `fetchPrice()` / `fetchRedemptionPrice()` / `lastGoodPrice()` | external | IPriceFeed standard from upstream base | [Liquity-v2-Core-Spec](Liquity-v2-Core-Spec.md) |
+@@ -358,7 +358,7 @@ Oracle patterns and PriceFeed implementations specified in this document:
+ - **Preconditions (Checks)**: `collUsdOracle` is within staleness and `answer > 0` (collateral leg). `jpyUsdOracle` is used and updated if healthy; if failed, use `lastGoodJpyRate`.
+ - **Behavior (Effects)**:
+   1. `(collUsd, down1) = _getOracleAnswer(collUsdOracle)` (collateral/USD, normalized to 18 decimals). If `down1`, call `_shutDownAndSwitchToLastGoodPrice(collUsdOracle)` (terminal shutdown)
+-  2. `collJpy = _convertUsdPriceToJpyWithFreeze(collUsd)`: if JPY/USD is healthy, convert with live rate and update `lastGoodJpyRate`; if failed (stale / revert / `answer <= 0`), use `lastGoodJpyRate` and continue **without immediate shutdown** (first failure records `jpyFrozenSince` + `JpyRateFrozen`; recovery sets `jpyFrozenSince=0` + `JpyRateUnfrozen`; freeze beyond `MAX_JPY_FREEZE_DURATION` [24h] falls back to standard shutdown)
++  2. `collJpy = _convertUsdPriceToJpyWithFreeze(collUsd)`: if JPY/USD is healthy, convert with the live rate and store `lastGoodJpyRate` with the same response's `updatedAt`; if failed, use `lastGoodJpyRate` and continue **without immediate shutdown**. On the first failure, record `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + stalenessThreshold)`. Recovery sets `jpyFrozenSince=0` and emits `JpyRateUnfrozen`; a freeze at or beyond `MAX_JPY_FREEZE_DURATION` (24h) falls back to standard shutdown on that same call
+   3. `lastGoodPrice = _applyBackingRatio(collJpy)`, return `(price, false)`
+ - **Revert / early return**: collateral-leg failure transitions to shutdown, not revert. JPY-leg failure does not early-return; it continues with fallback (only gas-griefing OOG raw-reverts with `InsufficientGasForExternalCall`).
+ - **Emitted event**: `JpyRateFrozen` / `JpyRateUnfrozen` (start/end of JPY soft-freeze). Collateral-leg shutdown is upstream mechanism.
+@@ -725,7 +725,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | ORCL-INV-005 | `fetchPrice` / `fetchRedemptionPrice` re-revert only gas guard revert (`InsufficientGasForExternalCall`, exactly 4 bytes, selector match); all other reverts / invalid prices go to shutdown path | unit / integration |
+ | ORCL-INV-006 | Even if source is bricked (`lastGoodPrice()` also unreadable), Proxy returns its own path-specific caches (`_lastGoodPrice` / `_lastGoodRedemptionPrice`), so price acquisition is not permanent DoS. For sources where normal and redemption prices diverge, bricked-source redemption fallback must not collapse to the normal-price cache | unit |
+ | ORCL-INV-007 | All collateral prices are JPY-denominated (`collJpy = collUsd × 1e18 / jpyUsdRate`). Both `collUsd` and `jpyUsdRate` are normalized to 18 decimals | unit / fork |
+-| ORCL-INV-008 | Diffs against upstream price acquisition bases are explicitly managed. The `MainnetPriceFeedBase` diff is limited to invalidating incomplete Chainlink rounds (`roundId == 0` / `answeredInRound < roundId`) and invalid timestamps (`updatedAt == 0` / future timestamp). `CompositePriceFeed` keeps only the sUSDS primary -> `lastGoodPrice` path, and static diff review confirms the unused WSTETH/RETH LST secondary fallback is removed. JPY conversion and backing multiplication stay inside DF files | manual / static diff review / unit |
++| ORCL-INV-008 | Diffs against upstream price acquisition bases are explicitly managed. The `MainnetPriceFeedBase` diff is limited to invalidating incomplete Chainlink rounds (`roundId == 0` / `answeredInRound < roundId`) and invalid timestamps (`updatedAt == 0` / future timestamp), plus an internal provenance helper that returns the response `updatedAt` alongside the existing result without changing normal `_getOracleAnswer` semantics. `CompositePriceFeed` keeps only the sUSDS primary -> `lastGoodPrice` path, and static diff review confirms the unused WSTETH/RETH LST secondary fallback is removed. JPY conversion and backing multiplication stay inside DF files | manual / static diff review / unit |
+ | ORCL-INV-009 | Placeholder branches use `PriceFeedPlaceholder` (always `(1e18, false)`) as source, do not trigger branch shutdown, and are inoperable through Vault / dToken multi-guards | unit / integration |
+ | ORCL-INV-010 | Standard, peg, composite peg, and dwstETH composite feeds use only `primary` and `lastGoodPrice` states. Collateral/USD, peg-monitor, stETH/USD, ETH/USD, and canonical-rate failures shut down; `ETHUSDxCanonical` is not used. JPY/USD failure soft-freezes while staying `primary`. Composite rate (sUSDS) also uses only its USDS/USD source and `lastGoodPrice` | unit |
+ | ORCL-INV-011 | dToken backing ratio is downward-only `backingRatio ∈ (0, 1e18]` (healthy `== 1e18`) and is symmetrically applied to all collateral prices as `dTokenJpy = collJpy × backingRatio / 1e18` on both consumers. On `backingRatio()` read failure, `lastGoodBacking` is not used as pass-through; a normal read failure triggers shutdown and a gas guard revert is re-reverted ([ORCL-FR-014](#orcl-fr-014)) | unit / fork |
+@@ -761,8 +761,8 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ ### <a id="orcl-sec-005"></a>ORCL-SEC-005: JPY/USD shared dependency failsafe
+ 
+ - Type: Security
+-- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. DF feeds continue with the most recent healthy `lastGoodJpyRate`; the staleness threshold is `PRM-ORACLE-001`, and this soft-freeze is bounded by `PRM-ORACLE-006`. Recovery resumes live rates automatically. When the bounded freeze expires, the feed transitions to the standard `lastGoodPrice` shutdown path. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback, so soft-freeze cannot mask them. `jpyFrozenSince`, `JpyRateFrozen`, and `JpyRateUnfrozen` provide the required observability. `jpyFrozenSince` is recorded at the first on-chain observation of failure, so monitoring must periodically exercise the fetch path.
+-- Verification: unit (fallback on JPY failure, no shutdown within 24h, **after 24h fallback to `lastGoodPrice` shutdown** [`test_jpyFreezeExpires_shutsDownAtLastGoodPrice`], weekend-equivalent `updatedAt` boundary, collateral tracking during freeze, automatic live recovery, collateral-leg failure remains terminal shutdown, sticky `jpyFrozenSince`, events), integration (no shutdown within 24h for JPY stale through Proxy), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
++- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Each healthy read stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`; the staleness threshold is `PRM-ORACLE-001`, and this soft-freeze is bounded by `PRM-ORACLE-006`. On the first failure, DF feeds set `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)` and continue with the cached rate. Thus a dormant branch cannot restart the 24h allowance for an already-stale cache even when the current call reverts or returns malformed data, while a failure before the cache becomes stale starts at first observation. Recovery resumes live rates automatically. When the bounded freeze expires, including on the first post-dormancy call, the feed transitions to the standard `lastGoodPrice` shutdown path. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback, so soft-freeze cannot mask them. `jpyFrozenSince`, `JpyRateFrozen`, and `JpyRateUnfrozen` provide the required observability.
++- Verification: unit (cached-rate timestamp provenance, immediate shutdown for stale and invalid responses on the first dormant-branch call after the freeze limit, first-observation anchoring while the cached rate is fresh, recovery within 24h, standard and sUSDS implementations), integration (Proxy path), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
+ 
+ ### <a id="orcl-sec-006"></a>ORCL-SEC-006: Peg monitoring for centralized wrapper collateral
+ 
+@@ -820,7 +820,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | ORCL-EVT-004 | Proxy shutdown observation event (reason source failure caused shutdown delegation) and upstream source `ShutDownFromOracleFailure(address failedOracleAddr)` | Alert branch shutdown (incident response). DF source-level oracle / backing / rate-provider failures are identified by `failedOracleAddr` |
+ | ORCL-EVT-005 | OZ `OwnershipTransferStarted` / `OwnershipTransferred` | Monitor ownership transfer (deployer -> multisig) |
+ | ORCL-EVT-006 | `SourceSwitchValidated` (old/reference and new prices, oldSourceHealthy, priceGuardBypassed) | Distinguish normal replacement / cached-reference recovery / explicit emergency bypass; audit price jumps |
+-| ORCL-EVT-007 | `JpyRateFrozen` | Detect the start of JPY soft-freeze |
++| ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` | Detect JPY soft-freeze. `timestamp` is the earlier of first observation and the cached JPY rate's stale boundary, so it may predate the emission block |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | Detect return to the live JPY/USD rate |
+ 
+ - Price itself and fallback to `lastGoodPrice` are observed through upstream-base events/state (this document does not define those event bodies).
+@@ -938,8 +938,8 @@ Historical evidence record (non-normative; active values are canonical only in [
+ Implementation behavior on threshold exceedance:
+ 
+ - If a branch-local collateral/USD leg (ETH/USD, USDC/USD, USDT/USD, USDS/USD, XAU/USD, etc.) becomes stale / invalid / revert, `fetchPrice()` routes that branch to `shutdownFromOracleFailure()` as an oracle failure and falls back to `lastGoodPrice`. Thereafter, that branch's borrowing, collateral withdrawal, debt increase, and normal adjustments stop, it is removed from normal redemption distribution, and urgent redemption is enabled. `closeTrove` via full repayment remains as an exit path.
+-- If the JPY/USD leg becomes stale / invalid / revert, to avoid simultaneous shutdown of all branches it does not shut down immediately and uses `lastGoodJpyRate`. On first observation it records `jpyFrozenSince` and emits `JpyRateFrozen`. If it returns fresh within 24h, it emits `JpyRateUnfrozen` and returns to the live rate. If the freeze continues for `MAX_JPY_FREEZE_DURATION` (24h) or more, it transitions to standard `lastGoodPrice` shutdown to avoid indefinite use of a stale FX rate.
+-- `jpyFrozenSince` is set at the block where stale is first observed on-chain, not at Chainlink's `updatedAt + stalenessThreshold`. Therefore monitoring / keeper separately monitor the remaining time of `latestRoundData.updatedAt`, `JpyRateFrozen`, `jpyFrozenSince > 0`, `JpyRateUnfrozen`, and `ShutDownFromOracleFailure`.
++- If the JPY/USD leg becomes stale / invalid / revert, to avoid simultaneous shutdown of all branches it does not shut down immediately and uses `lastGoodJpyRate`. The feed stores the matching healthy `updatedAt` and records `jpyFrozenSince` as the earlier of first observation and that cached rate's stale boundary. If it returns fresh within the remaining 24h window, it emits `JpyRateUnfrozen` and returns to the live rate. If the freeze has continued for `MAX_JPY_FREEZE_DURATION` (24h) or more, including before the first post-dormancy call, it transitions to standard `lastGoodPrice` shutdown.
++- Monitoring / keepers treat `JpyRateFrozen.timestamp` and `jpyFrozenSince` as the failure boundary rather than the event block, and separately monitor `latestRoundData.updatedAt`, `JpyRateUnfrozen`, and `ShutDownFromOracleFailure`.
+ - A Chainlink read failure due to insufficient gas is re-reverted as `InsufficientGasForExternalCall` and not converted into a false shutdown / false freeze.
+ 
+ The current test fixture (COLL/USDS 24h, JPY 72h) is for strict `<` boundary-semantics validation; production freeze reconciles Parameters §2-C seconds against env / manifest / fork evidence. Related: [ORCL-SEC-005](#orcl-sec-005).
+@@ -985,7 +985,7 @@ Resolved: incorporated into `ORCL-FR-014` and `VAULT-INV-012`.
+ - [dToken Requirements Specification](dToken.md) — placeholder branches, `setTokenInfo`, cap, `convertTo*` (dToken-first coordination for Day-2 activation)
+ - [CollateralVault Requirements Specification](CollateralVault.md) — `setUnderlying`, `UnderlyingNotSet`/`UnderlyingMismatch`, mint/redeem (placeholder multi-guard coordination)
+ - [Parameters.md](../../../Parameters.md) — canonical source for branch↔collateral allocation, finalized status, staleness values, MCR/LLTV/CCR, depeg haircut values
+-- 🔵 `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol` — **upstream-derived with a hardening diff**. Chainlink acquisition, 18-decimal normalization, `PriceSource`, shutdown (does not include JPY conversion). Treats `roundId == 0`, `answeredInRound < roundId`, `updatedAt == 0`, and future `updatedAt` as invalid.
++- 🔵 `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol` — **upstream-derived with a hardening diff**. Chainlink acquisition, 18-decimal normalization, `PriceSource`, shutdown (does not include JPY conversion). Treats `roundId == 0`, `answeredInRound < roundId`, `updatedAt == 0`, and future `updatedAt` as invalid, and can return the response `updatedAt` alongside the existing internal result as provenance.
+ - 🔵 `contracts/src/PriceFeeds/CompositePriceFeed.sol` — **upstream-derived with sUSDS pruning**. Composite base for `USDS/USD × canonical rate` (`sUSDSPriceFeed` parent). WSTETH/RETH LST secondary fallback is removed from production `src`
+ - 🟢 `contracts/src/PriceFeeds/DFPriceFeedBase.sol` — **DF new**. `is MainnetPriceFeedBase`. Adds `jpyUsdOracle` + `_convertUsdPriceToJpyWithFreeze()` (soft-freeze of shared JPY leg) + `collateralVault.backingRatio()` multiplication (parent of standard/peg DF feeds)
+ - 🟢 `contracts/src/PriceFeeds/PriceFeedProxy.sol` — **DF new**. Source replacement (24h timelock), try/catch shutdown, `Ownable2Step`
+diff --git a/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md b/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+index ae5e7e08..a9c92f3c 100644
+--- a/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
++++ b/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+@@ -268,7 +268,7 @@ incident log で使う運用識別子であり、component spec の requirement
+ | `ALRT-ORCL-002` | branch-local feed stale / invalid / revert risk | P1 | No, unless user operation is impacted | polling + `fetchPrice` dry-run | on-chain failure path を確認 |
+ | `ALRT-ORCL-003` | `ShutDownFromOracleFailure` / branch shutdown observed | P0 | Yes | TroveManager / PriceFeedProxy event, `shutdownTime` | user app block と urgent redemption 導線を確認 |
+ | `ALRT-ORCL-004` | JPY/USD shared feed age >= 80% of staleness threshold | P2 | No | shared JPY/USD `latestRoundData.updatedAt` | 全 branch 共通依存として早期確認 |
+-| `ALRT-ORCL-005` | `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | DF PriceFeed source state / event | freeze 開始 block と代替 source 要否を記録 |
++| `ALRT-ORCL-005` | `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | DF PriceFeed source state / event | freeze 起点 timestamp と検知 block、代替 source 要否を記録 |
+ | `ALRT-ORCL-006` | JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | `jpyFrozenSince`, source proposal state | oracle owner / GOV に escalation |
+ | `ALRT-ORCL-007` | JPY/USD freeze >= 12h | P0 | Yes, if still unresolved | `jpyFrozenSince` | public update と shutdown risk を準備 |
+ | `ALRT-ORCL-008` | JPY/USD freeze resolved | P3 / Resolved | No, unless public notice was posted | `JpyRateUnfrozen` / state | incident log と public notice 解除 |
+@@ -565,7 +565,7 @@ monitor は strict `<` 判定を前提に、閾値ちょうどを fresh と扱
+ 
+ | 条件 | Severity | 初動 |
+ | --- | --- | --- |
+-| `JpyRateFrozen` または `jpyFrozenSince > 0` | P1 | 凍結開始 block、対象 source、全 active branch の価格取得状況を記録 |
++| `JpyRateFrozen` または `jpyFrozenSince > 0` | P1 | 凍結起点 timestamp（初回観測と保存済み JPY rate の stale 境界の早い方）と検知 block、対象 source、全 active branch の価格取得状況を記録 |
+ | freeze から 6h 経過、かつ復旧見込みまたは source proposal がない | P0 | GOV / oracle owner へ escalation。代替 source と public comms を準備 |
+ | freeze から 12h 経過 | P0 | shutdown リスクを public 告知候補に上げ、次回更新時刻を決める |
+ | `JpyRateUnfrozen` | P3 / Resolved | freeze 中の価格・user impact・対応有無を incident log に残す |
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-03-Jpy-Freeze-Clock-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-03-Jpy-Freeze-Clock-Differential-Review.md
+new file mode 100644
+index 00000000..27dd8ded
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-03-Jpy-Freeze-Clock-Differential-Review.md
+@@ -0,0 +1,181 @@
++# External Audit Mid 03: JPY Freeze Clock 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-03)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Oracle.md` の `ORCL-SEC-005` を参照する。
++
++## Executive Summary
++
++外部監査 Mid 03「JPY Freeze Clock Starts At First Call, Not Oracle Failure — Zero-Traffic Branch Never Shuts Down」
++の主要な control-flow 指摘は再現した。`DFPriceFeedBase` と `sUSDSPriceFeed` は、JPY/USD が既に72時間の staleness
++threshold と24時間の soft-freeze 上限を超えていても、branch の最初の failing call で
++`jpyFrozenSince = block.timestamp` としていた。その call は shutdown せず、古い `lastGoodJpyRate` に新しい24時間窓を
++与えていた。
++
++ただし「zero-traffic branch が stale price を継続利用する」という表現は不正確である。呼出しがなければ価格は consumer
++へ返らず、オンチェーンで新たな処理も進まない。実害の境界は、長い無通信後に activity が戻った最初の call が、既に上限を
++超えた cached FX rate を受け入れる点にある。
++
++判定は **Medium accepted with claim correction** とする。健全な JPY/USD 読取りで `lastGoodJpyRate` と同じ response の
++`updatedAt` を `lastGoodJpyUpdatedAt` に保存し、初回障害時の freeze 起点を
++`min(block.timestamp, lastGoodJpyUpdatedAt + stalenessThreshold)` とする。これにより stale response だけでなく、現在の
++call が revert、zero answer、invalid round でも、実際に代用する cached rate の年齢を引き継ぐ。
++
++| Severity | New finding count |
++| -------- | ----------------: |
++| Critical |                 0 |
++| High     |                 0 |
++| Medium   |                 0 |
++| Low      |                 0 |
++
++**Recommendation**: 修正と回帰試験を merge 可。監査推奨の方向性は正しいが、現在の stale response ではなく、fallback に
++使う cached rate と対になる timestamp を正本にする必要がある。
++
++## Scope And Baseline
++
++- 外部指摘: Mid 03 — JPY Freeze Clock Starts At First Call, Not Oracle Failure — Zero-Traffic Branch Never Shuts Down
++- review baseline: `origin/develop` at `e32d7d2c2ced6e77cdce5c96f89e427dec86d0af`
++- production contracts:
++  - `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol`
++  - `contracts/src/PriceFeeds/DFPriceFeedBase.sol`
++  - `contracts/src/PriceFeeds/sUSDSPriceFeed.sol`
++- proxy integration:
++  - `contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol`
++  - `contracts/test/sUSDSPriceFeedProxyIntegration.t.sol`
++- monitoring surface: `frontend/ops/src/lib/alerts.ts`, `frontend/ops/src/lib/alertCatalog.ts`
++- normative sources:
++  - `documents/jp/protocol/product/spec/Oracle.md`
++  - `documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md`
++  - `documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md`
++
++## Git History Context
++
++- `3c9418e4872eb3ad6320cb9169021e5bbc8edc9b` (2026-06-10) が shared JPY/USD leg の indefinite
++  terminal shutdown を避ける soft-freeze を導入し、障害の最初の call で `jpyFrozenSince` を記録した。
++- `7627e377cade9d6798300caa79254d894a889a94` (2026-06-11) が fallback を24時間へ制限したが、clock の起点は
++  最初の failing call のまま維持した。
++- したがって今回の問題は後続 refactor の regression ではなく、soft-freeze の安全上限を導入した時点から存在した。
++- `DFPriceFeedBase` と `sUSDSPriceFeed` は異なる継承系を使うため JPY conversion を最小重複しており、同じ clock bug が
++  両実装へ存在した。
++
++## Chainlink Timestamp Semantics
++
++Chainlink の official `OffchainAggregator.sol` では、`latestRoundData().updatedAt` は latest report が transmit された block の
++timestamp である。参照は commit `0cb21f3a2b0b3b607e5d899bdbba332c04a9e146` に固定した。
++
++- [smartcontractkit/libocr OffchainAggregator.sol](https://github.com/smartcontractkit/libocr/blob/0cb21f3a2b0b3b607e5d899bdbba332c04a9e146/contract/OffchainAggregator.sol)
++
++したがって、健全性検証を通った rate と同じ response の `updatedAt` を保存すれば、その cached rate がいつから古くなるかを
++オンチェーンで決定できる。現在の failing response の timestamp は fallback rate と同じ report とは限らず、revert や malformed
++response では取得できないため、cached rate の provenance の代用にはならない。
++
++## A/B Reproduction
++
++baseline に一時 PoC を `DFPriceFeed.t.sol` と `sUSDSPriceFeed.t.sol` の両方へ追加し、次を確認した。
++
++1. 時刻 `t0` に healthy JPY/USD rate で feed を deploy する。
++2. branch を一度も呼ばず、`t0 + 72h + 24h + 1` まで進める。
++3. collateral/USD または USDS/USD だけを fresh にして JPY failure を分離する。
++4. 最初の `fetchPrice()` が `failure=false`、`jpyFrozenSince=block.timestamp` となり、shutdown しない。
++
++修正後は同条件の最初の call で `jpyFrozenSince=t0+72h`、`failure=true` となり、標準 `lastGoodPrice` shutdown へ進む。
++
++追加で、現在の JPY response を zero answer にした場合も検証した。baseline の「stale response の timestamp だけを見る」案では
++zero answer に trustworthy onset がないため新しい24時間窓を開始するが、最終実装は cached rate の `updatedAt` を使うため、
++cached rate が既に72h+24hを超えていれば同じ call で shutdown する。
++
++## Claim-By-Claim Assessment
++
++| Audit claim                                                 | Assessment         | Evidence / consequence                                               |
++| ----------------------------------------------------------- | ------------------ | -------------------------------------------------------------------- |
++| freeze clock が oracle failure ではなく最初の call で始まる | True               | baseline PoC で両実装とも `jpyFrozenSince=block.timestamp`           |
++| 無通信 branch は24h safety bound を再開始できる             | True               | 72h+24h超の最初の call が baseline では live のまま                  |
++| zero traffic 中も stale price が利用され続ける              | False / overstated | call がなければ consumer への返却も state transition もない          |
++| `lastGoodJpyUpdatedAt` を保存すべき                         | True               | fallback rate と同じ report の provenance を保持できる               |
++| current stale response の `updatedAt+threshold` で十分      | Incomplete         | revert / invalid response を覆えず、cached rate と report が違い得る |
++
++## What Changed
++
++- `MainnetPriceFeedBase` に、通常結果と response `updatedAt` を返す internal
++  `_getOracleAnswerWithTimestamp()` を追加した。既存 `_getOracleAnswer()` の返値と validation semantics は変えない。
++- `DFPriceFeedBase` と `sUSDSPriceFeed` は healthy JPY read の rate と `updatedAt` を
++  `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` として対で更新する。
++- 初回 JPY failure は freeze 起点をまず observation time とし、cached rate が既に stale なら
++  `lastGoodJpyUpdatedAt + stalenessThreshold` へ遡らせる。
++- cached rate がまだ fresh な間に invalid / revert が起きた場合は observation time を使う。future の stale boundary を
++  freeze 起点にして elapsed 計算を underflow させない。
++- `JpyRateFrozen` の event signature は変えず、`timestamp` の意味を「cached rate の年齢を含む freeze 起点」へ明確化した。
++- JP canonical spec、EN support translation、staleness decision record、mainnet runbook、incident policy、Ops alert action を
++  同じ意味へ同期した。
++
++## Differential Side-Effect Review
++
++| Surface                         | Assessment                                                                        | Result                                  |
++| ------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------- |
++| Healthy price math              | rate、18-decimal scaling、`Math.mulDiv` は diff なし                              | Unchanged                               |
++| Collateral / canonical ordering | collateral、peg、canonical、backing failure は引き続き JPY fallback より優先      | Unchanged                               |
++| Fresh-cache transient failure   | cached rate が stale になる前は最初の observation から24h                         | Liveness preserved                      |
++| Dormant stale branch            | stale / invalid の別を問わず cached boundary から24h超なら最初の call で shutdown | Intended fail-closed behavior           |
++| Recovery                        | 24h内に healthy read が戻れば live rate と timestamp を更新して unfreeze          | Automatic recovery preserved            |
++| Gas griefing                    | `InsufficientGasForExternalCall` の re-revert path は変更なし                     | Unchanged                               |
++| ABI / events                    | public getter を追加。既存 function / event selector と event fields は不変       | Existing integrations preserved         |
++| Storage                         | 非 delegatecall の source contract 末尾に state を追加                            | Existing slots are not moved            |
++| Proxy integration               | `PriceFeedProxy` の source interface と cache semantics は変更なし                | Integration tests pass                  |
++| Ops monitoring                  | elapsed は event block ではなく `jpyFrozenSince` から計算                         | Existing code preserved; copy clarified |
++| Runtime bytecode                | DFWETH 3,045、DFWBTC 3,505、sUSDS 3,480 bytes                                     | EIP-170 limit 内                        |
++
++## Adversarial Safety And Liveness Review
++
++- **Never-called branch**: deploy 後に JPY rate が止まり、96h超アクセスがなくても、次の call は cached stale boundary を
++  引き継いで同じ transaction で shutdown する。
++- **Malformed / zero answer after dormancy**: current response の onset に依存しないため、answer や round metadata を壊して
++  stale provenance を隠しても新しい24h窓を得られない。
++- **Transient failure while cache is fresh**: `lastGoodJpyUpdatedAt + threshold` が未来なら observation time から計時するため、
++  rate がまだ許容年齢のうちに即 shutdown せず回復 probe の余地を維持する。
++- **Recovery**: freeze 中の fresh response は rate と timestamp を同時更新し、`jpyFrozenSince=0` として自動復旧する。
++- **Continuous failure**: `jpyFrozenSince` は continuous freeze 中に更新されず、呼出し頻度で期限を延長できない。
++- **Timestamp arithmetic**: `lastGoodJpyUpdatedAt` は `updatedAt <= block.timestamp` を含む healthy validation を通過した値だけを
++  保存する。`block.timestamp - lastGoodJpyUpdatedAt >= threshold` のときだけ加算するため、freeze boundary の加算も
++  `block.timestamp` 以下に収まり overflow / future onset を作らない。
++- **Terminal state**: freeze expiry 後は既存 `PriceSource.lastGoodPrice` へ移行し、その branch の不可逆 shutdown semantics は
++  変更しない。
++
++## Verification
++
++実行結果:
++
++```text
++PASS  baseline A/B reproduction (DFPriceFeedBase / sUSDSPriceFeed)
++      72h staleness + 24h freeze 上限超過後の初回 call が旧実装では live のままになることを再現
++PASS  focused dormant / fresh-cache / invalid-cache regressions
++      6 passed; 0 failed; 0 skipped
++PASS  forge test -vv --match-path 'test/*PriceFeed*.t.sol'
++      225 passed; 0 failed; 0 skipped
++PASS  pnpm test:alerts && pnpm test:events && pnpm exec tsc --noEmit  (frontend/ops)
++PASS  forge fmt --check <modified Solidity files>
++PASS  production runtime sizes: DFWETH 3,045 / DFWBTC 3,505 / sUSDS 3,480 bytes
++PASS  forge test -vv --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++      1386 passed; 0 failed; 0 skipped
++```
++
++remote CI の最終結果は PR status に記録する。
++
++## Residual Risk And Limitations
++
++- `updatedAt` は report transmission time であり、off-chain market observation の時刻そのものではない。本修正は Chainlink
++  contract が公開する canonical timestamp を cached rate の provenance として使う。
++- soft-freeze は shared JPY dependency の一時障害で全 branch が同時 terminal shutdown するのを避ける設計であり、24時間は
++  stale rate の正しさを保証しない。monitoring と source replacement runbook は引き続き必要である。
++- source contract は delegatecall upgrade ではなく `PriceFeedProxy` 後段の差替対象である。既存 deployment へ state field を
++  注入する migration はなく、新 source deployment 時に constructor の healthy read で provenance を seed する。
++- `JpyRateFrozen` は最初の post-dormancy call で初めて emit されるため、event emission だけでは oracle 停止の早期検知にならない。
++  `latestRoundData.updatedAt` の外部監視を継続する。
++
++## Methodology
++
++- baseline の一時 PoC で報告された first-call clock を両実装に対して実行し、修正前後の A/B を取った。
++- soft-freeze 導入 commit と24h bound 導入 commit まで history を遡り、成立時点と意図を確認した。
++- Chainlink `OffchainAggregator.sol` を immutable commit に固定し、`updatedAt` の contract-level semantics を確認した。
++- current response 起点案を adversarial に再評価し、invalid / revert でも bounded になる cached-rate provenance へ修正した。
++- healthy / stale / invalid、fresh / expired cache、standard / sUSDS、direct / Proxy、recovery / terminal shutdown を組み合わせて
++  safety と liveness を検証した。
++- ABI、storage、bytecode size、event / Ops alert、JP canonical spec、EN support translation、runbook への副作用を追跡した。
+diff --git a/documents/jp/engineering/historical-reviews/README.md b/documents/jp/engineering/historical-reviews/README.md
+index 4f1e02af..8fba9fb8 100644
+--- a/documents/jp/engineering/historical-reviews/README.md
++++ b/documents/jp/engineering/historical-reviews/README.md
+@@ -6,6 +6,7 @@
+ 
+ | 文書                                                                                                                                                                                   | Snapshot   | 内容                                                                                                            |
+ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
++| [`2026-08-03-External-Audit-Mid-03-Jpy-Freeze-Clock-Differential-Review.md`](./2026-08-03-External-Audit-Mid-03-Jpy-Freeze-Clock-Differential-Review.md)                               | 2026-08-03 | 外部監査 Mid 03 の first-call freeze clock 再現、cached JPY rate provenance、無通信 branch の上限と副作用確認   |
+ | [`2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md`](./2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md) | 2026-08-03 | 外部監査 Mid 02 の再現、old source 障害時の path 別 cache continuity guard、明示 emergency との境界、副作用確認 |
+ | [`2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md`](./2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md)                         | 2026-08-03 | 外部監査 Mid 01 の Aave proxy / 複数 market 前提、動的 Pool 追従の副作用、preflight と Strategy migration 境界  |
+ | [`2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md`](./2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md)                                         | 2026-08-03 | 外部監査 High 01 の成立時点、既存修正、3つの Sky 出金経路の返金回帰試験と副作用確認                             |
+diff --git a/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md b/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
+index 78bc845f..c5db702a 100644
+--- a/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
++++ b/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
+@@ -98,7 +98,7 @@ FX が 3 連休（土日月）でクローズする最悪条件を含め、過
+ 
+ ## 5. soft-freeze との関係：72h を採っても無期限 stale にはならない
+ 
+-72h 到達後は `ORCL-SEC-005` の有界 soft-freeze が働くため、本パラメータは stale レートの無期限利用を許可しない。`jpyFrozenSince` は stale を最初に観測した呼び出し時点から計時するため、障害の早期検知は feed の `updatedAt` を直接監視する。規範動作は [Oracle](../../product/spec/Oracle.md) `ORCL-SEC-005`、source 差替の起動時刻と証跡は [Mainnet Deploy Env Freeze Runbook](../gates/Mainnet-Deploy-Env-Freeze-Runbook.md) §3.1.1 を正本とする。
++72h 到達後は `ORCL-SEC-005` の有界 soft-freeze が働くため、本パラメータは stale レートの無期限利用を許可しない。健全時に `lastGoodJpyRate` と同じ response の `updatedAt` を保存し、障害時の `jpyFrozenSince` は初回観測と `lastGoodJpyUpdatedAt + stalenessThreshold` の早い方とする。これにより無通信 branch や invalid / revert 応答でも、保存済み rate が既に stale なら24h窓を再開始しない。保存済み rate がまだ fresh な間の障害は初回観測から計時する。障害の早期検知は引き続き feed の `updatedAt` を直接監視する。規範動作は [Oracle](../../product/spec/Oracle.md) `ORCL-SEC-005`、source 差替の起動時刻と証跡は [Mainnet Deploy Env Freeze Runbook](../gates/Mainnet-Deploy-Env-Freeze-Runbook.md) §3.1.1 を正本とする。
+ 
+ ---
+ 
+diff --git a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index af49296e..7f409877 100644
+--- a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -66,7 +66,7 @@ Broadcast / activation evidence には、各 feed について次の列を残す
+ | JPY/USD feed                     | WATCH: `age > 25h`（heartbeat 1 回欠落＝実測上限 24.02h・25h 超 0 件、監視強化）。Warning: `secondsToStale <= 86400`（= `age >= 48h`、proposeSource 起動の目安） | `JpyRateFrozen` 発火、`jpyFrozenSince > 0`、または stale/invalid が継続                                                                                                                                                                                  |
+ | JPY soft-freeze age              | `jpyFrozenSince > 0` から 12h（提案済み source の confirm 準備 / feed 自己回復の確認）                                                                           | freeze 開始（age≈72h）までに `proposeSource` 未起動なら 24h timelock が freeze 窓（24h）に収まらず pre-shutdown swap 不可 → shutdown（age≈96h）受容＋事後差替へ切替（incident）。提案済みなら timelock 明けに `confirmSource` / `confirmSourceEmergency` |
+ 
+-`jpyFrozenSince` は Chainlink の `updatedAt + stalenessThreshold` ではなく、オンチェーンで stale を初めて観測した block で立つ。したがって監視は `JpyRateFrozen` を待つだけでは足りず、off-chain / RPC で `latestRoundData.updatedAt` の残時間を常時見る。branch-local feed は stale 到達後の最初の `fetchPrice()` で不可逆 shutdown に入るため、stale 直前の warning は go/no-go 判断ではなく incident 予防のための運用 signal として扱う。
++`jpyFrozenSince` と `JpyRateFrozen.timestamp` は、初回障害観測と `lastGoodJpyRate` に対で保存した `lastGoodJpyUpdatedAt + stalenessThreshold` の早い方で、event emission block より古い場合がある。したがって alert age は event block ではなくこの timestamp から計算し、`JpyRateFrozen` を待たず off-chain / RPC でも `latestRoundData.updatedAt` の残時間を常時見る。保存済み rate の stale 境界から24hを既に超えた無通信 branch は、stale・invalid・revert の別を問わず次の `fetchPrice()` と同じ call で shutdown へ進む。保存済み rate がまだ fresh な間の障害だけ初回観測から計時する。stale 直前の warning は go/no-go 判断ではなく incident 予防のための運用 signal として扱う。
+ 
+ **source 差替のタイミング（shutdown 前に間に合わせる）**: JPY/USD の差替は `proposeSource → 24h timelock → confirmSource` / `confirmSourceEmergency` で、**24h timelock は emergency でも不可避**（emergency が bypass するのは価格差 guard のみ）。soft-freeze 窓も 24h（shutdown ≒ `jpyFrozenSince + 24h` ≒ age 96h）なので、**freeze 開始（age≈72h）までに `proposeSource` を起動していないと confirm が shutdown に間に合わない**。したがって deprecation / 永続障害が疑われたら WATCH（`age > 25h`）/ Warning（`age >= 48h`）段階で即 `proposeSource` を起動し、**遅くとも age 72h を絶対デッドライン**とする。`confirmSource` は timelock 明けに実行する（旧 feed が fresh なら live 価格、stale/freeze 中なら Proxy の path 別 last-good cache に対する新旧価格差 ≤1% guard）。1%を超える明示的な incident 復旧だけ `confirmSourceEmergency` を private 送信し、通常経路の暗黙 bypass に依存しない。これで新 fresh feed へ切替 → `JpyRateUnfrozen` → shutdown 回避。期限内に提案できなければ age≈96h で `lastGoodPrice` shutdown し、事後差替で復旧する（有界フェイルセーフの想定動作）。
+ 
+diff --git a/documents/jp/protocol/product/spec/Oracle.md b/documents/jp/protocol/product/spec/Oracle.md
+index 55cd8f70..01654d93 100644
+--- a/documents/jp/protocol/product/spec/Oracle.md
++++ b/documents/jp/protocol/product/spec/Oracle.md
+@@ -192,7 +192,7 @@ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 
+ | 関数 | 可視性 | 要約 | 規定要件 |
+ | --- | --- | --- | --- |
+ | `_fetchPricePrimary()` | internal | 担保/USD → JPY 換算 → `lastGoodPrice` 記録 | ORCL-FR-010〜013 |
+-| `_convertUsdPriceToJpyWithFreeze(uint256 usdPrice)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | JPY/USD で USD→JPY 換算。障害時は `ORCL-SEC-005` に従う | ORCL-FR-010 / ORCL-SEC-005 |
++| `_convertUsdPriceToJpyWithFreeze(uint256 usdPrice)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | JPY/USD で USD→JPY 換算。健全時は rate と `updatedAt` を対で保存し、障害時は初回観測と保存済み rate の stale 境界の早い方を freeze 起点として `ORCL-SEC-005` に従う | ORCL-FR-010 / ORCL-SEC-005 |
+ | `_getCanonicalRate()` | internal (composite) | sUSDS canonical rate（`convertToAssets(1e18)`） | ORCL-FR-012 |
+ | `_applyBackingRatio(uint256 collJpy)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | `collateralVault.backingRatio()` を乗じ dToken 実質担保価値を返す。通常の read failure は oracle failure、gas guard revert は再 revert | ORCL-FR-014 |
+ | `fetchPrice()` / `fetchRedemptionPrice()` / `lastGoodPrice()` | external | upstream 基底由来の IPriceFeed 標準 | [Liquity-v2-Core-Spec](./Liquity-v2-Core-Spec.md) |
+@@ -591,7 +591,7 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ | ORCL-INV-005 | `fetchPrice` / `fetchRedemptionPrice` は gas guard revert（`InsufficientGasForExternalCall`・厳密 4 バイト・セレクタ一致）のみ再 revert し、それ以外の revert / 無効価格は shutdown 経路へ流す | unit / integration |
+ | ORCL-INV-006 | source が brick（`lastGoodPrice()` も取得不能）でも Proxy は自身の経路別 cache（`_lastGoodPrice` / `_lastGoodRedemptionPrice`）を返し、価格取得は permanent DoS にならない。通常価格と redemption 価格が分岐する source でも、source brick 時に redemption 経路が通常価格 cache へ潰れない | unit |
+ | ORCL-INV-007 | 全担保価格は JPY 建てで導出される（`collJpy = mulDiv(collUsd, 1e18, jpyUsdRate)`、floor）。`collUsd` / `jpyUsdRate` はいずれも 18 桁正規化済み | unit / fork |
+-| ORCL-INV-008 | upstream 価格取得基底との差分は明示管理する。`MainnetPriceFeedBase` の差分は Chainlink の不完全 round（`roundId == 0` / `answeredInRound < roundId`）と無効 timestamp（`updatedAt == 0` / 未来時刻）を無効化する検証硬化に限る。`CompositePriceFeed` は sUSDS の primary → `lastGoodPrice` 経路だけを残し、未使用の WSTETH/RETH 用 LST secondary fallback を削除済みであることを static diff で確認する。JPY 換算・backing 乗算は DF ファイルに閉じる | manual / static diff review / unit |
++| ORCL-INV-008 | upstream 価格取得基底との差分は明示管理する。`MainnetPriceFeedBase` の差分は Chainlink の不完全 round（`roundId == 0` / `answeredInRound < roundId`）と無効 timestamp（`updatedAt == 0` / 未来時刻）を無効化する検証硬化、および通常の `_getOracleAnswer` semantics を変えず response の `updatedAt` を既存結果とともに返す internal provenance helper に限る。`CompositePriceFeed` は sUSDS の primary → `lastGoodPrice` 経路だけを残し、未使用の WSTETH/RETH 用 LST secondary fallback を削除済みであることを static diff で確認する。JPY 換算・backing 乗算は DF ファイルに閉じる | manual / static diff review / unit |
+ | ORCL-INV-009 | placeholder ブランチは `PriceFeedPlaceholder`（常に `(1e18, false)`）を source とし、branch shutdown を誘発せず、かつ Vault / dToken の多重ガードで操作不能 | unit / integration |
+ | ORCL-INV-010 | 全 production pattern は `primary` と `lastGoodPrice` の 2 状態のみを使い、`ETHUSDxCanonical` を使わない。JPY レッグは `ORCL-SEC-005` に従う | unit |
+ | ORCL-INV-011 | dToken backing 比は下方専用 `backingRatio ∈ (0, 1e18]`（健全時 `== 1e18`）で、全担保価格に `dTokenJpy = mulDiv(collJpy, backingRatio, 1e18)`（floor）として両 consumer 対称に適用される。`backingRatio()` 取得障害時は `lastGoodBacking` で素通しせず、通常 read failure は shutdown、gas guard revert は再 revert する（[ORCL-FR-014](#orcl-fr-014-dtoken-backing-peg-の反映全担保共通の後段層)） | unit / fork |
+@@ -628,14 +628,14 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ 
+ - Type: Security
+ - Statement:
+-  1. 健全な JPY/USD は `lastGoodJpyRate` を更新し、JPY 換算へ使う。
+-  2. stale・無効値・取得失敗では即時 shutdown せず、`lastGoodJpyRate` を代用する。初回観測 block の時刻を `jpyFrozenSince` に保持し、`JpyRateFrozen` を発火する。
++  1. 健全な JPY/USD は `lastGoodJpyRate` と同じ response の `updatedAt` を `lastGoodJpyUpdatedAt` に対で保存し、JPY 換算へ使う。
++  2. stale・無効値・取得失敗では即時 shutdown せず、`lastGoodJpyRate` を代用する。初回障害観測時に `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)` とし、障害応答の型によらず保存済み rate の stale 境界より freeze 起点を後ろへ動かさない。これにより無通信 branch や timestamp を返さない revert でも24h窓を再開始しない一方、保存済み rate がまだ fresh な間の障害は初回観測から計時する。`JpyRateFrozen(timestamp, frozenRate)` の `timestamp` はこの起点を記録する。
+   3. `jpyFrozenSince` から `PRM-ORACLE-006` 未満は通常処理を継続する。回復時は live rate へ戻し、時刻をゼロクリアして `JpyRateUnfrozen` を発火する。
+   4. `PRM-ORACLE-006` 以上継続した場合は `lastGoodPrice` を使う標準 branch shutdown へ移行する。
+   5. 担保・peg・canonical・backing レッグの障害は JPY soft-freeze より優先して標準 shutdown とする。
+   6. `InsufficientGasForExternalCall` は障害へ変換せず再 revert する。
+ - Parameters: `PRM-ORACLE-001`、`PRM-ORACLE-006`
+-- Verification: unit, integration, fork
++- Verification: unit（保存済み rate の timestamp provenance、stale / invalid 応答で無通信の freeze 上限超過後の初回 call が即 shutdown、保存済み rate が fresh な間の invalid response は初回観測 anchor、24h 内回復、標準 / sUSDS 両実装）, integration（Proxy 経路）, fork
+ 
+ ### ORCL-SEC-006: 中央集権ラッパー担保のペグ監視
+ 
+@@ -693,7 +693,7 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ | ORCL-EVT-004 | Proxy の shutdown 観測イベント（source 障害で shutdown 代行した契機）および upstream source の `ShutDownFromOracleFailure(address failedOracleAddr)` | branch shutdown 発生のアラート（incident response）。DF source 直下の oracle / backing / rate-provider 障害は `failedOracleAddr` で識別する |
+ | ORCL-EVT-005 | OZ `OwnershipTransferStarted` / `OwnershipTransferred` | 所有権移転（deployer→multisig）の監視 |
+ | ORCL-EVT-006 | `SourceSwitchValidated`（old/reference・new 価格、oldSourceHealthy、priceGuardBypassed） | 通常差替 / cache 基準復旧 / 明示 emergency bypass の識別、価格ジャンプ監査 |
+-| ORCL-EVT-007 | `JpyRateFrozen` | JPY soft-freeze の開始検知 |
++| ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` | JPY soft-freeze の検知。`timestamp` は初回観測と保存済み JPY rate の stale 境界の早い方で、event emission block より古い場合がある |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | live JPY/USD への復帰検知 |
+ 
+ - 価格そのもの・`lastGoodPrice` への退避は upstream 基底由来のイベント／状態で観測する（本書は発火本体を持たない）。
+@@ -834,7 +834,7 @@ Resolved: `ORCL-FR-014`、`VAULT-INV-012` に反映済み。
+ - [dToken 要件定義](./dToken.md) — placeholder ブランチ・`setTokenInfo`・cap・`convertTo*`（Day 2 有効化の dToken-first 連携先）
+ - [CollateralVault 要件定義](./CollateralVault.md) — `setUnderlying`・`UnderlyingNotSet`/`UnderlyingMismatch`・mint/redeem（placeholder 多重ガード連携先）
+ - [Parameters.md](../../../Parameters.md) — ブランチ↔担保割当・確定状況・staleness 確定値・MCR/LLTV/CCR・デペグ織込み値の正本
+-- 🔵 `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol` — **upstream 由来・硬化差分あり**。Chainlink 取得・18 桁正規化・`PriceSource`・shutdown（JPY 換算は含まない）。`roundId == 0` / `answeredInRound < roundId` / `updatedAt == 0` / 未来時刻を無効応答として扱う。
++- 🔵 `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol` — **upstream 由来・硬化差分あり**。Chainlink 取得・18 桁正規化・`PriceSource`・shutdown（JPY 換算は含まない）。`roundId == 0` / `answeredInRound < roundId` / `updatedAt == 0` / 未来時刻を無効応答として扱い、response の `updatedAt` を既存結果とともに internal provenance として返せる。
+ - 🔵 `contracts/src/PriceFeeds/CompositePriceFeed.sol` — **upstream 由来・sUSDS 用 pruning あり**。`USDS/USD × canonical rate` の合成基底（`sUSDSPriceFeed` の親）。WSTETH/RETH 用 LST secondary fallback は production `src` から削除済み
+ - 🟢 `contracts/src/PriceFeeds/DFPriceFeedBase.sol` — **DF 新規**。`is MainnetPriceFeedBase`。`jpyUsdOracle` ＋ `_convertUsdPriceToJpyWithFreeze()`（JPY 共通レッグの soft-freeze）＋ `collateralVault.backingRatio()` 乗算を追加（標準・peg 型 DF feed の親）
+ - 🟢 `contracts/src/PriceFeeds/PriceFeedProxy.sol` — **DF 新規**。source 差替（24h timelock）・try/catch shutdown・`Ownable2Step`
+diff --git a/frontend/ops/src/lib/alertCatalog.ts b/frontend/ops/src/lib/alertCatalog.ts
+index 24256870..85f955f8 100644
+--- a/frontend/ops/src/lib/alertCatalog.ts
++++ b/frontend/ops/src/lib/alertCatalog.ts
+@@ -40,7 +40,7 @@ export const ALERT_POLICY = {
+   "ALRT-ORCL-005": {
+     policySeverity: "P1",
+     publicMessageRequired: false,
+-    action: "freeze 開始 block、source proposal、public comms 要否を確認",
++    action: "freeze 起点 timestamp・検知 block、source proposal、public comms 要否を確認",
+     runbook: INCIDENT_NOTIFICATION_RUNBOOK,
+   },
+   "ALRT-ORCL-006": {
+diff --git a/frontend/ops/src/lib/alerts.ts b/frontend/ops/src/lib/alerts.ts
+index fc076185..bed82097 100644
+--- a/frontend/ops/src/lib/alerts.ts
++++ b/frontend/ops/src/lib/alerts.ts
+@@ -360,7 +360,7 @@ function branchAlerts(br: BranchSnapshot, blockTimestamp: bigint, options: Alert
+       ...alertPolicy(freezeAlert.alertId, {
+         policySeverity: freezeAlert.policySeverity,
+         publicMessageRequired: freezeAlert.publicMessageRequired,
+-        action: "freeze 開始 block、source proposal、public comms 要否を確認",
++        action: "freeze 起点 timestamp・検知 block、source proposal、public comms 要否を確認",
+       }),
+       severity: "critical",
+       scope,
+diff --git a/package.json b/package.json
+index a936d8bf..3fab18b2 100644
+--- a/package.json
++++ b/package.json
+@@ -31,7 +31,7 @@
+       "preact": "10.26.10",
+       "sha.js": "2.4.12",
+       "sharp": "0.35.0",
+-      "socket.io-parser": "4.2.6",
++      "socket.io-parser": "4.2.7",
+       "uuid": "11.1.1",
+       "ws@7": "7.5.11",
+       "ws@8": "8.21.0"
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 3cfb6b0d..96fd9138 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -24,7 +24,7 @@ overrides:
+   preact: 10.26.10
+   sha.js: 2.4.12
+   sharp: 0.35.0
+-  socket.io-parser: 4.2.6
++  socket.io-parser: 4.2.7
+   uuid: 11.1.1
+   ws@7: 7.5.11
+   ws@8: 8.21.0
+@@ -14019,15 +14019,15 @@ packages:
+       '@socket.io/component-emitter': 3.1.2
+       debug: 4.3.7
+       engine.io-client: 6.6.3
+-      socket.io-parser: 4.2.6
++      socket.io-parser: 4.2.7
+     transitivePeerDependencies:
+       - bufferutil
+       - supports-color
+       - utf-8-validate
+     dev: false
+ 
+-  /socket.io-parser@4.2.6:
+-    resolution: {integrity: sha512-asJqbVBDsBCJx0pTqw3WfesSY0iRX+2xzWEWzrpcH7L6fLzrhyF8WPI8UaeM4YCuDfpwA/cgsdugMsmtz8EJeg==}
++  /socket.io-parser@4.2.7:
++    resolution: {integrity: sha512-IH/iSeO9T6gz1KkFleGDWkG9N3dl4jXVYUtMhIqH10Md0ttMer8nUNWiP1DKuNrybD2xBrixLJdCC9J6ECoYkg==}
+     engines: {node: '>=10.0.0'}
+     dependencies:
+       '@socket.io/component-emitter': 3.1.2

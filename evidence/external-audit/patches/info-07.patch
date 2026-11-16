@@ -1,0 +1,254 @@
+diff --git a/contracts/test/ERC4626Strategy.t.sol b/contracts/test/ERC4626Strategy.t.sol
+index 4b4465af..52a2e35d 100644
+--- a/contracts/test/ERC4626Strategy.t.sol
++++ b/contracts/test/ERC4626Strategy.t.sol
+@@ -133,6 +133,9 @@ contract MockMerklDistributor {
+ /// @notice Covers the adapter shape intended for Morpho Vault / EulerEarn /
+ ///         other ERC-4626 venues whose `asset()` matches the Vault underlying.
+ contract ERC4626StrategyTest is Test {
++    bytes32 internal constant ERC1967_IMPLEMENTATION_SLOT =
++        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
++
+     address public admin;
+     address public treasury;
+     address public alice;
+@@ -555,6 +558,56 @@ contract ERC4626StrategyTest is Test {
+         assertEq(cachedValue, 0, "valuation cache reduced after emergency push");
+     }
+ 
++    function test_ExternalAuditInfo07_ReplacesVenueWithFreshStrategyWithoutImplementationUpgrade() public {
++        (CollateralVault vault, ERC4626Strategy oldStrategy, MockERC4626Vault oldVenue, MockERC20 underlyingToken) =
++            _deployERC4626Setup();
++        _depositAndAllocate(vault, underlyingToken, 100e18);
++
++        bytes32 oldImplementationBefore = vm.load(address(oldStrategy), ERC1967_IMPLEMENTATION_SLOT);
++        MockERC4626Vault newVenue = new MockERC4626Vault(IERC20(address(underlyingToken)));
++        ERC4626Strategy newImplementation = new ERC4626Strategy();
++        ERC4626Strategy newStrategy = ERC4626Strategy(
++            address(
++                new ERC1967Proxy(
++                    address(newImplementation),
++                    abi.encodeWithSelector(
++                        ERC4626Strategy.initialize.selector,
++                        address(vault),
++                        IERC20(address(underlyingToken)),
++                        admin,
++                        admin,
++                        IERC4626(address(newVenue))
++                    )
++                )
++            )
++        );
++
++        // Freeze the old destination and register the independently validated
++        // replacement before draining. Both adapters can coexist while an
++        // asynchronous or partially liquid old venue finishes recovery.
++        vault.updateStrategy(IStrategy(address(oldStrategy)), 0, type(uint256).max, false);
++        vault.addToWhitelist(address(newStrategy));
++        vault.addStrategy(IStrategy(address(newStrategy)), 10_000, type(uint256).max);
++
++        vm.prank(admin);
++        uint256 recovered = oldStrategy.emergencyWithdrawFromERC4626();
++        vault.removeStrategy(IStrategy(address(oldStrategy)));
++        vault.allocate();
++
++        assertEq(recovered, 100e18, "old venue principal returned through Vault");
++        assertEq(oldStrategy.principal(), 0, "old principal drained");
++        assertEq(oldVenue.balanceOf(address(oldStrategy)), 0, "old position drained");
++        assertEq(vm.load(address(oldStrategy), ERC1967_IMPLEMENTATION_SLOT), oldImplementationBefore, "no old upgrade");
++        assertEq(address(newStrategy.erc4626Vault()), address(newVenue), "fresh proxy binds replacement venue");
++        assertEq(newStrategy.principal(), 100e18, "principal allocated to replacement");
++        assertEq(newVenue.balanceOf(address(newStrategy)), 100e18, "replacement position funded");
++        assertEq(vault.getStrategiesCount(), 1, "old Strategy removed after complete drain");
++        (IStrategy registered,) = vault.getStrategyAt(0);
++        assertEq(address(registered), address(newStrategy), "replacement is the sole registered Strategy");
++        assertEq(vault.totalUnderlying(), 100e18, "migration preserves accounted assets");
++        assertEq(vault.backingRatio(), 1e18, "migration preserves full backing");
++    }
++
+     function test_EmergencyWithdrawFromERC4626_PartialRecoveryAccountsReturnedPrincipal() public {
+         (CollateralVault vault, ERC4626Strategy strategy, MockERC4626Vault erc4626Vault, MockERC20 underlyingToken) =
+             _deployERC4626Setup();
+diff --git a/documents/en/protocol/product/spec/strategies/Strategy.md b/documents/en/protocol/product/spec/strategies/Strategy.md
+index bbeeec40..3a90a236 100644
+--- a/documents/en/protocol/product/spec/strategies/Strategy.md
++++ b/documents/en/protocol/product/spec/strategies/Strategy.md
+@@ -100,9 +100,22 @@ Strategy proxy and replace the Vault registration through `addToWhitelist` →
+ protocol-specific emergency recovery, and `writeoffStrategyPrincipal` if needed
+ → `removeStrategy`.
+ 
++This replacement does not require an implementation upgrade or migration setter
++on the old Strategy proxy. Old and new Strategies can remain registered together:
++the old one is set to zero weight / disabled to stop new allocation, then a
++synchronous venue is recovered atomically or an asynchronous venue remains
++registered until request / claim completion. `removeStrategy` requires both
++`principal == 0` and `estimatedTotalUnderlying() == 0` on chain, so registration
++cannot be removed while an accounted position remains.
++
+ The reason is that venue setters create an attack surface where the Strategy
+ Owner can move the destination of funds after deployment, and they expand the
+-scope of allowance, storage-layout, and external-protocol invariant review. If a
++scope of allowance, storage-layout, and external-protocol invariant review.
++Position shares, self-owned amount ledgers, asynchronous request IDs / NFTs, and
++token allowances are also bound to the old venue graph; overwriting only an
++address can lose the valuation, claim, or protected-token boundary for the old
++position. The one-shot core-branch `AddressesRegistry` must not be repurposed as
++a mutable venue registry for multiple Strategies. If a
+ future protocol truly requires setter-style venue updates, specify it as a
+ separate upgrade design that includes timelock, preflight, and runbook
+ requirements.
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-07-Strategy-Venue-Address-Immutability-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-07-Strategy-Venue-Address-Immutability-Differential-Review.md
+new file mode 100644
+index 00000000..02bf46d0
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-07-Strategy-Venue-Address-Immutability-Differential-Review.md
+@@ -0,0 +1,127 @@
++# External Audit Info 07: Strategy venue address 不変性 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/strategies/Strategy.md` §2.4 と各 Strategy 子仕様を参照する。
++
++## Executive Summary
++
++外部監査 Info 07「Strategy Contracts Store External Protocol Addresses Without Update Functions」のコード観測は正しい。
++ただし「接続先変更には incident ごとの implementation upgrade が必要」という前提と、全 address に governance setter を
++追加する recommendation は現行 migration model と一致しない。
++
++1 Strategy instance は 1 Underlying × 1 venue に固定する。接続先を変更する場合は旧 Strategy を停止・回収し、別 venue を
++検証した fresh Strategy proxy を Vault へ並行登録して入れ替える。旧 proxy の implementation upgrade も address migration
++setter も不要であり、非同期 position が残る間は旧 proxy を disabled のまま登録に残せる。
++
++**判定**: Informational observation accepted; blanket setter / registry remediation rejected。production semantics は維持し、
++実 `CollateralVault` + 2つの実 ERC-4626 venue + 2つの実 `ERC4626Strategy` proxy で、旧 implementation を変更せず
++100e18 の backing を維持した venue replacement を固定する。
++
++## Scope And Baseline
++
++- 外部指摘: Info 07 — external protocol address setter 不在
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `ERC4626Strategy` / `LidoStrategy` / `EtherfiWeETHStrategy` / `SkyUsdcSUsdsStrategy`
++- 共通 migration surface: `CollateralVault.addToWhitelist` / `addStrategy` / `updateStrategy` / `removeStrategy`
++- 回帰証拠: `contracts/test/ERC4626Strategy.t.sol`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| venue address は initialize 後に setter で変更できない | True and specified | 1 proxy = 1 venue の security invariant |
++| upstream hard replacement 時に同じ proxy を更新できない | True | state / allowance / request graph を旧 venue に残すため意図的 |
++| system は implementation upgrade なしでは移行できない | False | fresh proxy を並行登録し、旧 position 回収後に remove する |
++| generic governance setter は incident response を改善する | Incomplete | timelock 前の即時対応は disable + fixed-destination emergency recovery |
++| address を `AddressesRegistry` へ移すべき | Incompatible | core registry は branch ごとの one-shot、Vault は複数 Strategy / venue を持てる |
++| zero / code check が必要 | Already enforced at activation boundary | 各 initializer と Vault `addStrategy` が検査し、protocol graph 固有の semantic check も行う |
++
++## Why An Address Setter Is Not A State Migration
++
++各 address は単なる stateless call target ではない。
++
++| Strategy | Old venue に束縛された state / authority | setter-only replacement の failure mode |
++| --- | --- | --- |
++| ERC-4626 | `_ownShares`、Strategy 保有 share、vault allowance | getter を新 vault へ向けると旧 share の valuation / redeem / protected token 境界を失う |
++| Lido | `_ownWstETH`、wstETH balance、Withdrawal Queue requestIds / NFT、allowance | queue / wstETH の片側変更で pending claim と position ledger が分断される |
++| Etherfi | `_ownWeETH`、adapter graph、WithdrawRequestNFT requestIds、allowance | LiquidityPool / eETH / weETH / adapter / NFT の整合性と旧 pending request が壊れる |
++| Sky | `_ownSUsdsShares`、sUSDS share、idle USDS、converter / vault token graph | share vault と converter の一部差替で decimals / asset / quote /旧 share 回収が不整合になる |
++
++initializer は address の nonzero / code だけでなく asset、token、reverse binding、adapter identity、queue bounds 等を venue ごとに
++検証する。generic setter へ同じ検証を移しても、既存 position の migration と approval revoke / grant を安全に原子化できるわけではない。
++
++## Existing Incident And Migration Path
++
++1. GUARDIAN が `emergencyDisableStrategy(old)`、または GOV が old を weight 0 / disabled にして新規 allocation を停止
++2. 新 venue の contracts、asset graph、recovery path、cap / weight を独立 freeze package で検証
++3. fresh Strategy proxy を initialize し、Vault whitelist / registration へ追加
++4. old の `sendToVault` または protocol-specific emergency recovery で回収
++5. async venue は request / finalization / permissionless claim 完了まで old を disabled 登録のまま維持
++6. 回収不能損失だけを `writeoffStrategyPrincipal` で明示認識
++7. `principal == 0` かつ `estimatedTotalUnderlying() == 0` を満たした old を `removeStrategy`
++8. new の承認済み weight / cap で allocation を段階再開
++
++Owner / Guardian は即時の停止・Vault 固定宛先回収を持つ一方、投資先変更権限を持たない。new Strategy の activation は GOV
++Timelock を通るため、setter を同じ Timelock に置いても緊急停止の速度は改善しない。Owner setter にすると緊急鍵侵害が
++任意 venue への資金移動へ拡大する。
++
++## ERC-4626 Replacement Replay
++
++実 replay は次の state transition を同一 `CollateralVault` で行う。
++
++| Step | old Strategy | new Strategy | Vault backing |
++| --- | ---: | ---: | ---: |
++| deposit / allocate | principal 100、old venue shares 100 | 未登録 | 1.0 |
++| old disable + fresh proxy add | principal 100、weight 0 | principal 0、weight 100% | 1.0 |
++| old emergency drain | principal 0、shares 0 | principal 0 | 1.0（100 は buffer） |
++| old remove + allocate | 未登録 | principal 100、new venue shares 100 | 1.0 |
++
++テストは old proxy の ERC-1967 implementation slot を前後比較し、変更がないことも確認する。old/new venue と Strategy は
++別 address で、fresh initializer が `asset() == underlying` と approval を再検証する。
++
++## Why UUPS Is Not The Primary Venue Switch
++
++UUPS は logic bug 修正と protocol adapter evolution の escape hatch だが、通常の venue replacement の第一選択ではない。
++同じ proxy の storage を維持するため、implementation migration は inheritance order、storage layout、old position accounting、
++allowance、protected token、pending request の互換性をすべて証明する必要がある。
++
++fresh proxy は新旧 state machine を並行維持し、old position が zero になるまで old logic / address graph を保存する。
++そのため hard replacement では code change より小さい migration blast radius になる。
++
++## Verification
++
++```text
++forge test --match-contract ERC4626StrategyTest \
++  --match-test test_ExternalAuditInfo07_ReplacesVenueWithFreshStrategyWithoutImplementationUpgrade -vv
++forge test --match-contract ERC4626StrategyTest
++forge test -q --summary --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++forge fmt --check test/ERC4626Strategy.t.sol
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- focused replacement replay pass
++- ERC4626Strategy suite 23 passed / 0 failed
++- forkless broad gate 1,413 passed / 0 failed
++- production source / ABI / storage diff は 0
++- changed Solidity test format / whitespace clean
++- old implementation slot 不変、100e18 assets / backing ratio 1e18 を migration 前後で維持
++
++## Residual Risk
++
++- hard replacement 中は新旧 venue を同時に監視する必要があり、運用期間と gas / valuation loop の Strategy 数が一時的に増える。
++- async old venue の finalization が停止すると old Strategy を remove できない。回収不能が確定するまでは premature writeoff / remove を
++  行わず、pending valuation bps と incident cache policy で保守評価する。
++- fresh proxy の登録は GOV Timelock を要するため新規 allocation 再開は即時でない。停止・回収は Guardian / Owner が先行できる。
++- implementation upgrade が本当に必要な場合は storage layout、state migration、old allowance revoke、new graph validation を
++  Strategy 固有に追加監査する。generic setter の存在を migration proof の代わりにしない。
++
++## Methodology
++
++- freeze finding と Strategy / child specifications の明示的 no-setter policy を比較した。
++- 4 Strategy の position ledger、approval、async request / NFT、initializer graph validation を追跡した。
++- Vault の whitelist / add / update / disable / writeoff / remove precondition を確認した。
++- 2 venue の end-to-end replacement を実コントラクトで replay し、implementation slot と backing continuity を計測した。
+diff --git a/documents/jp/protocol/product/spec/strategies/Strategy.md b/documents/jp/protocol/product/spec/strategies/Strategy.md
+index 790043a2..0f97d238 100644
+--- a/documents/jp/protocol/product/spec/strategies/Strategy.md
++++ b/documents/jp/protocol/product/spec/strategies/Strategy.md
+@@ -116,8 +116,16 @@ Strategy proxy をデプロイし、Vault 側で `addToWhitelist` → `addStrate
+ → 旧 Strategy の `sendToVault`・固有 emergency・`writeoffStrategyPrincipal`（必要時）
+ → `removeStrategy` の順で入れ替える。
+ 
++この入替は旧 Strategy proxy の implementation upgrade や migration setter を必要としない。新旧 Strategy を同時に
++登録できるため、旧側を weight 0 / disabled にして新規 allocation を止めたまま、同期 venue は同一 tx の emergency 回収、
++非同期 venue は request / claim 完了まで旧 proxy を登録状態で残せる。`removeStrategy` は旧 Strategy の `principal == 0` かつ
++`estimatedTotalUnderlying() == 0` を on-chain で要求するため、position を残したまま登録だけを外すことはできない。
++
+ 理由は、接続先 setter が「Owner が資金の行き先を後から変える」攻撃面になり、allowance・
+-storage layout・外部 protocol invariant の再検証範囲を広げるためである。将来どうしても setter 型の
++storage layout・外部 protocol invariant の再検証範囲を広げるためである。さらに position share、自己保有量 ledger、
++async requestId / NFT、token allowance は旧 venue graph に束縛されており、address だけを上書きすると旧 position の
++valuation / claim / protected-token 境界を失い得る。core branch 用で one-shot の `AddressesRegistry` を複数 Strategy の
++可変 venue registry として再利用しない。将来どうしても setter 型の
+ 更新が必要な protocol は、Strategy 単体ではなく upgrade 設計・timelock・preflight・runbook を含む
+ 別要件として扱う。
+ 

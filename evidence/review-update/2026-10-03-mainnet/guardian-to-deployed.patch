@@ -1,0 +1,520 @@
+diff --git a/contracts/src/CollateralVault.sol b/contracts/src/CollateralVault.sol
+index ebad26a9614399e53512081d73896dc4c0f814fb..8645007f0078e99abf24dc4328a1c149cc8e4304 100644
+--- a/contracts/src/CollateralVault.sol
++++ b/contracts/src/CollateralVault.sol
+@@ -70,12 +70,24 @@ contract CollateralVault is
+     // =============================================================
+ 
+     bytes32 internal constant GOV_ROLE = keccak256("GOV_ROLE");
++    // ALLOCATOR is deliberately restricted to allocate; no legacy umbrella role.
+     bytes32 internal constant ALLOCATOR_ROLE = keccak256("ALLOCATOR_ROLE");
++    bytes32 internal constant WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
++    bytes32 internal constant HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
++    bytes32 internal constant TREASURY_TRANSFER_ROLE = keccak256("TREASURY_TRANSFER_ROLE");
+     bytes32 internal constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
+     bytes32 internal constant WRITEOFF_ROLE = keccak256("WRITEOFF_ROLE");
+ 
+     uint256 internal constant BPS_DENOMINATOR = 10000;
+     uint256 internal constant DEFAULT_STRATEGY_VALUATION_MAX_AGE = 1 days;
++    /// @dev Default gas budget handed to each Strategy valuation probe. A registered Strategy must
++    ///      value itself within the active budget; a probe that exceeds it is a genuine valuation
++    ///      failure. GOV can retune the budget within the bounds below.
++    uint256 internal constant DEFAULT_STRATEGY_VALUATION_GAS = 500_000;
++    uint256 internal constant MIN_STRATEGY_VALUATION_GAS = 100_000;
++    uint256 internal constant MAX_STRATEGY_VALUATION_GAS = 2_000_000;
++    /// @dev Headroom the Vault keeps for the probe call frames and the catch paths.
++    uint256 internal constant STRATEGY_VALUATION_GAS_MARGIN = 20_000;
+     uint256 public constant MAX_STRATEGIES = 32;
+ 
+     // =============================================================
+@@ -113,9 +125,12 @@ contract CollateralVault is
+     uint256 private _backstopReserve;
+     mapping(IStrategy => StrategyValuationCache) public override strategyValuationCaches; // [3b]
+     uint256 public override strategyValuationMaxAge; // [3b]
++    /// @dev Zero means DEFAULT_STRATEGY_VALUATION_GAS, so an upgraded proxy whose slot is still
++    ///      unset keeps the default budget instead of probing with no gas.
++    uint256 private _strategyValuationGasBudget; // [3b]
+ 
+     /// @dev Storage gap for future upgrades. See OpenZeppelin's storage gap guidance.
+-    uint256[47] private __gap;
++    uint256[46] private __gap;
+ 
+     // =============================================================
+     //                          ERRORS
+@@ -124,6 +139,10 @@ contract CollateralVault is
+     error Paused();
+     error ZeroAddress();
+     error ZeroAmount();
++    /// @dev Caller cannot fund the fixed Strategy valuation probe budget. Same signature as the
++    ///      price-feed gas guard so JpyFreezeLib and PriceFeedProxy bubble it instead of shutting down.
++    error InsufficientGasForExternalCall();
++    error InvalidStrategyValuationGasBudget(uint256 budget);
+     error InvalidBufferConfig();
+     error RequestNotReady();
+     error RequestNotFound();
+@@ -198,12 +217,16 @@ contract CollateralVault is
+         bufferTargetBps = 2000; // 20%
+         allocateMaxMove = type(uint256).max;
+         strategyValuationMaxAge = DEFAULT_STRATEGY_VALUATION_MAX_AGE;
++        _strategyValuationGasBudget = DEFAULT_STRATEGY_VALUATION_GAS;
+         withdrawDelay = 1 days;
+         nextRequestId = 1;
+ 
+         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+         _grantRole(GOV_ROLE, _admin);
+         _grantRole(ALLOCATOR_ROLE, _admin);
++        _grantRole(WITHDRAWER_ROLE, _admin);
++        _grantRole(HARVESTER_ROLE, _admin);
++        _grantRole(TREASURY_TRANSFER_ROLE, _admin);
+         _grantRole(GUARDIAN_ROLE, _admin);
+         _grantRole(WRITEOFF_ROLE, _admin);
+     }
+@@ -473,7 +496,7 @@ contract CollateralVault is
+     function transferYieldToTreasury()
+         external
+         override
+-        onlyRole(ALLOCATOR_ROLE)
++        onlyRole(TREASURY_TRANSFER_ROLE)
+         whenNotPausedAllocation
+         nonReentrant
+         returns (uint256 transferred)
+@@ -772,6 +795,22 @@ contract CollateralVault is
+         emit StrategyValuationMaxAgeUpdated(oldMaxAge, _maxAge);
+     }
+ 
++    /// @inheritdoc ICollateralVault
++    function setStrategyValuationGasBudget(uint256 _budget) external override onlyRole(GOV_ROLE) {
++        if (_budget < MIN_STRATEGY_VALUATION_GAS || _budget > MAX_STRATEGY_VALUATION_GAS) {
++            revert InvalidStrategyValuationGasBudget(_budget);
++        }
++        uint256 oldBudget = strategyValuationGasBudget();
++        _strategyValuationGasBudget = _budget;
++        emit StrategyValuationGasBudgetUpdated(oldBudget, _budget);
++    }
++
++    /// @inheritdoc ICollateralVault
++    function strategyValuationGasBudget() public view override returns (uint256 budget) {
++        budget = _strategyValuationGasBudget;
++        if (budget == 0) budget = DEFAULT_STRATEGY_VALUATION_GAS;
++    }
++
+     function refreshStrategyValuation(IStrategy _strategy) external override returns (bool refreshed) {
+         if (!_isRegisteredStrategy(_strategy)) revert StrategyNotFound();
+         refreshed = _refreshStrategyValuation(_strategy);
+@@ -1189,7 +1228,13 @@ contract CollateralVault is
+         view
+         returns (uint256 estimated, bool available)
+     {
+-        try _strategy.estimatedTotalUnderlying() returns (uint256 value) {
++        // Check each probe at its call boundary: the previous probe may have spent its budget.
++        // Bubble caller underfunding instead of treating a clipped stipend as valuation failure.
++        uint256 budget = strategyValuationGasBudget();
++        if (gasleft() < budget * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++            revert InsufficientGasForExternalCall();
++        }
++        try _strategy.estimatedTotalUnderlying{gas: budget}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+@@ -1197,7 +1242,11 @@ contract CollateralVault is
+     }
+ 
+     function _tryPrincipal(IStrategy _strategy) internal view returns (uint256 principal_, bool available) {
+-        try _strategy.principal() returns (uint256 value) {
++        uint256 budget = strategyValuationGasBudget();
++        if (gasleft() < budget * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++            revert InsufficientGasForExternalCall();
++        }
++        try _strategy.principal{gas: budget}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+diff --git a/contracts/src/Dependencies/Constants.sol b/contracts/src/Dependencies/Constants.sol
+index 72e8a6f6f6a3d20ce8433ccfd5162120bf6528de..3c0714a4bfc404c5ed93f5537c3fb04cfa63df36 100644
+--- a/contracts/src/Dependencies/Constants.sol
++++ b/contracts/src/Dependencies/Constants.sol
+@@ -26,7 +26,7 @@ uint256 constant CCR_DWSTETH = 14167 * _1pct / 100; // 141.67%
+ uint256 constant SCR_DWSTETH = 110 * _1pct; // 110%
+ uint256 constant BCR_DWSTETH = 10 * _1pct; // 10%
+ uint256 constant LIQUIDATION_PENALTY_SP_DWSTETH = 5 * _1pct; // 5%
+-uint256 constant LIQUIDATION_PENALTY_REDISTRIBUTION_DWSTETH = 10 * _1pct; // 10%
++uint256 constant LIQUIDATION_PENALTY_REDISTRIBUTION_DWSTETH = 20 * _1pct; // 20%
+ 
+ // Branch 1: dUSDC (USDC) — confirmed
+ uint256 constant MCR_DUSDC = 11158 * _1pct / 100; // 111.58%
+diff --git a/contracts/src/Initiatives/UniV4MerklInitiative.sol b/contracts/src/Initiatives/UniV4MerklInitiative.sol
+index 6afe24bc0b6095c63f7884530483f2900605ec87..13eb7f1f95c40f8572f5003faaa91773a267fdd1 100644
+--- a/contracts/src/Initiatives/UniV4MerklInitiative.sol
++++ b/contracts/src/Initiatives/UniV4MerklInitiative.sol
+@@ -8,6 +8,7 @@ import {ReentrancyGuard} from "openzeppelin-contracts/contracts/security/Reentra
+ 
+ import {IDistributionCreator} from "src/Interfaces/IDistributionCreator.sol";
+ import {IInitiative} from "src/Interfaces/IInitiative.sol";
++import {PILAllocator} from "src/PILAllocator.sol";
+ 
+ /**
+  * @title UniV4MerklInitiative
+@@ -36,6 +37,7 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     mapping(uint256 => bytes32) public campaignIdByStartTimestamp;
+ 
+     event NewMerklCampaign(uint256 indexed epoch, uint256 amount, bytes32 campaignId);
++    event FundsReturnedToAllocator(uint256 amount);
+     event MerklCampaignAlreadyCreated(
+         uint256 indexed epoch, uint256 indexed startTimestamp, uint256 amount, bytes32 campaignId
+     );
+@@ -51,6 +53,10 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     error UniV4MerklInitiative__CampaignCreationTooEarly(uint256 earliestPublicCreation);
+     error UniV4MerklInitiative__TimestampTooLarge(uint256 timestamp);
+     error UniV4MerklInitiative__DependencyNotContract(address dependency);
++    error UniV4MerklInitiative__Unauthorized();
++    error UniV4MerklInitiative__Inactive();
++    error UniV4MerklInitiative__StillRegistered();
++    error UniV4MerklInitiative__AllocatorTokenMismatch();
+ 
+     constructor(
+         address _allocator,
+@@ -70,8 +76,12 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         if (address(_jpydfToken) == address(0)) revert UniV4MerklInitiative__ZeroAddress();
+         if (address(_merklDistributionCreator) == address(0)) revert UniV4MerklInitiative__ZeroAddress();
+         if (_campaignCreator == address(0)) revert UniV4MerklInitiative__ZeroAddress();
++        _requireContractDependency(_allocator);
+         _requireContractDependency(address(_jpydfToken));
+         _requireContractDependency(address(_merklDistributionCreator));
++        if (address(PILAllocator(_allocator).jpydfToken()) != address(_jpydfToken)) {
++            revert UniV4MerklInitiative__AllocatorTokenMismatch();
++        }
+         _requireEpochConfig(_epochStart, _epochDuration);
+         _requireCampaignConfig(_campaignJpydfAmountThreshold, _campaignCreationWindow, _epochDuration, _uniV4PoolId);
+         _requireWeights(_weightFees, _weightToken0, _weightToken1);
+@@ -97,7 +107,12 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     //////////////////////////////////////////////////////////////*/
+ 
+     function createCampaign() external nonReentrant returns (bytes32 campaignId) {
+-        uint256 amount = jpydfToken.balanceOf(address(this));
++        PILAllocator funding = PILAllocator(allocator);
++        if (!funding.registeredInitiatives(address(this)) || funding.paused()) {
++            revert UniV4MerklInitiative__Inactive();
++        }
++        uint256 pending = funding.pendingFunding(address(this));
++        uint256 amount = jpydfToken.balanceOf(address(this)) + pending;
+         if (amount < CAMPAIGN_JPYDF_AMOUNT_THRESHOLD) return bytes32(0);
+ 
+         uint256 currentEpoch = epoch();
+@@ -111,6 +126,8 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         }
+         _requireCampaignCreationAllowed(campaignStart);
+ 
++        // A Merkl revert rolls back both this withdrawal and the allocator's accounting.
++        if (pending != 0) funding.claimDeferredFunding();
+         jpydfToken.forceApprove(address(merklDistributionCreator), amount);
+         campaignId = merklDistributionCreator.createCampaign(
+             IDistributionCreator.CampaignParameters({
+@@ -131,7 +148,20 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         emit NewMerklCampaign(currentEpoch, amount, campaignId);
+     }
+ 
+-    function onRegisterInitiative(uint256) external override {}
++    function onRegisterInitiative(uint256) external override {
++        if (msg.sender != allocator) revert UniV4MerklInitiative__Unauthorized();
++        PILAllocator(allocator).enableDeferredFunding();
++    }
++
++    /// @notice Return direct transfers after retirement, always to the fixed allocator.
++    function returnFundsToAllocator() external nonReentrant {
++        if (PILAllocator(allocator).registeredInitiatives(address(this))) {
++            revert UniV4MerklInitiative__StillRegistered();
++        }
++        uint256 amount = jpydfToken.balanceOf(address(this));
++        jpydfToken.safeTransfer(allocator, amount);
++        emit FundsReturnedToAllocator(amount);
++    }
+ 
+     function onUnregisterInitiative(uint256) external override {}
+ 
+@@ -166,7 +196,14 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     }
+ 
+     function canCreateCampaign(address caller) public view returns (bool) {
+-        if (jpydfToken.balanceOf(address(this)) < CAMPAIGN_JPYDF_AMOUNT_THRESHOLD) return false;
++        PILAllocator funding = PILAllocator(allocator);
++        if (!funding.registeredInitiatives(address(this)) || funding.paused()) return false;
++        if (
++            jpydfToken.balanceOf(address(this)) + funding.pendingFunding(address(this))
++                < CAMPAIGN_JPYDF_AMOUNT_THRESHOLD
++        ) {
++            return false;
++        }
+         uint256 campaignStart = nextCampaignStart();
+         if (campaignIdByStartTimestamp[campaignStart] != bytes32(0)) return false;
+         if (caller == CAMPAIGN_CREATOR) return true;
+@@ -206,7 +243,9 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         uint256 epochDuration_,
+         bytes32 uniV4PoolId_
+     ) internal pure {
+-        if (campaignJpydfAmountThreshold_ == 0) revert UniV4MerklInitiative__ZeroCampaignThreshold();
++        if (campaignJpydfAmountThreshold_ == 0) {
++            revert UniV4MerklInitiative__ZeroCampaignThreshold();
++        }
+         if (campaignCreationWindow_ == 0 || campaignCreationWindow_ >= epochDuration_) {
+             revert UniV4MerklInitiative__InvalidCampaignCreationWindow();
+         }
+diff --git a/contracts/src/Interfaces/ICollateralVault.sol b/contracts/src/Interfaces/ICollateralVault.sol
+index 895702a4a717090338e53038b9a3ae0a641f9d8a..6ec5a1702aae929d0e2e3626c47ddae45bf9b9b0 100644
+--- a/contracts/src/Interfaces/ICollateralVault.sol
++++ b/contracts/src/Interfaces/ICollateralVault.sol
+@@ -108,6 +108,7 @@ interface ICollateralVault {
+         uint256 backingRatioAfter
+     );
+     event StrategyValuationMaxAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
++    event StrategyValuationGasBudgetUpdated(uint256 oldBudget, uint256 newBudget);
+     event StrategyValuationRefreshed(
+         address indexed strategy, uint256 estimatedUnderlying, uint256 principal, uint256 conservativeValue
+     );
+@@ -146,6 +147,8 @@ interface ICollateralVault {
+     function pausedAllocation() external view returns (bool);
+     function pendingWithdrawals() external view returns (uint256);
+     function strategyValuationMaxAge() external view returns (uint256);
++    /// @notice Gas forwarded to each Strategy valuation probe (`estimatedTotalUnderlying`, `principal`).
++    function strategyValuationGasBudget() external view returns (uint256);
+     function strategyValuationCaches(IStrategy _strategy)
+         external
+         view
+@@ -226,7 +229,7 @@ interface ICollateralVault {
+     // --- Yield / Treasury Functions ---
+ 
+     /// @notice Send the managed-asset surplus over current liabilities to the treasury.
+-    ///         ALLOCATOR_ROLE. Computes
++    ///         TREASURY_TRANSFER_ROLE. Computes
+     ///         `managedUnderlying - (dToken backing + pendingWithdrawals)` using the
+     ///         liquid buffer plus conservative per-Strategy view
+     ///         `min(estimatedTotalUnderlying, principal)`, explicitly excluding
+@@ -277,6 +280,8 @@ interface ICollateralVault {
+ 
+     function setAllocatorConfig(uint256 _maxMove, uint256 _cooldown) external;
+     function setStrategyValuationMaxAge(uint256 _maxAge) external;
++    /// @notice Retune the per-probe Strategy valuation gas budget. GOV_ROLE; bounded to [100_000, 2_000_000].
++    function setStrategyValuationGasBudget(uint256 _budget) external;
+     function refreshStrategyValuation(IStrategy _strategy) external returns (bool refreshed);
+     /// @notice Drop a Strategy's fallback valuation cache. GOV_ROLE, or WRITEOFF_ROLE after allocation is paused
+     ///         or the Strategy is disabled.
+diff --git a/contracts/src/Interfaces/IStrategy.sol b/contracts/src/Interfaces/IStrategy.sol
+index 3d5697fe82226639e600d2fa3acce9f8148dad42..6abc07cf2930174b8256158e3b7130f2b8fb2233 100644
+--- a/contracts/src/Interfaces/IStrategy.sol
++++ b/contracts/src/Interfaces/IStrategy.sol
+@@ -46,7 +46,7 @@ interface IStrategy {
+     function estimatedTotalUnderlying() external view returns (uint256);
+ 
+     /// @notice Push underlying back to the Vault. Caller must hold the
+-    ///         ALLOCATOR_ROLE on the Vault. Used for deallocation /
++    ///         WITHDRAWER_ROLE on the Vault. Used for deallocation /
+     ///         portfolio rebalancing / removeStrategy preparation.
+     /// @param  _amount Requested amount. The actual sent amount may be less
+     ///         if the upstream protocol cannot fulfill the full request.
+@@ -54,7 +54,7 @@ interface IStrategy {
+     function sendToVault(uint256 _amount) external returns (uint256 sent);
+ 
+     /// @notice Push only realized yield to the Vault. Caller must hold the
+-    ///         ALLOCATOR_ROLE on the Vault. The amount is computed by the
++    ///         HARVESTER_ROLE on the Vault. The amount is computed by the
+     ///         Strategy as `realizedYield()` at call time; the caller does
+     ///         not supply an amount.
+     /// @return sent   Amount actually received by the Vault.
+diff --git a/contracts/src/JpydfToken.sol b/contracts/src/JpydfToken.sol
+index f09851822c8eee38fb25e97557ef52ac1707bc92..db4b04d38c9c7ce5c97bd72bcf7f225794a65a3f 100644
+--- a/contracts/src/JpydfToken.sol
++++ b/contracts/src/JpydfToken.sol
+@@ -46,10 +46,10 @@ contract JpydfToken is Ownable, IJpydfToken, ERC20Permit {
+     event BorrowerOperationsAddressAdded(address _newBorrowerOperationsAddress);
+     event ActivePoolAddressAdded(address _newActivePoolAddress);
+ 
+-    constructor(address _initialOwner, address _bridgeAdmin)
++    constructor(address _initialOwner, address _bridgeAdmin, bool _testOnly)
+         Ownable(_initialOwner)
+-        ERC20(_NAME, _SYMBOL)
+-        ERC20Permit(_NAME)
++        ERC20(_testOnly ? "testJPYdf Stablecoin" : _NAME, _testOnly ? "testJPYdf" : _SYMBOL)
++        ERC20Permit(_testOnly ? "testJPYdf Stablecoin" : _NAME)
+     {
+         if (_initialOwner == address(0)) revert JpydfToken__ZeroOwner();
+         if (_bridgeAdmin == address(0)) revert JpydfToken__ZeroBridgeAdmin();
+diff --git a/contracts/src/PILAllocator.sol b/contracts/src/PILAllocator.sol
+index 885c1c067d3ad91f5cc89c0103d249f932124631..ca614f5c34ac4d7e9ec9d66d479a829958a840c4 100644
+--- a/contracts/src/PILAllocator.sol
++++ b/contracts/src/PILAllocator.sol
+@@ -36,11 +36,18 @@ contract PILAllocator is ReentrancyGuard {
+     mapping(address => bool) public registeredInitiatives;
+     mapping(address => uint256) public initiativeIndexPlusOne;
+     mapping(address => uint256) public weightOf;
++    mapping(address => bool) public deferredFunding;
++    mapping(address => uint256) public pendingFunding;
++    uint256 public totalPendingFunding;
+ 
+     event InitiativeRegistered(address indexed initiative, uint256 atEpoch, bool hookSucceeded);
+     event InitiativeUnregistered(address indexed initiative, uint256 atEpoch, bool hookSucceeded);
+     event WeightsUpdated(address[] initiatives, uint256[] weights);
+     event Distributed(address indexed initiative, uint256 amount, uint256 indexed epoch, bool hookSucceeded);
++    event FundingDeferred(address indexed initiative);
++    event FundingReserved(address indexed initiative, uint256 amount, uint256 indexed epoch);
++    event FundingClaimed(address indexed initiative, uint256 amount);
++    event FundingReleased(address indexed initiative, uint256 amount);
+     event Paused();
+     event Unpaused();
+     event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
+@@ -65,6 +72,8 @@ contract PILAllocator is ReentrancyGuard {
+     error PILAllocator__DependencyNotContract(address dependency);
+     error PILAllocator__InsufficientGasForHook();
+     error PILAllocator__TooManyInitiatives(uint256 maxInitiatives);
++    error PILAllocator__RegistrationHookFailed(address initiative);
++    error PILAllocator__FundingNotDeferred();
+ 
+     modifier onlyOwner() {
+         if (msg.sender != owner) revert PILAllocator__Unauthorized();
+@@ -119,6 +128,8 @@ contract PILAllocator is ReentrancyGuard {
+         bool hookSucceeded = _safeCallWithMinGas(
+             _initiative, MIN_GAS_TO_HOOK, 0, abi.encodeCall(IInitiative.onRegisterInitiative, (currentEpoch))
+         );
++        // Funding-mode setup must succeed before an initiative can receive a weight.
++        if (!hookSucceeded) revert PILAllocator__RegistrationHookFailed(_initiative);
+ 
+         emit InitiativeRegistered(_initiative, currentEpoch, hookSucceeded);
+     }
+@@ -131,6 +142,11 @@ contract PILAllocator is ReentrancyGuard {
+         delete weightOf[_initiative];
+         registeredInitiatives[_initiative] = false;
+         _removeInitiative(_initiative);
++        uint256 released = pendingFunding[_initiative];
++        delete pendingFunding[_initiative];
++        delete deferredFunding[_initiative];
++        totalPendingFunding -= released;
++        if (released != 0) emit FundingReleased(_initiative, released);
+ 
+         uint256 currentEpoch = epoch();
+         bool hookSucceeded = _safeCallWithMinGas(
+@@ -163,7 +179,7 @@ contract PILAllocator is ReentrancyGuard {
+     function distribute() external nonReentrant returns (uint256 total) {
+         if (paused) revert PILAllocator__Paused();
+ 
+-        uint256 balance = jpydfToken.balanceOf(address(this));
++        uint256 balance = jpydfToken.balanceOf(address(this)) - totalPendingFunding;
+         if (balance < MIN_DISTRIBUTE || totalWeight == 0 || _initiatives.length == 0) return 0;
+ 
+         uint256 currentEpoch = epoch();
+@@ -176,6 +192,12 @@ contract PILAllocator is ReentrancyGuard {
+             if (amount == 0) continue;
+ 
+             total += amount;
++            if (deferredFunding[initiative]) {
++                pendingFunding[initiative] += amount;
++                totalPendingFunding += amount;
++                emit FundingReserved(initiative, amount, currentEpoch);
++                continue;
++            }
+             jpydfToken.safeTransfer(initiative, amount);
+             bool hookSucceeded = _safeCallWithMinGas(
+                 initiative, MIN_GAS_TO_HOOK, 0, abi.encodeCall(IInitiative.onClaimForInitiative, (currentEpoch, amount))
+@@ -185,6 +207,28 @@ contract PILAllocator is ReentrancyGuard {
+         }
+     }
+ 
++    /// @dev A registered receiver may opt into funding retained here until it claims.
++    /// Registration hooks use this without a reentrancy guard; no assets leave here.
++    function enableDeferredFunding() external {
++        if (!registeredInitiatives[msg.sender]) revert PILAllocator__NotRegistered(msg.sender);
++        deferredFunding[msg.sender] = true;
++        emit FundingDeferred(msg.sender);
++    }
++
++    /// @dev The initiative calls this within its atomic funding/consumption transaction.
++    function claimDeferredFunding() external nonReentrant returns (uint256 amount) {
++        if (paused) revert PILAllocator__Paused();
++        if (!registeredInitiatives[msg.sender]) revert PILAllocator__NotRegistered(msg.sender);
++        if (!deferredFunding[msg.sender]) revert PILAllocator__FundingNotDeferred();
++        amount = pendingFunding[msg.sender];
++        delete pendingFunding[msg.sender];
++        totalPendingFunding -= amount;
++        if (amount != 0) {
++            jpydfToken.safeTransfer(msg.sender, amount);
++            emit FundingClaimed(msg.sender, amount);
++        }
++    }
++
+     function pause() external {
+         if (msg.sender != guardian) revert PILAllocator__Unauthorized();
+ 
+@@ -248,7 +292,7 @@ contract PILAllocator is ReentrancyGuard {
+     }
+ 
+     function pendingDistributable() external view returns (uint256 amount) {
+-        amount = jpydfToken.balanceOf(address(this));
++        amount = jpydfToken.balanceOf(address(this)) - totalPendingFunding;
+         if (amount < MIN_DISTRIBUTE || totalWeight == 0 || _initiatives.length == 0) return 0;
+         amount = amount * totalWeight / WAD;
+     }
+diff --git a/contracts/src/PriceFeeds/JpyFreezeLib.sol b/contracts/src/PriceFeeds/JpyFreezeLib.sol
+index 9573e0ae6e524f9474cb42e37d6d6b3356f7841d..baccc6ca2fa51d94eb34298befb39dc3cd18f81f 100644
+--- a/contracts/src/PriceFeeds/JpyFreezeLib.sol
++++ b/contracts/src/PriceFeeds/JpyFreezeLib.sol
+@@ -129,7 +129,13 @@ library JpyFreezeLib {
+ 
+             self.lastGoodBacking = liveBacking;
+             return (Math.mulDiv(_jpyPrice, liveBacking, 1e18), false);
+-        } catch {
++        } catch (bytes memory err) {
++            // The Vault reverts with the same gas-guard error when the caller cannot fund the
++            // fixed Strategy probe budget (Guardian Remediation L-01). Bubble it unchanged so a
++            // gas-starved call is never classified as an oracle failure.
++            if (err.length == 4 && bytes4(err) == InsufficientGasForExternalCall.selector) {
++                revert InsufficientGasForExternalCall();
++            }
+             if (gasleft() <= gasBefore / 64) revert InsufficientGasForExternalCall();
+             return (0, true);
+         }
+diff --git a/contracts/src/Strategies/BaseStrategy.sol b/contracts/src/Strategies/BaseStrategy.sol
+index e25405780725bb8da6ef174dd62afdaf8c0d3b98..25de355956d7af480c09b4d28fb4053ec782ea58 100644
+--- a/contracts/src/Strategies/BaseStrategy.sol
++++ b/contracts/src/Strategies/BaseStrategy.sol
+@@ -28,11 +28,11 @@ interface IMerklDistributor {
+  *   - `deposit(declared, received)`: onlyVault. Underlying is transferred BEFORE this call.
+  *                                  Runs `_doDeposit(received)` in an isolated self-call; on
+  *                                  rejection, returns the exact receipt to the Vault or reverts.
+- *   - `sendToVault(amount)`     : ALLOCATOR_ROLE on Vault.
++ *   - `sendToVault(amount)`     : WITHDRAWER_ROLE on Vault.
+  *                                  Withdraws from the upstream protocol via `_doWithdraw`,
+  *                                  reduces `principal` (principal-first), pushes the result
+  *                                  to the Vault via `receiveFromStrategy`.
+- *   - `sendProfitToVault()`     : ALLOCATOR_ROLE on Vault.
++ *   - `sendProfitToVault()`     : HARVESTER_ROLE on Vault.
+  *                                  Caps the amount at `realizedYield()`, withdraws via
+  *                                  `_doWithdraw`, leaves `principal` unchanged, pushes
+  *                                  the result directly to the Vault buffer.
+@@ -78,8 +78,11 @@ abstract contract BaseStrategy is Initializable, IStrategy, OwnableUpgradeable,
+     //                          CONSTANTS
+     // =============================================================
+ 
+-    /// @dev Must match `CollateralVault.ALLOCATOR_ROLE`.
++    /// @dev Legacy role retained only for archived async strategy request functions.
+     bytes32 internal constant _ALLOCATOR_ROLE = keccak256("ALLOCATOR_ROLE");
++    /// @dev Must match the operation-specific roles on CollateralVault.
++    bytes32 internal constant _WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
++    bytes32 internal constant _HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
+     uint256 public constant MAX_MERKL_TOKENS_PER_CLAIM = 16;
+ 
+     // =============================================================
+@@ -329,7 +332,7 @@ abstract contract BaseStrategy is Initializable, IStrategy, OwnableUpgradeable,
+         external
+         override
+         nonReentrantStrategy
+-        onlyVaultRole(_ALLOCATOR_ROLE)
++        onlyVaultRole(_WITHDRAWER_ROLE)
+         returns (uint256 sent)
+     {
+         if (_amount == 0) return 0;
+@@ -361,7 +364,7 @@ abstract contract BaseStrategy is Initializable, IStrategy, OwnableUpgradeable,
+         external
+         override
+         nonReentrantStrategy
+-        onlyVaultRole(_ALLOCATOR_ROLE)
++        onlyVaultRole(_HARVESTER_ROLE)
+         returns (uint256 sent)
+     {
+         uint256 realizedProfit = realizedYield();

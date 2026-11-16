@@ -1,0 +1,233 @@
+diff --git a/documents/en/protocol/operations/policies/Strategy-Selection-Policy.md b/documents/en/protocol/operations/policies/Strategy-Selection-Policy.md
+index cad4a417..b2595358 100644
+--- a/documents/en/protocol/operations/policies/Strategy-Selection-Policy.md
++++ b/documents/en/protocol/operations/policies/Strategy-Selection-Policy.md
+@@ -48,7 +48,7 @@ Current classification (canonical for adoption status):
+ | Aave V3 WETH / dETH | Approved active (no Day-1 allocation) | Synchronous recovery and existing Strategy; allocation remains zero while dETH cap is zero and reopens only after cap activation preflight/evidence |
+ | Aave V3 USDC / dUSDC | Approved active | Synchronous recovery, existing Strategy, mainnet preflight / launch evidence target |
+ | Morpho ERC-4626 for dETH / dUSDC | Conditional approved | allocation opens only after a specific-vault Go decision and frozen vault/curator/market/oracle/bad-debt evidence |
+-| EulerEarn / other ERC-4626 | Conditional approved | Technically supported by `ERC4626Strategy`, but not in the expected Day-1 scope. Adoption requires audit-scope / preflight updates |
++| EulerEarn / other ERC-4626 | Conditional approved | Deposit/withdraw adapter fit can be evaluated with the existing `ERC4626Strategy`, but this is outside the expected Day-1 scope. A vault with pull-based native rewards such as Euler Reward Streams is No-Go until evidence proves the reward path is disabled or a venue-specific claim implementation and additional audit are complete |
+ | Lido for dETH | Retirement pending | do not deploy, register, or allocate the current `LidoStrategy`; remove it from repository and future deploy surfaces after audit coordination. Existing-instance recovery/removal and future proposals follow [LIDO-GOV-001](../../product/spec/strategies/LidoStrategy.md#lido-gov-001-retirement--non-activation-gate) |
+ | Etherfi | Conditional approved / backlog | Implemented, but not in the expected Day-1 scope. Requires an async request / NFT / LRT risk package |
+ | Sky USDC -> USDS -> sUSDS | Conditional approved / backlog | Implemented, but not in the expected Day-1 scope. Requires converter / route halt / min-out / partnership / activation evidence |
+@@ -78,6 +78,7 @@ Current classification (canonical for adoption status):
+ | Governance risk | Venue admin / upgrader / guardian / pause / blacklist / fee-setter holders and timelock / multisig structure are known |
+ | Oracle / market risk | Price source, conversion route, bad debt, depeg, slashing, reserve deficit, and related monitors are defined |
+ | Emergency controls | Owners and runbooks exist for `pauseAllocation`, `sendToVault`, protocol-specific emergency withdraw, writeoff, and backstop |
++| Reward path | Claim, forfeit/expiry, Underlying/Treasury settlement, and protected-token rejection are defined for every enabled incentive/reward distributor. If the current adapter cannot invoke a pull claim, allocation remains disabled until evidence proves the path is off or a venue-specific implementation, unit/fork tests, and additional audit are complete |
+ | Audit scope | New adapters or asset-transforming routes enter Day-1 audit scope. Existing-adapter new vaults still require fork evidence and config review |
+ 
+ ## Evaluation Dimensions
+@@ -103,6 +104,7 @@ An adoption or cap / weight increase PR / issue must include at least:
+ - fork readback for `asset()` / `underlying()` / `decimals()` / `convertToAssets` / `maxWithdraw` / reserve status
+ - normal deposit / withdraw / partial withdraw / emergency withdraw / pause / writeoff dry-runs
+ - oracle / quote / share price / exchange rate source and stale / failure handling
++- incentive/reward distributor type, enabled state, claim/forfeit/expiry, recipient, and Underlying/Treasury settlement dry-run
+ - privileged holder / timelock / pause / upgrade / fee / blacklist permission inventory
+ - monitoring metrics, alert thresholds, owner / backup owner, and incident runbook
+ - frontend / ops / launch gate / deploy manifest / Parameters diffs
+diff --git a/documents/en/protocol/product/spec/strategies/ERC4626Strategy.md b/documents/en/protocol/product/spec/strategies/ERC4626Strategy.md
+index 187a75d3..86c7b746 100644
+--- a/documents/en/protocol/product/spec/strategies/ERC4626Strategy.md
++++ b/documents/en/protocol/product/spec/strategies/ERC4626Strategy.md
+@@ -81,6 +81,12 @@ Before applying `ERC4626Strategy` to Morpho Vault / EulerEarn, the following min
+ 7. A vault such as Morpho Vault V2 whose `maxWithdraw` / `maxRedeem` are zero by design must not be
+    adopted through the current adapter, because the recovery limit would always be zero. Adoption
+    requires a dedicated adapter or withdrawal-logic change, additional audit, and fork evidence.
++8. If rewards remain in an external distributor and require a pull claim, as with Euler Reward Streams,
++   the current `ERC4626Strategy` cannot recover them through `claimMerklRewards` or `sweepRewardToken`.
++   Registration and allocation must remain disabled until activation evidence proves that reward path is
++   not enabled for the target vault, or a venue-specific claim implementation, settlement unit/fork tests,
++   and additional audit are complete. Unclaimed rewards are not included in `estimatedTotalUnderlying()`
++   or backing.
+ 
+ ---
+ 
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-01-Euler-Reward-Streams-Activation-Gate-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-01-Euler-Reward-Streams-Activation-Gate-Differential-Review.md
+new file mode 100644
+index 00000000..7476449f
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-01-Euler-Reward-Streams-Activation-Gate-Differential-Review.md
+@@ -0,0 +1,136 @@
++# External Audit Info 01: Euler Reward Streams activation gate 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/strategies/ERC4626Strategy.md` と
++> `documents/jp/protocol/operations/policies/Strategy-Selection-Policy.md` を参照する。
++
++## Executive Summary
++
++外部監査 Info 01「Euler Rewards Streams Are Not Compatible With Current `ERC4626Strategy`」は、
++**条件付きで正しい**。現行 `ERC4626Strategy` / `BaseStrategy` が提供する reward 経路は次の2つである。
++
++- Merkl distributor を Merkle proof 付きで呼ぶ `claimMerklRewards`
++- 既に Strategy 自身が保有する token を送る `sweepRewardToken`
++
++Euler Reward Streams のように reward が外部 distributor に留まり、venue 固有の pull claim を必要とする経路は
++どちらにも該当しない。その reward を有効化した Euler vault に現行 adapter を接続すると、position / principal
++の deposit・withdraw は動いても incentive を claim できない。
++
++一方、これは現在の Day-1 production defect ではない。EulerEarn / non-Morpho ERC-4626 は conditional approved
++かつ Day-1 expected scope 外であり、特定 vault の activation package、preflight、audit-scope 更新なしに登録・
++allocation できない。現行 planned path の Morpho rewards は Merkl 境界で扱う。
++
++**判定**: Informational accepted as a future-integration gate。現時点で未選定の Euler interface を production
++Strategy へ追加せず、activation を fail-closed にする。対象 vault で pull-based native reward が無効であることを
++証明するか、venue 固有 claim 実装、settlement test、追加 audit を完了するまで No-Go とする。
++
++## Scope And Baseline
++
++- 外部指摘: Info 01 — Euler Reward Streams claim 経路の不在
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装:
++  - `contracts/src/Strategies/ERC4626Strategy.sol`
++  - `contracts/src/Strategies/BaseStrategy.sol`
++- 規範 / gate:
++  - JP / EN `ERC4626Strategy.md` §5
++  - JP / EN `Strategy-Selection-Policy.md`
++- 現行 launch scope: Morpho ERC-4626 は conditional、EulerEarn は Day-1 expected scope 外
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| `ERC4626Strategy` に Euler Reward Streams claim がない | True | venue 固有 claim function / interface を持たない |
++| `claimMerklRewards` で代替できる | False | distributor interface と proof model が異なる |
++| `sweepRewardToken` で未 claim reward を回収できる | False | Strategy balance に到着前の token は sweep 対象外 |
++| Euler reward は現在の production で失われる | Not applicable today | Euler vault は Day-1 registration / allocation 対象外 |
++| generic adapter に今すぐ Euler claim を追加すべき | Not established | target contract / reward configuration / forfeit policy が未選定 |
++| activation 前に互換性 gate が必要 | True | adapter fit と reward settlement fit を分離する必要がある |
++
++## Interface Boundary
++
++### Current Merkl path
++
++`claimMerklRewards` は owner が Merkl distributor、users、tokens、amounts、proofs を渡し、claim 後の実着 token を
++次の規則で settlement する。
++
++- Underlying reward: Vault buffer へ push
++- 通常 reward token: Treasury へ sweep
++- Underlying / ERC-4626 share / protected position token: claim 前の guard を適用
++
++### Current sweep path
++
++`sweepRewardToken` は Strategy address が既に保有する balance にだけ作用する。外部 distributor 上の accrued
++claimable balance を materialize する external call は行わない。
++
++### Euler-style pull path
++
++Reward Streams では accrued reward が distributor に残り、rewarded vault / reward token / recipient / forfeit
++policy を指定する venue 固有 call が必要になる。この call surface は current adapter に存在しないため、
++「ERC-4626 deposit/withdraw が適合する」だけでは reward settlement まで適合したことにならない。
++
++## Why Not Add A Generic Euler Claim Now
++
++監査推奨の claim function は将来実装候補として妥当だが、現時点では次が未確定である。
++
++- 採用する Euler product / vault / Reward Streams contract address
++- enabled reward token と forfeit / expiry policy
++- distributor の upgrade/admin/pausing trust boundary
++- return value と Strategy / Vault 実着額の照合方法
++- Underlying reward の Vault push、非 Underlying reward の Treasury 実着、fee-on-transfer handling
++- protected token rejection と reentrancy / malicious distributor fault handling
++- keeper / owner / monitoring / incident response
++
++未選定 interface を generic `ERC4626Strategy` へ先行追加すると、全 ERC-4626 venue に不要な privileged external-call
++surface を広げる。採用時に concrete venue と settlement policy を固定し、Aave reward path と同様に差分・実着額・
++protected-token behavior を unit / fork test する方が安全である。
++
++## Remediation
++
++### ERC4626Strategy applicability gate
++
++JP / EN spec に、pull-based external reward は current Merkl/sweep path で回収できないことを明記する。対象 vault は
++次のいずれかを満たすまで登録・allocation を禁止する。
++
++1. pull-based reward path が無効であることを activation evidence で証明する。
++2. venue 固有 claim implementation、settlement unit/fork tests、追加 audit を完了する。
++
++未 claim reward は `estimatedTotalUnderlying()` / backing に算入しない。
++
++### Strategy selection gate
++
++JP / EN policy の Euler classification、Hard Requirements、Evidence Package を更新し、reward distributor の種類、
++enabled state、claim / forfeit / expiry、recipient、Underlying / Treasury settlement dry-run を activation artifact に
++必須化する。
++
++## Verification
++
++```text
++rg -n 'Reward Streams|pull claim|Reward path' \
++  documents/jp/protocol/product/spec/strategies/ERC4626Strategy.md \
++  documents/en/protocol/product/spec/strategies/ERC4626Strategy.md \
++  documents/jp/protocol/operations/policies/Strategy-Selection-Policy.md \
++  documents/en/protocol/operations/policies/Strategy-Selection-Policy.md
++
++git diff --check
++git diff --exit-code origin/develop -- contracts/src contracts/test
++```
++
++docs-only change のため Solidity test は追加・変更しない。既存 production adapter の挙動は変わらない。
++
++## Residual Risk
++
++- activation operator が reward configuration を incomplete に調査すると、No-Go gate を誤って通す可能性がある。
++  Evidence Package では contract address / enabled reward / claim policy の fork readback を要求する。
++- reward を無効として採用した後に venue governance が有効化できる場合、その権限と監視 trigger を activation
++  package に含める必要がある。
++- unclaimed incentive は backing に含めないため solvency を過大評価しないが、経済的 opportunity loss は残る。
++- 将来実装は reward token の実着額、fee-on-transfer、reentrancy、forfeit、protected position token を個別に監査する。
++
++## Methodology
++
++- freeze artifact と current `origin/develop` の reward entrypoint を横断検索した。
++- Merkl claim、on-balance sweep、external pull claim の custody boundary を分解した。
++- Day-1 Strategy selection と Euler conditional classification を確認した。
++- current scope に不要な production surface を追加せず、future activation を fail-closed にする方針を選択した。
+diff --git a/documents/jp/protocol/operations/policies/Strategy-Selection-Policy.md b/documents/jp/protocol/operations/policies/Strategy-Selection-Policy.md
+index d72c4615..9c789756 100644
+--- a/documents/jp/protocol/operations/policies/Strategy-Selection-Policy.md
++++ b/documents/jp/protocol/operations/policies/Strategy-Selection-Policy.md
+@@ -49,7 +49,7 @@ Day-1 launch manifest は borrowable branch の承認済み Strategy set（dUSDC
+ | Aave V3 WETH / dETH | Approved active（Day-1 実配分なし） | 同期回収、既存 Strategy。dETH（Branch 2）は inert のため Day-1 に allocation は発生しない。activation で Underlying に WETH を採用した場合に preflight / evidence を再確認して実配分を開く |
+ | Aave V3 USDC / dUSDC | Approved active | 同期回収、既存 Strategy、mainnet preflight / launch evidence 対象 |
+ | Morpho ERC-4626 for dETH / dUSDC | Conditional approved | 特定 vault の Go 判断と vault / curator / market / oracle / bad debt evidence の freeze 後に限り allocation を開ける |
+-| EulerEarn / other ERC-4626 | Conditional approved | `ERC4626Strategy` で技術対応可能だが、Day-1 expected scope ではない。採用時は audit scope / preflight 更新が必要 |
++| EulerEarn / other ERC-4626 | Conditional approved | deposit / withdraw の adapter fit は既存 `ERC4626Strategy` で評価できるが、Day-1 expected scope ではない。Euler Reward Streams 等の pull-based native reward が有効な vault は、現行 adapter に claim 経路がないため、reward 無効の evidence または venue 固有 claim 実装・追加 audit が完了するまで No-Go |
+ | Lido / WETH underlying branch | Rejected / backlog（source retained） | 現行 `LidoStrategy` の source / test は監査対象として残すが、本番へ deploy / register / allocation しない。公式 deploy wiring の除外、既存 instance の回収、将来提案の gate は [LIDO-GOV-001](../../product/spec/strategies/LidoStrategy.md) に従う |
+ | Etherfi | Conditional approved / backlog | 実装済みだが Day-1 expected scope ではない。async request / NFT / LRT risk package が必要 |
+ | Sky USDC -> USDS -> sUSDS | Conditional approved / backlog | 実装済みだが Day-1 expected scope ではない。converter / route halt / min-out / partnership / activation evidence が必要 |
+@@ -81,6 +81,7 @@ Day-1 launch manifest は borrowable branch の承認済み Strategy set（dUSDC
+ | Governance risk | venue admin / upgrader / guardian / pause / blacklist / fee setter 等の権限 holder と timelock / multisig 構成を確認できる |
+ | Oracle / market risk | price source、conversion route、bad debt、depeg、slashing、reserve deficit 等の監視項目を定義できる |
+ | Emergency controls | `pauseAllocation`、`sendToVault`、固有 emergency withdraw、writeoff、backstop の運用 owner と runbook がある |
++| Reward path | 有効な incentive / reward distributor ごとに claim、forfeit / expiry、Underlying / Treasury settlement、protected token 拒否を説明できる。現行 adapter が pull claim を呼べない reward 経路は、無効であることを証明するか、venue 固有実装・unit / fork test・追加 audit 完了まで allocation を禁止する |
+ | Audit scope | 新規 adapter または新しい asset-transforming route は Day-1 audit scope に追加する。既存 adapter の別 vault でも fork evidence と config review は必須 |
+ 
+ dwstETH では、wstETH の canonical rate 上昇と外部 Strategy による wstETH 数量増加を会計上分ける。native staking 増価は borrower の担保価値に残し、Strategy profit として sweep しない。
+@@ -110,6 +111,7 @@ dwstETH では、wstETH の canonical rate 上昇と外部 Strategy による ws
+ - `asset()` / `underlying()` / `decimals()` / `convertToAssets` / `maxWithdraw` / reserve status 等の fork readback
+ - normal deposit / withdraw / partial withdraw / emergency withdraw / pause / writeoff dry-run
+ - oracle / quote / share price / exchange rate の source と stale / failure handling
++- incentive / reward distributor の種類、有効化状態、claim / forfeit / expiry、受領先、Underlying / Treasury settlement の dry-run
+ - privileged holder / timelock / pause / upgrade / fee / blacklist 権限の整理
+ - monitoring metrics、alert threshold、owner / backup owner、incident runbook
+ - frontend / ops / launch gate / deploy manifest / branch 運用値の更新差分
+diff --git a/documents/jp/protocol/product/spec/strategies/ERC4626Strategy.md b/documents/jp/protocol/product/spec/strategies/ERC4626Strategy.md
+index 36fb6ce1..71c10f1d 100644
+--- a/documents/jp/protocol/product/spec/strategies/ERC4626Strategy.md
++++ b/documents/jp/protocol/product/spec/strategies/ERC4626Strategy.md
+@@ -78,6 +78,11 @@
+ 7. Morpho Vault V2 のように `maxWithdraw` / `maxRedeem` が仕様上 0 の vault は、現行 adapter の回収
+    上限が常に 0 になるため、`ERC4626Strategy` の採用対象にしない。採用する場合は専用 adapter
+    または withdraw logic 変更、追加 audit、fork evidence が必要である。
++8. Euler Reward Streams のように reward が外部 distributor に留まり pull claim を要する場合、現行
++   `ERC4626Strategy` の `claimMerklRewards` / `sweepRewardToken` では回収できない。対象 vault でその
++   reward 経路が無効であることを activation evidence で確認するか、venue 固有 claim 実装、settlement
++   unit / fork test、追加 audit を完了するまで登録・allocation してはならない。未 claim reward は
++   `estimatedTotalUnderlying()` や backing に算入しない。
+ 
+ ---
+ 

@@ -1,0 +1,16 @@
+Foundry tests	Canonical production Timelock artifact tests	2026-09-23T22:48:46.5539340Z Ran 1 test suite in 11.96ms (2.76ms CPU time): 5 tests passed, 0 failed, 0 skipped (5 total tests)
+Foundry tests	CCIP deployment entrypoint (isolated process)	2026-09-23T22:49:19.1867411Z Ran 1 test suite in 23.20ms (21.59ms CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)
+Foundry tests	Run Forge tests local (full)	2026-09-23T22:52:07.1228753Z [SKIP] test_Run_CCIPHandoffStopsBeforeCoreDeploymentUntilAccepted() (gas: 0)
+Foundry tests	Run Forge tests local (full)	2026-09-23T22:52:07.1888266Z [SKIP: skipped] setUp() (gas: 0)
+Foundry tests	Run Forge tests local (full)	2026-09-23T22:52:18.0950472Z Ran 8 tests for test/GuardianR2L01StrategyGasBudget.t.sol:GuardianR2L01StrategyGasBudgetTest
+Foundry tests	Run Forge tests local (full)	2026-09-23T22:52:18.1028475Z [PASS] test_minimumGasLimitStaysNearBudget() (gas: 2481484)
+Foundry tests	Run Forge tests local (full)	2026-09-23T23:04:58.2786291Z Ran 115 test suites in 788.87s (933.29s CPU time): 1861 tests passed, 0 failed, 2 skipped (1863 total tests)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:27.7213493Z Ran 1 test suite in 11.54s (11.54s CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:32.8990187Z [SKIP] testCCIPRegistrationAcrossConfiguredChains() (gas: 0)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:33.4319260Z Ran 1 test for test/guardian/PrestoPendingExecutionMainnet.t.sol:PrestoPendingExecutionMainnetTest
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:33.4322886Z [PASS] test_ExecuteMaturedDelayIncreasesFromUnprivilegedCaller() (gas: 224218)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:33.7941305Z Ran 3 tests for test/guardian/PrestoRoundingMainnet.t.sol:PrestoRoundingMainnetTest
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:33.7942337Z [PASS] testFuzz_PrestoPartialRounding(uint96) (runs: 256, μ: 271615, ~: 227398)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:33.7944130Z [PASS] test_PrestoHarvestAfterAccrual() (gas: 353196)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:33.7945928Z [PASS] test_PrestoPartialFullAndEmergencyDust() (gas: 503805)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-23T23:05:34.1438775Z Ran 6 test suites in 1.27s (2.18s CPU time): 27 tests passed, 0 failed, 1 skipped (28 total tests)

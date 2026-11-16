@@ -1,0 +1,12 @@
+Compiling 1 files with Solc 0.8.24
+Solc 0.8.24 finished in 830.67ms
+Compiler run successful!
+
+Ran 1 test for test/guardian/PrestoPendingExecutionMainnet.t.sol:PrestoPendingExecutionMainnetTest
+[PASS] test_ExecuteMaturedDelayIncreasesFromUnprivilegedCaller() (gas: 224074)
+Logs:
+  Both pending delay increases execute permissionlessly; replay rejected.
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 761.50ms (755.43ms CPU time)
+
+Ran 1 test suite in 776.96ms (761.50ms CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)

@@ -1,0 +1,139 @@
+diff --git a/contracts/test/DToken.t.sol b/contracts/test/DToken.t.sol
+index 6f27ab24..027234e3 100644
+--- a/contracts/test/DToken.t.sol
++++ b/contracts/test/DToken.t.sol
+@@ -179,13 +179,25 @@ contract DTokenTest is Test {
+         vm.prank(vault);
+         dToken.mint(user, 100e18);
+ 
+-        // Setting cap below current supply is allowed (no new mints possible)
++        // Setting cap below current supply is an intentional issuance stop.
+         dToken.setCap(50e18);
+         assertEq(dToken.cap(), 50e18);
++        assertEq(dToken.totalSupply(), 100e18, "existing issuance is preserved");
++        assertEq(dToken.balanceOf(user), 100e18, "holder balance is preserved");
+ 
+         vm.prank(vault);
+         vm.expectRevert(abi.encodeWithSelector(DToken.CapExceeded.selector, 101e18, 50e18));
+         dToken.mint(user, 1e18);
++
++        // Redemption remains available and naturally brings supply back below cap.
++        vm.prank(vault);
++        dToken.burn(user, 60e18);
++        assertEq(dToken.totalSupply(), 40e18);
++
++        // Minting resumes without another governance action once supply fits the cap.
++        vm.prank(vault);
++        dToken.mint(user, 10e18);
++        assertEq(dToken.totalSupply(), 50e18);
+     }
+ 
+     function test_BurnThenMintWithCap() public {
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-02-DToken-Cap-Floor-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-02-DToken-Cap-Floor-Differential-Review.md
+new file mode 100644
+index 00000000..80738f7f
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-02-DToken-Cap-Floor-Differential-Review.md
+@@ -0,0 +1,102 @@
++# External Audit Info 02: DToken cap floor 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/dToken.md` の DTKN-FR-006 / DTKN-INV-005 を参照する。
++
++## Executive Summary
++
++外部監査 Info 02「`DToken::setCap`: No Lower-bound Check Against `totalSupply`」の観測自体は正しいが、
++推奨された `_newCap >= totalSupply()` check は規定仕様と競合する。
++
++`cap` は既発行 token を無効化する残高 invariant ではなく、次回 mint 後の供給量に適用する issuance limit である。
++Owner は現供給量未満へ cap を下げ、新規 deposit / mint を停止しながら、既発行 token の保有・移転・redemption / burn
++を継続できる。burn により supply が cap 以下へ戻れば、追加の governance action なしに mint は自動再開する。
++
++**判定**: Informational rejected as a code finding。`setCap` の production behavior は維持する。既存 unit test を
++拡張し、below-supply cap が既発行残高を変更せず、新規 mint のみを止め、burn と供給縮小後の自動回復を妨げない
++ことを固定する。
++
++## Scope And Baseline
++
++- 外部指摘: Info 02 — `setCap` に `totalSupply()` 下限 check がない
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/DToken.sol`
++- 規範: JP / EN `dToken.md` DTKN-FR-006 / DTKN-INV-005
++- 回帰証拠: `contracts/test/DToken.t.sol::test_SetCapBelowCurrentSupply`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| `setCap` は `newCap < totalSupply()` を許す | True | `setCap` は Owner-only で cap を直接更新する |
++| below-supply cap は mint を永久に brick する | False | cap 引き上げだけでなく、burn で supply が cap 以下へ戻っても mint は自動再開する |
++| 既存 holder は影響を受けない | Mostly true | balance と transfer は不変。新規 issuance 停止による市場影響はあり得るが、redemption / burn は利用可能 |
++| 下限 check は legitimate governance action を制限しない | False | 現供給未満への明示的な hard issuance stop を禁止する |
++| 誤設定リスクがある | True but governed | Owner holder は共通 TimelockController。変更は監視・review 対象の risk parameter operation |
++
++## Spec Boundary
++
++DTKN-FR-006 は `cap = newCap` について「現 `totalSupply()` 未満も設定可」と明記し、その効果を「新規 mint のみ停止し
++既発行は維持」と定義する。DTKN-INV-005 も `totalSupply() <= cap` を global invariant から明示的に除外し、mint 成功条件を
++`totalSupply() + amount <= cap` としている。
++
++したがって、監査提案の `CapBelowTotalSupply` revert は防御的 validation の追加ではなく、製品仕様の変更になる。
++この変更を行うと、governance は cap を徐々に現在供給まで下げることしかできず、既存 redemption を維持したまま
++即座に hard ceiling を設定する手段を失う。
++
++## State Transition Evidence
++
++回帰テストは実 `DToken` proxy で次の状態遷移を固定する。
++
++| Step | `totalSupply` | `cap` | Result |
++| --- | ---: | ---: | --- |
++| vault mint | 100 | max | succeeds |
++| Owner `setCap(50)` | 100 | 50 | succeeds; supply / holder balance unchanged |
++| vault mint 1 | 100 | 50 | `CapExceeded(101, 50)` |
++| vault burn 60 | 40 | 50 | succeeds; redemption path remains open |
++| vault mint 10 | 50 | 50 | succeeds without another cap update |
++
++この遷移は cap が既発行 token の validity condition ではなく、mint admission condition であることを示す。
++
++## Why Production Code Is Unchanged
++
++下限 check は accidental parameter narrowing を早期 reject する一方、意図的な issuance stop も同時に禁止する。
++この operation は permissionless ではなく、24h Timelock と Admin multisig review を経る durable risk parameter である。
++また即時の通常 emergency response は Vault の `pauseDeposit` が担い、`setCap` は timelocked hard ceiling として別の役割を持つ。
++
++既発行分の redemption を損なわず exposure の増加だけを止める現行 semantics は安全側であり、明文化済みである。
++よって production code、ABI、storage layout を変更せず、意図した liveness を回帰証拠で補強する。
++
++## Verification
++
++```text
++forge test --match-contract DTokenTest --match-test test_SetCapBelowCurrentSupply -vv
++forge test --match-contract DTokenTest
++forge fmt --check contracts/test/DToken.t.sol
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- below-supply cap 設定後も supply / holder balance は 100 のまま
++- mint 1 は `CapExceeded(101, 50)`
++- burn 60 は成功
++- supply 40 から mint 10 が成功し cap 50 へ到達
++- production source diff は 0
++
++## Residual Risk
++
++- governance が意図せず低い cap を設定すると、新規 deposit は supply が cap 以下へ減るか、次の timelocked cap update が
++  実行されるまで停止する。proposal simulation、parameter diff review、`CapUpdated` monitoring で扱う。
++- below-supply cap は holder balance を変更しないが、issuance 停止の市場影響はあり得る。これは risk parameter operation の
++  expected consequence であり、proposal rationale に明示する。
++- `pauseDeposit` と cap は異なる authority / delay / recovery semantics を持つ。緊急停止に timelocked `setCap` を代用しない。
++
++## Methodology
++
++- freeze finding の claim / recommendation と current `origin/develop` を比較した。
++- JP source-of-truth と EN support translation の FR / INV を照合した。
++- mint admission、既発行 balance、burn liveness、自然回復を状態遷移として分解した。
++- recommendation を実装した場合に失われる legitimate governance action を確認した。

@@ -1,0 +1,24 @@
+Implementation commit: 11828df54c9ab5508db2fd0500b02d6b87bbfe32
+Full Foundry run 35935025281, attempt 2, job 107431703131: success.
+Documentation follow-up 432e7015358dc060dc7bee2c2d6664e3c3fc6fc3 has identical contracts and workflow trees.
+
+Foundry tests	Canonical production Timelock artifact tests	2026-09-23T23:51:54.8838922Z Ran 1 test suite in 12.29ms (3.94ms CPU time): 5 tests passed, 0 failed, 0 skipped (5 total tests)
+Foundry tests	CCIP deployment entrypoint (isolated process)	2026-09-23T23:51:56.6323391Z Ran 1 test suite in 22.28ms (20.61ms CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)
+Foundry tests	Run Forge tests local (full)	2026-09-23T23:52:21.4782106Z [SKIP] test_Run_CCIPHandoffStopsBeforeCoreDeploymentUntilAccepted() (gas: 0)
+Foundry tests	Run Forge tests local (full)	2026-09-23T23:52:21.4842007Z [SKIP: skipped] setUp() (gas: 0)
+Foundry tests	Run Forge tests local (full)	2026-09-23T23:54:02.7841370Z [PASS] testFuzz_CollisionRollsBackFundingAndRecoversNextEpoch(uint96) (runs: 256, μ: 2279305, ~: 2279424)
+Foundry tests	Run Forge tests local (full)	2026-09-24T00:04:28.9835651Z Ran 11 tests for test/Invariants.t.sol:InvariantsTest
+Foundry tests	Run Forge tests local (full)	2026-09-24T00:04:29.0637229Z Ran 115 test suites in 746.76s (888.38s CPU time): 1873 tests passed, 0 failed, 2 skipped (1875 total tests)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-24T00:04:31.0400769Z Ran 1 test suite in 285.30ms (282.38ms CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-24T00:04:32.5459052Z [SKIP] testCCIPRegistrationAcrossConfiguredChains() (gas: 0)
+Foundry tests	Run Forge tests mainnet (full)	2026-09-24T00:04:34.5119569Z Ran 6 test suites in 1.98s (2.36s CPU time): 27 tests passed, 0 failed, 1 skipped (28 total tests)
+
+All skipped test invocations are duplicates of separately passed canonical Timelock or CCIP runs.
+DF deploy wiring: success at implementation commit, run 35935024478 / job 107430085269.
+DF deployment frontend build and five local-parity failure drills passed.
+Liquidator bot tests, Core JPYDF surface check, and source-tree check passed.
+Utility/mainnet launch-operation jobs were outside changed-input scope. Coverage was not selected in CI; the local owning df-ops shard passed.
+
+Final documentation head 432e7015358dc060dc7bee2c2d6664e3c3fc6fc3: all selected checks passed.
+Contracts run 35936824221: fast 1802 passed / 0 failed / 2 duplicate skips; DF deploy wiring passed.
+Bot run 35936824302, surface run 35936824182 and source-tree run 35936824133: passed.

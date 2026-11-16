@@ -1,0 +1,28 @@
+{
+  "attempted_at_utc": "2026-09-16T22:53:37.495246+00:00",
+  "url": "https://ops.guardianaudits.com/engagements/01a06231-b991-73b5-8a6a-7333664c078a/findings",
+  "observation": "Before reload, the existing authenticated Chrome page displayed the same 19 findings (10 Low,9 Informational), all Pending. Reload redirected to https://ops.guardian.security/client/login; current server-side additions and final fuzzing completion could not be reverified.",
+  "previously_captured_ids": [
+    "L-01",
+    "L-02",
+    "L-03",
+    "L-04",
+    "L-05",
+    "L-06",
+    "L-07",
+    "L-08",
+    "L-09",
+    "L-10",
+    "I-01",
+    "I-02",
+    "I-03",
+    "I-04",
+    "I-05",
+    "I-06",
+    "I-07",
+    "I-08",
+    "I-09"
+  ],
+  "board_mutated": false,
+  "new_server_read_verified": false
+}

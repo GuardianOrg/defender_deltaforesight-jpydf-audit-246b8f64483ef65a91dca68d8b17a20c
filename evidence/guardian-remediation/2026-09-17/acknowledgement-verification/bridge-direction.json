@@ -1,0 +1,18 @@
+{
+  "pr": 2109,
+  "url": "https://github.com/deltaforesight/jpydf-v2/pull/2109",
+  "head": "c4c54fc565c20dfbae30423873dd89c25b5f69e0",
+  "status": "OPEN",
+  "draft": false,
+  "mergeability": "CONFLICTING",
+  "ethereum": "JpydfLockReleasePool -> CCIP 2.0.0 LockReleaseTokenPool -> ERC20LockBox deposit/withdraw; token transfers, no bridgeBurn/bridgeMint",
+  "remote": "JpydfBurnMintPool uses separate remote BurnMintERC20",
+  "coreDenominator": "CollateralRegistry reads Ethereum JpydfToken.totalSupply(), including escrow",
+  "findingConclusion": "L-06 supply shrink does not arise on this route. Dormant canonical burn/mint interface retains risk; require renewed review before enabling it. Not a bridge audit or activation approval.",
+  "dependency": {
+    "package": "@chainlink/contracts-ccip",
+    "version": "2.0.0",
+    "shasum": "de85e6548320c866df0e40b591b4bfcbf84aacbf",
+    "tarball": "https://registry.npmjs.org/@chainlink/contracts-ccip/-/contracts-ccip-2.0.0.tgz"
+  }
+}

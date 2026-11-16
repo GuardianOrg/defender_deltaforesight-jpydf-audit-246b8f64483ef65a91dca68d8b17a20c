@@ -1,0 +1,297 @@
+diff --git a/contracts/test/ExternalAuditLow07ScaleSpan.t.sol b/contracts/test/ExternalAuditLow07ScaleSpan.t.sol
+new file mode 100644
+index 00000000..355cdfda
+--- /dev/null
++++ b/contracts/test/ExternalAuditLow07ScaleSpan.t.sol
+@@ -0,0 +1,102 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.24;
++
++import {DevTestSetup} from "./TestContracts/DevTestSetup.sol";
++import {DFStabilityPool} from "../src/DFStabilityPool.sol";
++import {console2} from "forge-std/console2.sol";
++
++// External audit Low 07 evidence: `SCALE_SPAN = 2` stops counting coll/yield gains
++// more than two scale changes past a deposit's snapshot scale. This measures the
++// omitted tail directly by replaying the same gain formula with the full
++// `MAX_SCALE_FACTOR_EXPONENT` span, after driving four scale changes.
++contract ExternalAuditLow07ScaleSpanTest is DevTestSetup {
++    uint256 internal constant MIN_JPYDF_IN_SP = 1e18;
++    uint256 internal constant RESTOCK = 2e27;
++    address internal constant ALICE = address(0xA11CE);
++
++    function test_RealisticFourScaleTailRoundsToZero() external {
++        _runScaleSequence(10_000e18, 100_000e18, false);
++    }
++
++    function test_ExtremeFourScaleTailIsBoundedDust() external {
++        _runScaleSequence(1e32, 1e32, true);
++    }
++
++    function _runScaleSequence(uint256 aliceDeposit, uint256 collateralPerRound, bool expectNonZeroTail) internal {
++        _fundActivePoolCollateral(collateralPerRound * 4);
++        _deposit(address(0xBEEF), RESTOCK);
++        _deposit(ALICE, aliceDeposit);
++
++        for (uint256 round = 0; round < 4; ++round) {
++            _deposit(address(uint160(0x1000 + round)), RESTOCK);
++
++            // Accrue interest yield at every scale so the `scaleToB` tail is measured too.
++            vm.prank(address(activePool));
++            stabilityPool.triggerJpydfRewards(collateralPerRound / 100);
++
++            uint256 totalDeposits = stabilityPool.getTotalJpydfDeposits();
++            uint256 scaleBefore = stabilityPool.currentScale();
++            vm.prank(address(troveManager));
++            stabilityPool.offset(totalDeposits - MIN_JPYDF_IN_SP, collateralPerRound);
++            assertGt(stabilityPool.currentScale(), scaleBefore, "expected a scale change");
++        }
++
++        assertGe(stabilityPool.currentScale(), 4, "expected four scale changes");
++
++        uint256 spanTwoColl = stabilityPool.getDepositorCollGain(ALICE);
++        uint256 spanTwoYield = stabilityPool.getDepositorYieldGain(ALICE);
++        uint256 collTail = _fullSpanGain(ALICE, true) - spanTwoColl;
++        uint256 yieldTail = _fullSpanGain(ALICE, false) - spanTwoYield;
++
++        console2.log("scales", stabilityPool.currentScale());
++        console2.log("SCALE_SPAN=2 coll gain", spanTwoColl);
++        console2.log("omitted coll tail", collTail);
++        console2.log("SCALE_SPAN=2 yield gain", spanTwoYield);
++        console2.log("omitted yield tail", yieldTail);
++
++        if (expectNonZeroTail) {
++            assertGt(collTail, 0, "extreme coll tail should cross one wei");
++            assertLt(collTail, spanTwoColl / 1e20, "coll tail must stay below 1e-20 of accrued gains");
++            assertLt(yieldTail, spanTwoYield / 1e20 + 1, "yield tail must stay below 1e-20 of accrued gains");
++        } else {
++            assertEq(collTail, 0, "realistic omitted coll tail should round below one wei");
++            assertEq(yieldTail, 0, "realistic omitted yield tail should round below one wei");
++        }
++    }
++
++    function _deposit(address depositor, uint256 amount) internal {
++        deal(address(jpydfToken), depositor, amount);
++        vm.prank(depositor);
++        stabilityPool.provideToSP(amount, false);
++    }
++
++    function _fundActivePoolCollateral(uint256 amount) internal {
++        deal(address(collToken), address(activePool), amount);
++        vm.prank(address(borrowerOperations));
++        activePool.accountForReceivedColl(amount);
++    }
++
++    // Same formula as `getDepositorCollGain` / `getDepositorYieldGain`, but iterating the
++    // whole representable span instead of stopping at `SCALE_SPAN`.
++    function _fullSpanGain(address depositor, bool coll) internal view returns (uint256) {
++        DFStabilityPool sp = DFStabilityPool(address(stabilityPool));
++        uint256 initialDeposit = sp.deposits(depositor);
++        (uint256 snapshotS, uint256 snapshotP, uint256 snapshotB, uint256 snapshotScale) =
++            sp.depositSnapshots(depositor);
++
++        uint256 snapshotSum = coll ? snapshotS : snapshotB;
++        uint256 normalizedGains = _scaleSum(sp, snapshotScale, coll) - snapshotSum;
++        for (uint256 i = 1; i <= sp.MAX_SCALE_FACTOR_EXPONENT(); ++i) {
++            if (snapshotScale + i > sp.currentScale()) break;
++            normalizedGains += _scaleSum(sp, snapshotScale + i, coll) / sp.SCALE_FACTOR() ** i;
++        }
++
++        uint256 gain = initialDeposit * normalizedGains / snapshotP;
++        uint256 cap = coll ? sp.getCollBalance() : sp.getYieldGainsOwed();
++        return gain < cap ? gain : cap;
++    }
++
++    function _scaleSum(DFStabilityPool sp, uint256 scale, bool coll) internal view returns (uint256) {
++        return coll ? sp.scaleToS(scale) : sp.scaleToB(scale);
++    }
++}
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-07-Stability-Pool-Scale-Span-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-07-Stability-Pool-Scale-Span-Differential-Review.md
+new file mode 100644
+index 00000000..ed8d3d98
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-07-Stability-Pool-Scale-Span-Differential-Review.md
+@@ -0,0 +1,183 @@
++# External Audit Low 07: Stability Pool `SCALE_SPAN` 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md`（CORE-SP-FR-008 / CORE-SP-FR-009、
++> `SCALE_SPAN` 定数定義）を参照する。
++
++## Executive Summary
++
++外部監査 Low 07「`SCALE_SPAN = 2` Permanently Loses Depositor Gains After 3+ Scale Changes」の
++**機構的な主張は再現する**。snapshot scale から3 scale 以上進んだ分の coll / yield gain は
++`getDepositorCollGain()` / `getDepositorYieldGain()` の計算対象外であり、その分は請求できない。
++
++一方で **severity の主張は成立しない**。切り捨てられる量は、預金者自身の残存持分が `SCALE_FACTOR ** 3`
++（=1e27）以上減耗した後の gain であり、構造的に dust に限定される。極端条件を意図的に作った PoC でも
++counted gain の 1.25e-28 相当（coll 12,500 wei / yield 125 wei）にとどまり、現実的パラメータでは
++1 wei 未満に丸まって0になる。
++
++判定は **rejected as a Low / downgrade to Informational（本番コード変更なし、regression evidence のみ追加）**
++とする。`SCALE_SPAN = 2` は JP / EN core spec が「経済的打ち切り」と明記した upstream の設計判断であり
++（Liquity-v2-Core-Spec.md の gain 計算節および状態変数表）、これを変更すると仕様との不一致と
++upstream fork delta の拡大を同時に招く。
++
++| Severity | New finding count |
++| --- | ---: |
++| Critical | 0 |
++| High | 0 |
++| Medium | 0 |
++| Low | 0 |
++
++**Overall residual risk**: Informational
++**Recommendation**: APPROVE（production diff ゼロ）。`SCALE_SPAN` は現状維持し、切り捨て量が dust 境界内に
++とどまることを固定 regression test で継続的に確認する。
++
++**Key metrics**:
++
++- 変更した `contracts/src/**` / public ABI / storage layout: 0
++- 追加ファイル: `contracts/test/ExternalAuditLow07ScaleSpan.t.sol`（102 行）と本 historical review
++- 計測した切り捨て量: 4 scale 変化後、極端条件で coll 12,500 wei / yield 125 wei、現実条件で 0 / 0
++- A/B（`SCALE_SPAN = 3`）で回収される量: 上記と完全一致（差分 12,500 / 125、tail = 0）
++- security regressions / merge blockers: 0
++
++## Scope And Baseline
++
++- 外部指摘: Low 07 — `SCALE_SPAN = 2` Permanently Loses Depositor Gains After 3+ Scale Changes
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a`(2026-08-04)
++- 対象実装: `contracts/src/DFStabilityPool.sol`
++  - `getDepositorCollGain()`(:461-476)
++  - `getDepositorYieldGain()`(:478-493)
++  - `getDepositorYieldGainWithPending()`(:495-)
++  - 定数 `SCALE_FACTOR = 1e9` / `MAX_SCALE_FACTOR_EXPONENT = 8` / `SCALE_SPAN = 2`(:167-173)
++- normative sources: `Liquity-v2-Core-Spec.md`（JP / EN）の SP gain 計算節と状態変数表
++- upstream 参照: `liquity/bold` v1.11.0（`d62e2ea3` で取り込み）
++- 除外: vendored dependencies、SP 以外の gain 経路、liquidation 発生条件そのもの
++
++## Claim-By-Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| gain loop が `SCALE_SPAN = 2` までしか回らない | True | `DFStabilityPool.sol:471-473` / `:488-490` |
++| snapshot scale + 3 以降の gain は請求できない | True | PoC の full-span 再計算との差分が非ゼロになる（極端条件） |
++| 到達可能な scale 距離は最大 `MAX_SCALE_FACTOR_EXPONENT = 8` | True（ただし別目的の定数） | spec は前者を経済的打ち切り、後者を overflow 回避と明記 |
++| 「span は取りうる範囲の25%しかカバーしない」 | Misleading | 2定数は独立で、比率に経済的意味はない。3 scale 目以降の持分は 1e-27 以下 |
++| 損失は "permanent" | True but immaterial | 再操作すれば snapshot は現 scale に更新される。切り捨て対象は再操作しなかった残滓のみ |
++| SP depositor の yield / coll gain が失われる | True in principle | 実測は counted gain の 1.25e-28。現実条件では 1 wei 未満で 0 |
++| 円建てのため 1e27 閾値は USD 換算で約150分の1 | True | 発生確率の議論としては妥当。ただし発生時の損失量は変わらない |
++| "somewhat destructive if triggered" | False | 発生後も損失は dust。severity 引き上げの根拠にならない |
++| 上流由来である | True | `StabilityPool.sol` との差分は same-block guard の13行のみ（`git diff --no-index`） |
++
++### 経済的に dust となる理由
++
++scale は `P` が `SCALE_FACTOR`（1e9）分低下したときにのみ進む。したがって snapshot scale から
++i scale 進んだ時点で、その預金の compounded 持分は元本の `1e-9 ** i` 以下である。
++scale + 3 以降に発生する gain は、その `1e-27` 以下に減耗した持分に対する取り分にすぎない。
++
++pool 側から見ても同じ結論になる。scale が進む＝pool が実質的に消尽した状態であり、後続の offset が
++吸収できる debt は残存 deposit に制限される。他者が積み増して吸収能力を回復した場合は、逆に当該預金者の
++share が消えている。どちらの経路でも切り捨て量は dust に収束する。
++
++これは spec の設計注記（「2 scale 跨ぎ時点で預金は元本の高々 1e-9〜1e-18 倍に減耗しており、
++切り捨てる経済的影響は無視できる」）と一致する。
++
++## Evidence
++
++`contracts/test/ExternalAuditLow07ScaleSpan.t.sol` は、実 `DFStabilityPool` に対して4回の scale 変化を
++発生させ、実装と同一の式を `MAX_SCALE_FACTOR_EXPONENT` まで回した full-span 値と比較して、
++切り捨て量（tail）を直接計測する。coll（`scaleToS`）と yield（`scaleToB`）の両経路を対象とする。
++
++```text
++[PASS] test_ExtremeFourScaleTailIsBoundedDust
++  scales 4
++  SCALE_SPAN=2 coll gain   99996000209991600335986560525078
++  omitted coll tail        12500
++  SCALE_SPAN=2 yield gain  999960002099916003359865605250
++  omitted yield tail       125
++
++[PASS] test_RealisticFourScaleTailRoundsToZero
++  scales 4
++  SCALE_SPAN=2 coll gain   249999375126562183
++  omitted coll tail        0
++  SCALE_SPAN=2 yield gain  2499993751265621
++  omitted yield tail       0
++```
++
++極端側は Alice の預金 1e32、各 round の担保 1e32 という非現実的な規模で、それでも相対損失は 1.25e-28 である。
++現実側（預金 10,000 JPYdf、担保 100,000 単位）では切り捨て量が 1 wei 未満に丸まり、実測 0 になる。
++
++## A/B Fault Injection
++
++`SCALE_SPAN` を 3 に変更して同一 PoC を再実行した。
++
++```text
++SCALE_SPAN = 3:
++  SCALE_SPAN=2 coll gain   99996000209991600335986560537578   (+12500)
++  omitted coll tail        0
++  SCALE_SPAN=2 yield gain  999960002099916003359865605375     (+125)
++  omitted yield tail       0
++  [FAIL] test_ExtremeFourScaleTailIsBoundedDust
++         "extreme coll tail should cross one wei: 0 <= 0"
++```
++
++回収された額は計測した tail と完全一致し、tail の原因が `SCALE_SPAN` の打ち切りであること、
++および提案された `SCALE_SPAN = 3` がその dust を回収する（が回収額は dust のままである）ことを確認した。
++同一 replay での gas 差は現実側 test で +1,782 gas（2,135,450 -> 2,137,232）。確認後に source を戻し、
++`contracts/src/**` の diff がゼロであることを確認した。
++
++## Why Not Change `SCALE_SPAN`
++
++| 観点 | 評価 |
++| --- | --- |
++| 経済的効果 | 回収額は dust（極端条件で counted gain の 1.25e-28、現実条件で 0） |
++| 仕様整合 | JP / EN core spec が `SCALE_SPAN = 2` を経済的打ち切りとして明記。変更は spec 改訂を伴う |
++| fork delta | `DFStabilityPool.sol` の upstream 差分は現在 same-block guard の13行のみ。定数分岐は追随コストを増やす |
++| gas | 3つの gain view それぞれで1 iteration 増（cold SLOAD 相当）。claim 経路は liquidation 後の hot path |
++| リスク | 上限を上げても打ち切りは残る（span+1 で同じ議論が発生する）。境界の位置は本質的な解ではない |
++
++## Upstream Anchored Replay に関する注記
++
++upstream `liquity/bold` の `AnchoredSPInvariantsTest.testSPYieldBigDispropRedeem` は末尾の
++`invariant_allFundsClaimable()` を「Very extreme edge case. It gets fixed with SCALE_SPAN = 3」として
++無効化している。本 fork の同 test で当該行を有効化すると **pass する** が、これは fork が上流の欠陥を
++修正したためではない。当該 replay の trove 額は `MIN_DEBT = 300_000e18` 適応（`528f0190` / `17806d6c` /
++`a408bdd9`）で再スケールされており、upstream の `76_042_952_954_096_078_299.79... ether` に対して
++本 fork は `853_314_989.98... ether` と約1e11分の1である。tolerance（coll 0.00001 ether、
++JPYDF / yield 0.001 ether）は upstream と同一のままで、到達する scale 深度だけが浅くなっている。
++
++したがって「有効化したら通った」は fork の免疫性の証拠にならないため、**upstream の無効化行は変更していない**。
++切り捨て量の証拠は、上記の専用 PoC による直接計測に限定する。
++
++## Verification
++
++```text
++forge fmt --check test/ExternalAuditLow07ScaleSpan.t.sol
++forge test --match-contract ExternalAuditLow07ScaleSpanTest -vv
++  2 passed; 0 failed
++forge test --match-contract AnchoredSPInvariantsTest
++  9 passed; 0 failed
++forge test --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++  1414 passed; 0 failed; 0 skipped
++git status --short   # 追加は test 1ファイルと本 review のみ
++```
++
++## Residual Risk And Limitations
++
++- 本 PoC は `offset()` / `triggerJpydfRewards()` を直接駆動して scale 変化を作る。実 liquidation 経路の
++  発生条件（CR、価格、trove 構成）は再現していない。目的は発生条件の評価ではなく切り捨て量の計測である。
++- 計測は4 scale 変化までである。`MAX_SCALE_FACTOR_EXPONENT = 8` まで進めた場合、切り捨て量は
++  さらに `1e-9` 単位で減衰するため、境界としては本計測が保守側である。
++- 円建てにより 1e27 JPYdf（現行レートで約 640万 USD 相当）到達確率が USD 建てより高いという指摘自体は
++  妥当である。本レビューはその前提を否定せず、到達した場合の損失量が dust であることを根拠に severity を
++  下げている。SP 規模が 1e27 に近づいた場合は、scale 変化の発生自体を運用監視の観測対象として扱う。
++- `SCALE_SPAN` を将来変更する場合は、spec（CORE-SP-FR-008 / 009 と状態変数表）と本 fork delta 方針の
++  同時更新が必要である。
++
++## Methodology
++
++- 監査 PoC（mock 実装）をそのまま採用せず、実 `DFStabilityPool` に対して同一の gain 式を full span で
++  再実装し、実装値との差分として切り捨て量を測定した。
++- coll（`scaleToS`）だけでなく yield（`scaleToB`）経路も同一 test 内で計測し、指摘範囲を網羅した。
++- `SCALE_SPAN = 3` の A/B fault injection で、tail の原因と提案修正の回収額を確認したうえで source を戻した。
++- `git diff --no-index src/StabilityPool.sol src/DFStabilityPool.sol` で upstream からの fork delta を確認した。
++- JP / EN core spec の該当節を参照し、指摘が仕様未記載の欠陥か、記載済みの設計判断かを切り分けた。
++- upstream の無効化 invariant を有効化して通ることを確認したうえで、その理由が replay の再スケールで
++  あることを特定し、証拠として採用しない判断をした。

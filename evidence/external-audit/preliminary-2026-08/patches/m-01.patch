@@ -1,0 +1,381 @@
+diff --git a/contracts/src/PriceFeeds/DFPriceFeedBase.sol b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+index ef2354c9..18186672 100644
+--- a/contracts/src/PriceFeeds/DFPriceFeedBase.sol
++++ b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+@@ -139,9 +139,10 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+     /// @dev Shared-JPY-failure shutdown; see `JpyFreezeLib.shutDownFromSharedJpyFailure`.
+ function _shutDownFromSharedJpyFailure() internal returns (uint256) {
+         // Latch the terminal source state only when the branch was actually shut down. Staying
+-        // on `primary` is safe and idempotent: the provider's expiry is permanent, so every
+-        // later fetch re-enters this path and re-reports failure=true until the registered
+-        // caller acts on it. See test/JpySharedShutdownLatch.t.sol.
++        // on `primary` is safe: while the oracle remains unhealthy, the provider re-reports
++        // failure=true until the registered caller acts on it. A later fresh response starts a
++        // new provider episode, but cannot reactivate a branch that already latched shutdown.
++        // See test/JpySharedShutdownLatch.t.sol.
+         if (JpyFreezeLib.shutDownFromSharedJpyFailure(borrowerOperations, jpyUsdRateProvider)) {
+             priceSource = PriceSource.lastGoodPrice;
+         }
+diff --git a/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol b/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol
+index 2f1bbbfb..c9e86139 100644
+--- a/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol
+@@ -164,9 +164,10 @@ contract DFWstETHPriceFeed is CompositePriceFeed {
+     /// @dev Shared-JPY-failure shutdown; see `JpyFreezeLib.shutDownFromSharedJpyFailure`.
+ function _shutDownFromSharedJpyFailure() internal returns (uint256) {
+         // Latch the terminal source state only when the branch was actually shut down. Staying
+-        // on `primary` is safe and idempotent: the provider's expiry is permanent, so every
+-        // later fetch re-enters this path and re-reports failure=true until the registered
+-        // caller acts on it. See test/JpySharedShutdownLatch.t.sol.
++        // on `primary` is safe: while the oracle remains unhealthy, the provider re-reports
++        // failure=true until the registered caller acts on it. A later fresh response starts a
++        // new provider episode, but cannot reactivate a branch that already latched shutdown.
++        // See test/JpySharedShutdownLatch.t.sol.
+         if (JpyFreezeLib.shutDownFromSharedJpyFailure(borrowerOperations, jpyUsdRateProvider)) {
+             priceSource = PriceSource.lastGoodPrice;
+         }
+diff --git a/contracts/src/PriceFeeds/JpyFreezeLib.sol b/contracts/src/PriceFeeds/JpyFreezeLib.sol
+index c658a7d5..67ba86f3 100644
+--- a/contracts/src/PriceFeeds/JpyFreezeLib.sol
++++ b/contracts/src/PriceFeeds/JpyFreezeLib.sol
+@@ -58,8 +58,8 @@ library JpyFreezeLib {
+      *          3000e18 * 1e18 / 6.667e15 ≈ 450,000e18 (= ¥450,000).
+      *
+      *      The provider owns the last-good rate, report provenance, freeze timer, and
+-     *      terminal expiry. Every branch therefore receives the same rate and expiry
+-     *      decision.
++     *      per-outage expiry. Every branch therefore receives the same rate and expiry
++     *      decision while that outage remains unhealthy.
+      *
+      *      Note: the provider preserves the gas-griefing guard. An out-of-gas Chainlink
+      *      read reverts with `InsufficientGasForExternalCall` rather than being silently
+@@ -74,7 +74,8 @@ library JpyFreezeLib {
+         return (Math.mulDiv(_usdPrice, 1e18, jpyUsdRate), false);
+     }
+ 
+-    /// @dev The provider latches shared expiry before this call. Catch a source-level
++    /// @dev The provider latches shared expiry for the current unhealthy episode before this
++    ///      call. Catch a source-level
+     ///      BorrowerOperations authorization failure so the enclosing PriceFeedProxy call
+     ///      does not roll that provider mutation back. The source still enters its terminal
+     ///      state and returns failure=true; the registered proxy then performs shutdown.
+diff --git a/contracts/src/PriceFeeds/JpyUsdRateProvider.sol b/contracts/src/PriceFeeds/JpyUsdRateProvider.sol
+index 870ed70b..c61ce0b9 100644
+--- a/contracts/src/PriceFeeds/JpyUsdRateProvider.sol
++++ b/contracts/src/PriceFeeds/JpyUsdRateProvider.sol
+@@ -11,8 +11,8 @@ import "../Interfaces/IJpyUsdRateProvider.sol";
+  * @dev A shared contract is required because inherited state remains local to each deployed
+  *      price feed. Healthy Chainlink responses refresh one shared cache. Invalid, stale, or
+  *      reverting responses reuse that cache for at most MAX_JPY_FREEZE_DURATION. Expiration
+- *      is latched so a later recovery cannot make branches that have not fetched yet diverge
+- *      from branches that already observed the terminal shared-dependency failure.
++ *      remains latched while the oracle is unhealthy, but a later fresh response starts a new
++ *      healthy episode. Branches that already observed expiry remain shut down at Core level.
+  */
+ contract JpyUsdRateProvider is IJpyUsdRateProvider {
+     error InsufficientGasForExternalCall();
+@@ -61,13 +61,12 @@ contract JpyUsdRateProvider is IJpyUsdRateProvider {
+     }
+ 
+     function fetchJpyUsdRate() external returns (uint256 rate, bool freezeExpired) {
+-        if (jpyFreezeExpired) return (lastGoodJpyRate, true);
+-
+         ChainlinkResponse memory response = _getCurrentChainlinkResponse();
+         if (_isFresh(response)) {
+             rate = _scaleTo18Decimals(response.answer);
+             lastGoodJpyRate = rate;
+             lastGoodJpyUpdatedAt = response.updatedAt;
++            jpyFreezeExpired = false;
+ 
+             if (jpyFrozenSince != 0) {
+                 jpyFrozenSince = 0;
+@@ -76,6 +75,11 @@ contract JpyUsdRateProvider is IJpyUsdRateProvider {
+             return (rate, false);
+         }
+ 
++        // Terminal for the current outage, not for the provider's lifetime. Keep returning the
++        // expired signal while the oracle is unhealthy, but leave the fresh-read path above
++        // reachable so a later valid round can begin a new episode.
++        if (jpyFreezeExpired) return (lastGoodJpyRate, true);
++
+         // The response is not fresh, but it may still be decodable and NEWER than what we
+         // cached. `lastGoodJpyUpdatedAt` only advances on a fresh read, and nothing polls this
+         // contract, so after a quiet period the cache can lag the newest published round by an
+diff --git a/contracts/test/DFPriceFeed.t.sol b/contracts/test/DFPriceFeed.t.sol
+index ee173cab..a5ab6aec 100644
+--- a/contracts/test/DFPriceFeed.t.sol
++++ b/contracts/test/DFPriceFeed.t.sol
+@@ -424,10 +424,11 @@ contract DFPriceFeedTest is Test {
+         assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp - 1);
+     }
+ 
+-    function test_sharedExpiryPreventsLaterBranchRecoverySplit() public {
++    function test_freshRecoveryResumesBranchThatDidNotObserveExpiry() public {
+         collUsd.setPrice(1e8);
+         DFUSDCPriceFeed firstFeed = _deployStandardFeed();
+         DFUSDCPriceFeed dormantFeed = _deployStandardFeed();
++        uint256 dormantPriceBefore = dormantFeed.lastGoodPrice();
+         uint256 freezeStart = block.timestamp + JPY_STALENESS;
+ 
+         vm.warp(freezeStart + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
+@@ -439,11 +440,22 @@ contract DFPriceFeedTest is Test {
+ 
+         jpyUsd.setPrice(500_000);
+         jpyUsd.setUpdatedAt(block.timestamp);
+-        (, bool dormantFailure) = dormantFeed.fetchPrice();
++        (uint256 recoveredPrice, bool dormantFailure) = dormantFeed.fetchPrice();
+ 
+-        assertTrue(dormantFailure, "later branch observes latched expiry despite raw-oracle recovery");
+-        assertEq(uint256(dormantFeed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
+-        assertEq(jpyRateProvider.lastGoodJpyRate(), uint256(JPY_USD_8DEC) * 1e10);
++        assertFalse(dormantFailure, "fresh recovery starts a new provider episode");
++        assertEq(uint256(dormantFeed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
++        assertEq(jpyRateProvider.lastGoodJpyRate(), uint256(500_000) * 1e10);
++        assertEq(jpyRateProvider.jpyFrozenSince(), 0);
++        assertFalse(jpyRateProvider.jpyFreezeExpired());
++        assertEq(recoveredPrice, 200e18, "dormant branch uses the recovered live JPY rate");
++        assertNotEq(recoveredPrice, dormantPriceBefore);
++
++        // A feed that already observed expiry remains pinned; provider recovery does not undo
++        // the branch-local terminal transition or the Core shutdown it triggered.
++        (uint256 firstPriceAfterRecovery, bool firstFailureAfterRecovery) = firstFeed.fetchPrice();
++        assertFalse(firstFailureAfterRecovery);
++        assertEq(uint256(firstFeed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
++        assertNotEq(firstPriceAfterRecovery, recoveredPrice);
+     }
+ 
+     function test_jpyUsdAnsweredInRoundBehindRoundId_substitutesLastGoodRate_noShutdown() public {
+diff --git a/contracts/test/JpySharedShutdownLatch.t.sol b/contracts/test/JpySharedShutdownLatch.t.sol
+index 6d28fe11..dcc705c4 100644
+--- a/contracts/test/JpySharedShutdownLatch.t.sol
++++ b/contracts/test/JpySharedShutdownLatch.t.sol
+@@ -138,8 +138,8 @@ contract JpySharedShutdownLatchTest is Test {
+         assertTrue(proxyFail, "proxy still observes the shared JPY failure");
+         assertTrue(bo.hasBeenShutDown(), "proxy performs the shutdown after the direct call");
+ 
+-        // Idempotent: the provider's expiry is permanent, so the signal keeps re-arming and
+-        // the branch stays shut down no matter how often either party fetches.
++        // Idempotent while the oracle remains unhealthy: the provider keeps re-reporting the
++        // current episode's expiry, so the branch stays shut down on repeated fetches.
+         for (uint256 i = 0; i < 3; i++) {
+             vm.warp(block.timestamp + 1 hours);
+             stEthUsd.setPrice(3300e8);
+diff --git a/contracts/test/JpyUsdRateProvider.t.sol b/contracts/test/JpyUsdRateProvider.t.sol
+index 0981211c..3ec777cb 100644
+--- a/contracts/test/JpyUsdRateProvider.t.sol
++++ b/contracts/test/JpyUsdRateProvider.t.sol
+@@ -112,7 +112,7 @@ contract JpyUsdRateProviderTest is Test {
+         assertEq(provider.jpyFrozenSince(), 0);
+     }
+ 
+-    function test_expirationLatchesAcrossLaterOracleRecovery() public {
++    function test_freshRecoveryAfterExpirationClearsLatch() public {
+         uint256 expectedStart = block.timestamp + STALENESS;
+         vm.warp(expectedStart + provider.MAX_JPY_FREEZE_DURATION());
+ 
+@@ -122,11 +122,54 @@ contract JpyUsdRateProviderTest is Test {
+ 
+         oracle.setPrice(500_000);
+         oracle.setUpdatedAt(block.timestamp);
++        vm.expectEmit(true, true, true, true);
++        emit JpyUsdRateProvider.JpyRateUnfrozen(block.timestamp, 500_000 * 1e10);
+         (uint256 laterRate, bool laterExpired) = provider.fetchJpyUsdRate();
+ 
+-        assertTrue(laterExpired, "recovery cannot split branches after shared terminal expiry");
+-        assertEq(laterRate, expiredRate, "latched provider never changes the terminal shared rate");
++        assertFalse(laterExpired, "fresh recovery clears the expired freeze episode");
++        assertEq(laterRate, 500_000 * 1e10, "provider adopts the recovered live rate");
++        assertNotEq(laterRate, expiredRate);
++        assertEq(provider.lastGoodJpyRate(), laterRate);
++        assertEq(provider.lastGoodJpyUpdatedAt(), block.timestamp);
++        assertEq(provider.jpyFrozenSince(), 0);
++        assertFalse(provider.jpyFreezeExpired());
++    }
++
++    function test_expirationRemainsLatchedUntilOracleIsFresh() public {
++        uint256 expectedStart = block.timestamp + STALENESS;
++        vm.warp(expectedStart + provider.MAX_JPY_FREEZE_DURATION());
++
++        (uint256 expiredRate, bool expired) = provider.fetchJpyUsdRate();
++        assertTrue(expired);
++
++        vm.warp(block.timestamp + STALENESS + 1);
++        oracle.setPrice(500_000);
++        oracle.setUpdatedAt(block.timestamp - STALENESS);
++        (uint256 laterRate, bool laterExpired) = provider.fetchJpyUsdRate();
++
++        assertTrue(laterExpired, "a merely readable stale round cannot clear expiry");
++        assertEq(laterRate, expiredRate);
+         assertEq(provider.jpyFrozenSince(), expectedStart);
++        assertTrue(provider.jpyFreezeExpired());
++    }
++
++    function test_recoveredProviderCanExpireAgainDuringALaterOutage() public {
++        vm.warp(block.timestamp + STALENESS + provider.MAX_JPY_FREEZE_DURATION());
++        (, bool firstExpired) = provider.fetchJpyUsdRate();
++        assertTrue(firstExpired);
++
++        oracle.setPrice(500_000);
++        oracle.setUpdatedAt(block.timestamp);
++        (, bool recovered) = provider.fetchJpyUsdRate();
++        assertFalse(recovered);
++
++        uint256 secondExpectedStart = block.timestamp + STALENESS;
++        vm.warp(secondExpectedStart + provider.MAX_JPY_FREEZE_DURATION());
++        (, bool secondExpired) = provider.fetchJpyUsdRate();
++
++        assertTrue(secondExpired);
++        assertEq(provider.jpyFrozenSince(), secondExpectedStart);
++        assertTrue(provider.jpyFreezeExpired());
+     }
+ 
+     function test_constructorRejectsNoCodeOracle() public {
+diff --git a/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md b/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+index db870dde..2cdc2775 100644
+--- a/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md
++++ b/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+@@ -271,8 +271,8 @@ incident log; it is not a component spec requirement ID.
+ | `ALRT-ORCL-004` | JPY/USD shared feed age >= 80% of staleness threshold | P2 | No | shared JPY/USD `latestRoundData.updatedAt` | Confirm early as a dependency shared across all branches |
+ | `ALRT-ORCL-005` | shared provider `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | `JpyUsdRateProvider` state / event | Record the freeze start block, confirm every active source references the same provider, and determine whether an alternative source is needed |
+ | `ALRT-ORCL-006` | shared JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | provider `jpyFrozenSince`, source proposal state | Escalate to the oracle owner / GOV |
+-| `ALRT-ORCL-007` | shared JPY/USD freeze >= 12h or `JpyFreezeExpired` | P0 | Yes | provider state / event | Prepare a public update; on expiry verify shutdown and user-action blocks for every active branch |
+-| `ALRT-ORCL-008` | JPY/USD freeze resolved | P3 / Resolved | No, unless public notice was posted | `JpyRateUnfrozen` / state | Incident log and lifting of the public notice |
++| `ALRT-ORCL-007` | shared JPY/USD freeze >= 12h or `JpyFreezeExpired` | P0 | Yes | provider state / event | Prepare a public update; on expiry verify each active branch's shutdown / `priceSource` and user-action block. Do not treat provider recovery alone as reactivation of an already-shut branch |
++| `ALRT-ORCL-008` | JPY/USD provider freeze resolved | P3 / Recovery | No, unless public notice was posted | `JpyRateUnfrozen` / state | Inventory every branch's shutdown / `priceSource`; lift the public notice only after already-shut branches have an explicit disposition |
+ | `ALRT-ORCL-009` | `SourceProposed` | P2 | No | PriceFeedProxy event/state | Notify the timelock deadline and the smoke-test owner |
+ | `ALRT-ORCL-010` | `SourceSwitchValidated.priceGuardBypassed == true` | P1 | No, unless user impact exists | PriceFeedProxy event | Audit the emergency bypass and price difference |
+ | `ALRT-ORCL-011` | dwstETH stETH/ETH divergence `>= 0.5%` | P2 | No | stETH/USD and ETH/USD oracle legs | Review the divergence trend and both feed-health states |
+@@ -536,8 +536,8 @@ comparison and does not treat exactly the threshold as fresh.
+ | provider `JpyRateFrozen` or `jpyFrozenSince > 0` | P1 | Record the provider address and freeze start block, prove all active sources reference it, and check every branch price-fetch path |
+ | 6h elapsed since freeze, with no recovery prospect or source proposal | P0 | Escalate to GOV / oracle owner. Prepare an alternative source and public comms |
+ | 12h elapsed since freeze | P0 | Raise shutdown risk to a public announcement candidate and decide the next update time |
+-| `JpyRateUnfrozen` | P3 / Resolved | Record the price during the freeze, user impact, and whether action was taken in the incident log |
+-| provider `JpyFreezeExpired` / `MAX_JPY_FREEZE_DURATION` reached | P0 | Confirm alert delivery to the intended human, plus branch shutdown and user app block on every active branch |
++| `JpyRateUnfrozen` | P3 / Recovery | Record the freeze price, user impact, and each branch's shutdown / `priceSource`; do not close the incident until already-shut branches have an explicit disposition |
++| provider `JpyFreezeExpired` / `MAX_JPY_FREEZE_DURATION` reached | P0 | Confirm alert delivery, each active branch's shutdown / `priceSource`, public notice, and user app block. After fresh recovery, record that already-shut branches remain pinned and only branches that did not observe expiry resume the live rate |
+ 
+ A JPY/USD freeze is not an immediate branch shutdown. As long as borrowing,
+ liquidation, and redemption continue, keep the public wording to a state
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index d9235e4b..e7f1062d 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -996,7 +996,7 @@ Source of truth: [Oracle.md](../../protocol/product/spec/Oracle.md). Target: `Pr
+ | ORCL-EVT-006 | SourceSwitchValidated (old/new price, oldSourceHealthy, priceGuardBypassed) | unit (ledger-defined) | ☐ | ☐ | | Not run | |
+ | ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` (JPY soft-freeze detection; `timestamp` is the earlier of first observation and the stored JPY rate's stale boundary) | unit | ☑ | ☑ | `forge test --match-path test/DFPriceFeed.t.sol` (50 passed); `forge test --match-path test/sUSDSPriceFeed.t.sol` (35 passed); `forge test --match-path test/DFWstETHPriceFeed.t.sol` (36 passed) | PASS(V14) | Emitted by `JpyUsdRateProvider`. The topic is unchanged after the shared `JpyFreezeLib` extraction, and the same event is observed from all three feeds |
+ | ORCL-EVT-008 | `JpyRateUnfrozen(timestamp, liveRate)` (return to a live JPY/USD rate) | unit | ☑ | ☑ | `forge test --match-path test/DFPriceFeed.t.sol` (50 passed); `forge test --match-path test/sUSDSPriceFeed.t.sol` (35 passed); `forge test --match-path test/DFWstETHPriceFeed.t.sol` (36 passed) | PASS(V14) | As above |
+-| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` (terminal expiry of the shared provider; the P0 signal for shutdown of every active branch and blocked user actions) | unit | ☑ | ☑ | `forge test --match-path test/DFPriceFeed.t.sol` (50 passed); `forge test --match-path test/sUSDSPriceFeed.t.sol` (35 passed); `forge test --match-path test/DFWstETHPriceFeed.t.sol` (36 passed) | PASS(V14) | As above |
++| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` (expiry of the current shared freeze episode; P0 signal for per-branch shutdown and blocked user actions) | unit | ☑ | ☑ | `forge test --match-path test/JpyUsdRateProvider.t.sol`; `forge test --match-path test/DFPriceFeed.t.sol`; `forge test --match-path test/DFWstETHPriceFeedProxyIntegration.t.sol` | PASS(V15) | Expiry re-reports while unhealthy; a fresh response clears the episode latch. Already-shut branches remain pinned while branches that did not observe expiry resume the live rate |
+ 
+ ### 10.6 Failure and Exceptional Behavior (§12 ERR, no ID)
+ 
+diff --git a/documents/en/protocol/product/spec/Oracle.md b/documents/en/protocol/product/spec/Oracle.md
+index 5905fe1e..78a31c3e 100644
+--- a/documents/en/protocol/product/spec/Oracle.md
++++ b/documents/en/protocol/product/spec/Oracle.md
+@@ -705,7 +705,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | --- | --- | --- | --- |
+ | `ethUsdOracle` (= collateral/USD; pseudocode `collUsdOracle`) | `Oracle{aggregator, stalenessThreshold, decimals}` | 🔵 upstream | Chainlink aggregator for collateral/USD. Upstream constructor asserts `decimals == 8`. Storage name remains upstream name (renaming would also be an edit) |
+ | `jpyUsdRateProvider` | `address immutable` | 🟢 DF (every active feed source) | Same `JpyUsdRateProvider` address in every branch. Feed sources do not duplicate JPY cache or freeze state |
+-| `jpyUsdOracle` / `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` / `jpyFreezeExpired` | provider state | 🟢 DF (`JpyUsdRateProvider`) | One shared Chainlink binding, cache provenance, freeze onset, and latched terminal-expiry decision for all branches. Provider constructor requires a fresh 8-decimal response |
++| `jpyUsdOracle` / `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` / `jpyFreezeExpired` | provider state | 🟢 DF (`JpyUsdRateProvider`) | One shared Chainlink binding, cache provenance, freeze onset, and expiry decision for the current freeze episode. A fresh response clears the episode state. Provider constructor requires a fresh 8-decimal response |
+ | `wbtcBtcOracle` | `Oracle{...}` | 🟢 DF (`DFWBTCPriceFeed`) | WBTC/BTC peg monitor (additional storage specific to Peg-monitored) |
+ | `xautXauOracle` | `Oracle{...}` | 🟢 DF (future `DFXAUTPriceFeed`) | XAUT/XAU peg monitor (added on Composite peg upgrade) |
+ | `rateProviderAddress` | `address immutable` | 🔵 upstream-derived (pruned `CompositePriceFeed`) | canonical rate source (for sUSDS: `0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD`) |
+@@ -765,8 +765,8 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ ### <a id="orcl-sec-005"></a>ORCL-SEC-005: JPY/USD shared dependency failsafe
+ 
+ - Type: Security
+-- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Exactly one `JpyUsdRateProvider` is deployed and injected into every active source; inherited or duplicated per-feed state is prohibited because it cannot provide shared storage. The provider stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`, and on first failure sets `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)`. Every branch therefore receives the same frozen rate, onset, recovery, and expiry decision. Recovery inside `PRM-ORACLE-006` resumes live rates automatically. Expiry is latched before returning it to consumers, so later Chainlink recovery cannot treat only branches that have not yet observed the failure as recovered; each active branch transitions through its standard `lastGoodPrice` shutdown path on its next fetch. When a source is behind `PriceFeedProxy`, it catches the expected source-level BorrowerOperations caller-mismatch on this path and returns `failure=true`; the registered Proxy performs shutdown in the same transaction. This preserves the provider latch instead of reverting all state changes. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback. Monitor the provider address/state/events (`JpyRateFrozen`, `JpyRateUnfrozen`, `JpyFreezeExpired`) externally and fail deployment/preflight if active sources reference different providers.
+-- Verification: unit (cached-rate timestamp provenance, immediate shutdown for stale and invalid responses on the first call after the freeze limit elapses with no traffic, first-observation anchoring while the cached rate is fresh, recovery within 24h, standard and sUSDS implementations), integration (Proxy path), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
++- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Exactly one `JpyUsdRateProvider` is deployed and injected into every active source; inherited or duplicated per-feed state is prohibited because it cannot provide shared storage. The provider stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`, and on first failure sets `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)`. Every branch therefore receives the same frozen rate and onset. While the oracle remains unhealthy after `PRM-ORACLE-006`, expiry is latched before returning `failure=true`, so the signal remains available to every consumer during that outage. A later fresh response must remain readable even after expiry: it adopts the live rate, clears `jpyFrozenSince` and `jpyFreezeExpired`, and emits `JpyRateUnfrozen`. A branch that already observed expiry remains pinned at its branch-local `lastGoodPrice`; a branch still on `primary` resumes the recovered live rate. When a source is behind `PriceFeedProxy`, it catches the expected source-level BorrowerOperations caller-mismatch during the unhealthy expiry episode and returns `failure=true`; the registered Proxy performs shutdown in the same transaction. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback. Monitor the provider address/state/events (`JpyRateFrozen`, `JpyRateUnfrozen`, `JpyFreezeExpired`) externally and fail deployment/preflight if active sources reference different providers.
++- Verification: unit (cached-rate timestamp provenance, immediate shutdown for stale and invalid responses on the first call after the freeze limit elapses with no traffic, first-observation anchoring while the cached rate is fresh, fresh recovery before and after expiry, stale responses do not clear expiry, a later outage expires independently, already-shut branches remain pinned while branches that did not observe expiry resume, standard and sUSDS implementations), integration (Proxy path), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
+ 
+ ### <a id="orcl-sec-006"></a>ORCL-SEC-006: Peg monitoring for centralized wrapper collateral
+ 
+@@ -826,7 +826,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | ORCL-EVT-006 | `SourceSwitchValidated` (old/reference and new prices, oldSourceHealthy, priceGuardBypassed) | Distinguish normal replacement / cached-reference recovery / explicit emergency bypass; audit price jumps |
+ | ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` | Detect JPY soft-freeze. `timestamp` is the earlier of first observation and the cached JPY rate's stale boundary, so it may predate the emission block |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | Detect return to the live JPY/USD rate |
+-| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` | Earliest stable P0 signal that the shared provider has latched terminal expiry; confirm every active branch shutdown path and user-action block |
++| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` | Earliest stable P0 signal that the current shared-JPY freeze episode expired; confirm each active branch's shutdown / `priceSource` and user-action block, then track that later provider recovery does not reactivate already-shut branches |
+ 
+ - Price itself and fallback to `lastGoodPrice` are observed through upstream-base events/state (this document does not define those event bodies).
+ - Shutdown body is upstream `borrowerOperations.shutdownFromOracleFailure()`. Proxy side makes it observable through ORCL-EVT-004.
+diff --git a/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md b/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+index aa761163..975ad205 100644
+--- a/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
++++ b/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+@@ -270,8 +270,8 @@ incident log で使う運用識別子であり、component spec の requirement
+ | `ALRT-ORCL-004` | JPY/USD shared feed age >= 80% of staleness threshold | P2 | No | shared JPY/USD `latestRoundData.updatedAt` | 全 branch 共通依存として早期確認 |
+ | `ALRT-ORCL-005` | shared provider `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | `JpyUsdRateProvider` state / event | freeze 起点と検知 block、全 active source の provider address 一致、代替 source 要否を記録 |
+ | `ALRT-ORCL-006` | shared JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | provider `jpyFrozenSince`, source proposal state | oracle owner / GOV に escalation |
+-| `ALRT-ORCL-007` | shared JPY/USD freeze >= 12h または `JpyFreezeExpired` | P0 | Yes | provider state / event | public update を準備し、expiry 時は全 active branch の shutdown / user action block を確認 |
+-| `ALRT-ORCL-008` | JPY/USD freeze resolved | P3 / Resolved | No, unless public notice was posted | `JpyRateUnfrozen` / state | incident log と public notice 解除 |
++| `ALRT-ORCL-007` | shared JPY/USD freeze >= 12h または `JpyFreezeExpired` | P0 | Yes | provider state / event | public update を準備し、expiry 時は各 active branch の shutdown / `priceSource` / user action block を確認。provider 回復だけで既 shutdown branch が再開したと扱わない |
++| `ALRT-ORCL-008` | JPY/USD provider freeze resolved | P3 / Recovery | No, unless public notice was posted | `JpyRateUnfrozen` / state | 全 branch の shutdown / `priceSource` を棚卸しし、既 shutdown branch の明示的な処置後にだけ public notice を解除 |
+ | `ALRT-ORCL-009` | `SourceProposed` | P2 | No | PriceFeedProxy event/state | timelock 期限と smoke-test owner を通知 |
+ | `ALRT-ORCL-010` | `SourceSwitchValidated.priceGuardBypassed == true` | P1 | No, unless user impact exists | PriceFeedProxy event | emergency bypass と価格差を監査 |
+ | `ALRT-ORCL-011` | dwstETH stETH/ETH 乖離 watch（`abs(stETH/USD − ETH/USD) / ETH/USD >= 0.5%`） | P2 | No | dwstETH oracle legs（stETH/USD・ETH/USD `latestRoundData`） | 乖離推移と両 feed health を確認（redemption band 1% への接近監視） |
+@@ -568,8 +568,8 @@ monitor は strict `<` 判定を前提に、閾値ちょうどを fresh と扱
+ | provider `JpyRateFrozen` または `jpyFrozenSince > 0` | P1 | provider address と凍結起点 timestamp を記録し、全 active source が同じ provider を参照する証跡と全 branch の価格取得状況を確認 |
+ | freeze から 6h 経過、かつ復旧見込みまたは source proposal がない | P0 | GOV / oracle owner へ escalation。代替 source と public comms を準備 |
+ | freeze から 12h 経過 | P0 | shutdown リスクを public 告知候補に上げ、次回更新時刻を決める |
+-| `JpyRateUnfrozen` | P3 / Resolved | freeze 中の価格・user impact・対応有無を incident log に残す |
+-| provider `JpyFreezeExpired` / `MAX_JPY_FREEZE_DURATION` 到達 | P0 | 意図した human recipient への alert delivery、全 active branch の shutdown、public 告知・user app block を確認 |
++| `JpyRateUnfrozen` | P3 / Recovery | freeze 中の価格・user impact・各 branch の shutdown / `priceSource` を記録し、既 shutdown branch の処置が決まるまで incident を close しない |
++| provider `JpyFreezeExpired` / `MAX_JPY_FREEZE_DURATION` 到達 | P0 | 意図した human recipient への alert delivery、各 active branch の shutdown / `priceSource`、public 告知・user app block を確認。fresh 回復後も既 shutdown branch は pinned、expiry 未観測 branch だけが live rate を再開することを記録 |
+ 
+ JPY/USD freeze は即時 branch shutdown ではない。借入、清算、redemption が継続する
+ 限り、public 文言は「価格換算の共通 FX レッグが last-good rate で一時継続中」
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 60509975..55479ee4 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -1007,7 +1007,7 @@ placeholder 期挙動:
+ | ORCL-EVT-006 | SourceSwitchValidated（old/new 価格・oldSourceHealthy・priceGuardBypassed） | unit（台帳定義） | ☐ | ☐ | | 未実施 | |
+ | ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)`（JPY soft-freeze の検知。`timestamp` は初回観測と保存済み JPY rate の stale 境界の早い方） | unit | ☑ | ☑ | `forge test --match-path test/DFPriceFeed.t.sol`（50 passed）; `forge test --match-path test/sUSDSPriceFeed.t.sol`（35 passed）; `forge test --match-path test/DFWstETHPriceFeed.t.sol`（36 passed） | PASS(V14) | 発火元は `JpyUsdRateProvider`。共有 `JpyFreezeLib` 抽出後も topic は不変で、3 feed すべてから同一 event を観測 |
+ | ORCL-EVT-008 | `JpyRateUnfrozen(timestamp, liveRate)`（live JPY/USD への復帰検知） | unit | ☑ | ☑ | `forge test --match-path test/DFPriceFeed.t.sol`（50 passed）; `forge test --match-path test/sUSDSPriceFeed.t.sol`（35 passed）; `forge test --match-path test/DFWstETHPriceFeed.t.sol`（36 passed） | PASS(V14) | 同上 |
+-| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)`（shared provider の終局 expiry。全 active branch の shutdown / user action block の P0 signal） | unit | ☑ | ☑ | `forge test --match-path test/DFPriceFeed.t.sol`（50 passed）; `forge test --match-path test/sUSDSPriceFeed.t.sol`（35 passed）; `forge test --match-path test/DFWstETHPriceFeed.t.sol`（36 passed） | PASS(V14) | 同上 |
++| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)`（当該 shared freeze episode の expiry。branch ごとの shutdown / user action block の P0 signal） | unit | ☑ | ☑ | `forge test --match-path test/JpyUsdRateProvider.t.sol`; `forge test --match-path test/DFPriceFeed.t.sol`; `forge test --match-path test/DFWstETHPriceFeedProxyIntegration.t.sol` | PASS(V15) | unhealthy 中は expiry を再通知し、fresh recovery は episode latch を解除する。既 shutdown branch は pinned、未観測 branch は live rate を再開 |
+ 
+ ### 10.6 失敗時・異常系挙動（§12 ERR・ID なし）
+ 
+diff --git a/documents/jp/protocol/product/spec/Oracle.md b/documents/jp/protocol/product/spec/Oracle.md
+index 11eab201..b3a7d3af 100644
+--- a/documents/jp/protocol/product/spec/Oracle.md
++++ b/documents/jp/protocol/product/spec/Oracle.md
+@@ -574,7 +574,7 @@ dTokenアプローチによりDay-1時点で8slotを登録する。Branch 0–1
+ | --- | --- | --- | --- |
+ | `ethUsdOracle`（= 担保/USD。本書擬似コード `collUsdOracle`） | `Oracle{aggregator, stalenessThreshold, decimals}` | 🔵 upstream | 担保/USD の Chainlink アグリゲータ。`decimals == 8` を upstream constructor で `assert`。ストレージ名は upstream のまま（rename も「編集」になるため） |
+ | `jpyUsdRateProvider` | `address immutable` | 🟢 DF（全 active feed source） | 全 branch で同一の provider address。feed source は JPY cache / freeze state を重複保持しない |
+-| `jpyUsdOracle` / `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` / `jpyFreezeExpired` | provider state | 🟢 DF（`JpyUsdRateProvider`） | JPY/USD binding、cache provenance、freeze 起点、終局 expiry 判定を全 branch で共有。constructor は fresh な8桁 response を要求 |
++| `jpyUsdOracle` / `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` / `jpyFreezeExpired` | provider state | 🟢 DF（`JpyUsdRateProvider`） | JPY/USD binding、cache provenance、freeze 起点、当該 freeze episode の expiry 判定を全 branch で共有。fresh response は episode state を解除する。constructor は fresh な8桁 response を要求 |
+ | `wbtcBtcOracle` | `Oracle{...}` | 🟢 DF（`DFWBTCPriceFeed`） | WBTC/BTC ペグ監視（Peg-monitored 固有の追加ストレージ） |
+ | `xautXauOracle` | `Oracle{...}` | 🟢 DF（将来 `DFXAUTPriceFeed`） | XAUT/XAU ペグ監視（Composite peg 昇格時に追加） |
+ | `rateProviderAddress` | `address immutable` | 🔵 upstream 由来（pruned `CompositePriceFeed`） | canonical rate 取得先（sUSDS は `0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD`） |
+@@ -638,12 +638,12 @@ dTokenアプローチによりDay-1時点で8slotを登録する。Branch 0–1
+   1. deployment-wide に `JpyUsdRateProvider` を1つだけ配置し、全 active feed source へ同じ address を注入する。継承基底や feed ごとの state copy は shared storage にならないため禁止する。
+   2. provider は健全な JPY/USD の `lastGoodJpyRate` と同じ response の `updatedAt` を `lastGoodJpyUpdatedAt` に対で保存する。
+   3. stale・無効値・取得失敗では即時 shutdown せず、provider の単一 cache を代用する。初回障害観測時に `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)` とし、全 branch が同じ rate / 起点 / 回復判定を受け取る。
+-  4. `PRM-ORACLE-006` 未満で回復した場合は live rate へ戻し `JpyRateUnfrozen` を発火する。期限到達時は `jpyFreezeExpired` を先に latch し、後続の Chainlink 回復で未観測 branch だけが回復扱いにならないようにする。各 active branch は次回 fetch で標準 shutdown へ移行する。
+-  5. `PriceFeedProxy` 配下の source は、この expiry path で想定される BorrowerOperations caller 不一致を catch して `failure=true` を返し、登録済み Proxy が同一 transaction で shutdown する。provider latch を含む全 state change を revert してはならない。
++  4. fresh response は期限到達前後を問わず live rate を採用し、`jpyFrozenSince = 0`、`jpyFreezeExpired = false` として `JpyRateUnfrozen` を発火する。期限到達後も oracle read を短絡してはならない。expiry latch は oracle が unhealthy な当該 episode 中だけ `failure=true` を再通知し、provider の lifetime 永続停止には使わない。
++  5. `PriceFeedProxy` 配下の source は、unhealthy な expiry episode で想定される BorrowerOperations caller 不一致を catch して `failure=true` を返し、登録済み Proxy が同一 transaction で shutdown する。expiry を観測して `lastGoodPrice` に移行した branch は provider 回復後も pinned のまま、未観測で `primary` の branch は fresh rate を再開する。provider state change を revert してはならない。
+   6. 担保・peg・canonical・backing レッグの障害は JPY soft-freeze より優先して標準 shutdown とする。
+   7. `InsufficientGasForExternalCall` は障害へ変換せず再 revert する。
+ - Parameters: `PRM-ORACLE-001`、`PRM-ORACLE-006`
+-- Verification: unit（保存済み rate の timestamp provenance、stale / invalid 応答で無通信の freeze 上限超過後の初回 call が即 shutdown、保存済み rate が fresh な間の invalid response は初回観測 anchor、24h 内回復、標準 / sUSDS 両実装）, integration（Proxy 経路）, fork
++- Verification: unit（保存済み rate の timestamp provenance、stale / invalid 応答で無通信の freeze 上限超過後の初回 call が即 shutdown、保存済み rate が fresh な間の invalid response は初回観測 anchor、期限前後の fresh 回復、stale 応答では expiry 維持、回復後の次 episode が再度上限判定、既 shutdown branch は pinned / expiry 未観測 branch は再開、標準 / sUSDS 両実装）, integration（Proxy 経路）, fork
+ 
+ ### ORCL-SEC-006: 中央集権ラッパー担保のペグ監視
+ 
+@@ -703,7 +703,7 @@ dTokenアプローチによりDay-1時点で8slotを登録する。Branch 0–1
+ | ORCL-EVT-006 | `SourceSwitchValidated`（old/reference・new 価格、oldSourceHealthy、priceGuardBypassed） | 通常差替 / cache 基準復旧 / 明示 emergency bypass の識別、価格ジャンプ監査 |
+ | ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` | JPY soft-freeze の検知。`timestamp` は初回観測と保存済み JPY rate の stale 境界の早い方で、event emission block より古い場合がある |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | live JPY/USD への復帰検知 |
+-| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` | shared provider の終局 expiry を示す最速の P0 signal。全 active branch の shutdown と user action block を確認 |
++| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` | 当該 shared JPY freeze episode の expiry を示す最速の P0 signal。各 active branch の shutdown / `priceSource` と user action block を確認し、後続の provider 回復が既 shutdown branch を再開しないことを追跡 |
+ 
+ - 価格そのもの・`lastGoodPrice` への退避は upstream 基底由来のイベント／状態で観測する（本書は発火本体を持たない）。
+ - shutdown の発火本体は upstream `borrowerOperations.shutdownFromOracleFailure()`。Proxy 側は ORCL-EVT-004 で可観測化する。

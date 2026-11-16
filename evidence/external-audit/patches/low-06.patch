@@ -1,0 +1,987 @@
+diff --git a/.github/workflows/contracts-tests.yml b/.github/workflows/contracts-tests.yml
+index 7a6ee24f..d7bb05d3 100644
+--- a/.github/workflows/contracts-tests.yml
++++ b/.github/workflows/contracts-tests.yml
+@@ -187,7 +187,7 @@ jobs:
+ 
+       - name: Prepare and verify DF governance handover against manifest
+         env:
+-          DEPLOYER: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
++          DEPLOYER: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+           DF_CURRENT_ADMIN: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+           DF_TIMELOCK: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+           DF_TREASURY: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+@@ -234,7 +234,7 @@ jobs:
+           DF_ALLOCATOR_COOLDOWN_3: "60"
+           DF_ALLOCATOR_COOLDOWN_4: "60"
+         run: |
+-          forge script script/PrepareDFGovernanceHandover.s.sol:PrepareDFGovernanceHandover --rpc-url http://localhost:8545 --broadcast
++          forge script script/PrepareDFGovernanceHandover.s.sol:PrepareDFGovernanceHandover --rpc-url http://localhost:8545 --broadcast --unlocked
+           DF_VERIFY_PENDING_OWNERSHIP=true forge script script/VerifyDFGovernanceHandover.s.sol:VerifyDFGovernanceHandover --rpc-url http://localhost:8545
+           forge script script/AcceptDFGovernanceHandover.s.sol:AcceptDFGovernanceHandover --rpc-url http://localhost:8545 --broadcast
+           forge script script/VerifyDFGovernanceHandover.s.sol:VerifyDFGovernanceHandover --rpc-url http://localhost:8545
+diff --git a/contracts/.env.template b/contracts/.env.template
+index 9915bae4..4d8ab090 100644
+--- a/contracts/.env.template
++++ b/contracts/.env.template
+@@ -46,7 +46,9 @@ FORK_BLOCK_NUMBER=21571000
+ # Explicitly setting this improves startup time
+ FORK_CHAIN_ID=1
+ 
+-# Defaults to Anvil account #0
++# Public broadcaster address only. Sign through Forge (Ledger, keystore, KMS, or
++# an explicitly unlocked local/fork account); never put a private key here.
++# Defaults to Anvil account #0 for local/fork helpers.
+ # DEPLOYER=
+ 
+ # Deployment script will use `keccak256(bytes(...))` of this as salt when deploying via CREATE2
+diff --git a/contracts/fork b/contracts/fork
+index 516a8688..c03d77e5 100755
+--- a/contracts/fork
++++ b/contracts/fork
+@@ -7,7 +7,7 @@ LOCAL_FORK_RPC_URL="${LOCAL_FORK_RPC_URL:-http://localhost:8545}"
+ 
+ pidfile=anvil.pid
+ logfile=anvil.log
+-anvil_account_0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
++anvil_account_0=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+ 
+ sourcify_version=2.5.0
+ sourcify_port=5555
+@@ -39,9 +39,8 @@ init_env() {
+   [ -n "$FORK_CHAIN_ID" ] || FORK_CHAIN_ID=$(cast chain-id --rpc-url "$FORK_URL")
+   [ -n "$DEPLOYER" ] || DEPLOYER=$anvil_account_0
+ 
+-  if [ ${#DEPLOYER} = 42 ]; then
+-    impersonating=yes
+-  fi
++  [ ${#DEPLOYER} = 42 ] || die "DEPLOYER must be a public address; private keys are prohibited"
++  impersonating=yes
+ }
+ 
+ ensure_not_running() {
+diff --git a/contracts/script/AcceptDFGovernanceHandover.s.sol b/contracts/script/AcceptDFGovernanceHandover.s.sol
+index b70c1175..3222907f 100644
+--- a/contracts/script/AcceptDFGovernanceHandover.s.sol
++++ b/contracts/script/AcceptDFGovernanceHandover.s.sol
+@@ -3,6 +3,7 @@ pragma solidity 0.8.24;
+ 
+ import {Script, console2} from "forge-std/Script.sol";
+ import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ interface ITwoStepOwnableAccept {
+     function owner() external view returns (address);
+@@ -45,6 +46,7 @@ contract AcceptDFGovernanceHandover is Script {
+     }
+ 
+     function run() external {
++        _requireLocalChain(block.chainid);
+         string memory manifest = vm.readFile(vm.envOr("DF_HANDOVER_MANIFEST", string("deployment-manifest.json")));
+         HandoverConfig memory handoverConfig = _loadConfig();
+ 
+@@ -72,6 +74,10 @@ contract AcceptDFGovernanceHandover is Script {
+         }
+     }
+ 
++    function _requireLocalChain(uint256 chainId) internal pure {
++        ScriptSecurityPolicy.requireLocalChain(chainId);
++    }
++
+     function _verifiedSharedInterestRouter(string memory manifest, uint256 totalBranches)
+         internal
+         pure
+diff --git a/contracts/script/DeployLiquidationCandidateGetter.s.sol b/contracts/script/DeployLiquidationCandidateGetter.s.sol
+index 169e99ab..963b3498 100644
+--- a/contracts/script/DeployLiquidationCandidateGetter.s.sol
++++ b/contracts/script/DeployLiquidationCandidateGetter.s.sol
+@@ -5,6 +5,7 @@ import {console} from "forge-std/console.sol";
+ import {Script} from "forge-std/Script.sol";
+ import {ICollateralRegistry} from "../src/Interfaces/ICollateralRegistry.sol";
+ import {LiquidationCandidateGetter} from "../src/LiquidationCandidateGetter.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ contract DeployLiquidationCandidateGetter is Script {
+     function run() external {
+@@ -22,11 +23,8 @@ contract DeployLiquidationCandidateGetter is Script {
+ 
+     function _startBroadcast() internal {
+         try vm.envBytes("DEPLOYER") returns (bytes memory raw) {
+-            if (raw.length == 20) {
+-                vm.startBroadcast(vm.envAddress("DEPLOYER"));
+-            } else {
+-                vm.startBroadcast(vm.envUint("DEPLOYER"));
+-            }
++            ScriptSecurityPolicy.requirePublicAddress("DEPLOYER", raw);
++            vm.startBroadcast(vm.envAddress("DEPLOYER"));
+         } catch {
+             vm.startBroadcast();
+         }
+diff --git a/contracts/script/DeployLiquity2.s.sol b/contracts/script/DeployLiquity2.s.sol
+index 7de33cfd..78cfa9b0 100644
+--- a/contracts/script/DeployLiquity2.s.sol
++++ b/contracts/script/DeployLiquity2.s.sol
+@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
+ import {StdCheats} from "forge-std/StdCheats.sol";
+ import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+ import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ import {StringFormatting} from "test/Utils/StringFormatting.sol";
+ import {ETH_GAS_COMPENSATION} from "src/Dependencies/Constants.sol";
+@@ -281,16 +282,10 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+         string memory saltStr = vm.envOr("SALT", block.timestamp.toString());
+         SALT = keccak256(bytes(saltStr));
+ 
+-        if (vm.envBytes("DEPLOYER").length == 20) {
+-            // address
+-            deployer = vm.envAddress("DEPLOYER");
+-            vm.startBroadcast(deployer);
+-        } else {
+-            // private key
+-            uint256 privateKey = vm.envUint("DEPLOYER");
+-            deployer = vm.addr(privateKey);
+-            vm.startBroadcast(privateKey);
+-        }
++        bytes memory encodedDeployer = vm.envBytes("DEPLOYER");
++        ScriptSecurityPolicy.requirePublicAddress("DEPLOYER", encodedDeployer);
++        deployer = vm.envAddress("DEPLOYER");
++        vm.startBroadcast(deployer);
+ 
+         string memory deploymentMode = vm.envOr("DEPLOYMENT_MODE", DEPLOYMENT_MODE_COMPLETE);
+         require(
+diff --git a/contracts/script/DeployPILAllocatorPhaseA.s.sol b/contracts/script/DeployPILAllocatorPhaseA.s.sol
+index 59344573..429322d7 100644
+--- a/contracts/script/DeployPILAllocatorPhaseA.s.sol
++++ b/contracts/script/DeployPILAllocatorPhaseA.s.sol
+@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
+ import {Script, console2} from "forge-std/Script.sol";
+ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+ import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ import {PILAllocator} from "src/PILAllocator.sol";
+ import {UniV4MerklInitiative} from "src/Initiatives/UniV4MerklInitiative.sol";
+@@ -116,10 +117,9 @@ contract DeployPILAllocatorPhaseA is Script {
+         try vm.envBytes("DEPLOYER") returns (bytes memory raw) {
+             if (raw.length == 0) {
+                 vm.startBroadcast();
+-            } else if (raw.length == 20) {
+-                vm.startBroadcast(vm.envAddress("DEPLOYER"));
+             } else {
+-                vm.startBroadcast(vm.envUint("DEPLOYER"));
++                ScriptSecurityPolicy.requirePublicAddress("DEPLOYER", raw);
++                vm.startBroadcast(vm.envAddress("DEPLOYER"));
+             }
+         } catch {
+             vm.startBroadcast();
+diff --git a/contracts/script/PrepareDFGovernanceHandover.s.sol b/contracts/script/PrepareDFGovernanceHandover.s.sol
+index 31c15224..63775e8f 100644
+--- a/contracts/script/PrepareDFGovernanceHandover.s.sol
++++ b/contracts/script/PrepareDFGovernanceHandover.s.sol
+@@ -2,6 +2,7 @@
+ pragma solidity 0.8.24;
+ 
+ import {Script, console2} from "forge-std/Script.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ import {CollateralVault} from "src/CollateralVault.sol";
+ import {DToken} from "src/DToken.sol";
+@@ -42,7 +43,7 @@ interface IHandoverVaultStrategiesView {
+ ///      - Day-1 branch parameters: set dToken cap and Vault allocator/buffer/delay knobs
+ ///
+ ///      Usage:
+-///      DEPLOYER=<current deploy/admin key> \
++///      DEPLOYER=<current deploy/admin address> \
+ ///      DF_TIMELOCK=0x... DF_TREASURY=0x... DF_INTEREST_ROUTER_RECIPIENT=0x... DF_GUARDIAN=0x... \
+ ///      DF_ALLOCATOR=0x... DF_WRITEOFF=0x... DF_PRICE_FEED_OWNER=0x... \
+ ///      DF_STRATEGY_OWNER=0x... DF_STRATEGY_UPGRADER=0x... \
+@@ -355,26 +356,20 @@ contract PrepareDFGovernanceHandover is Script {
+             return value;
+         } catch {}
+ 
+-        try vm.envAddress("DEPLOYER") returns (address value) {
+-            return value;
+-        } catch {}
+-
+-        try vm.envUint("DEPLOYER") returns (uint256 privateKey) {
+-            return vm.addr(privateKey);
++        try vm.envBytes("DEPLOYER") returns (bytes memory raw) {
++            ScriptSecurityPolicy.requirePublicAddress("DEPLOYER", raw);
++            return vm.envAddress("DEPLOYER");
+         } catch {}
+ 
+         return address(0);
+     }
+ 
+     function _startBroadcast() internal returns (address) {
+-        try vm.envAddress("DEPLOYER") returns (address value) {
+-            vm.startBroadcast(value);
+-            return value;
+-        } catch {}
+-
+-        uint256 privateKey = vm.envUint("DEPLOYER");
+-        vm.startBroadcast(privateKey);
+-        return vm.addr(privateKey);
++        bytes memory raw = vm.envBytes("DEPLOYER");
++        ScriptSecurityPolicy.requirePublicAddress("DEPLOYER", raw);
++        address broadcaster = vm.envAddress("DEPLOYER");
++        vm.startBroadcast(broadcaster);
++        return broadcaster;
+     }
+ 
+     function _dfYield(string memory manifest, uint256 i, string memory key) internal pure returns (address) {
+diff --git a/contracts/script/ScriptSecurityPolicy.sol b/contracts/script/ScriptSecurityPolicy.sol
+new file mode 100644
+index 00000000..a1253ca2
+--- /dev/null
++++ b/contracts/script/ScriptSecurityPolicy.sol
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.24;
++
++library ScriptSecurityPolicy {
++    error ScriptSecurityPolicy__PublicAddressRequired(string environmentVariable, uint256 encodedLength);
++    error ScriptSecurityPolicy__LocalChainOnly(uint256 chainId);
++
++    function requirePublicAddress(string memory environmentVariable, bytes memory encodedValue) internal pure {
++        if (encodedValue.length != 20) {
++            revert ScriptSecurityPolicy__PublicAddressRequired(environmentVariable, encodedValue.length);
++        }
++    }
++
++    function requireLocalChain(uint256 chainId) internal pure {
++        if (chainId != 31_337 && chainId != 31_338) revert ScriptSecurityPolicy__LocalChainOnly(chainId);
++    }
++}
+diff --git a/contracts/script/SeedFrontendDay1Review.s.sol b/contracts/script/SeedFrontendDay1Review.s.sol
+index 07ee889b..0664623c 100644
+--- a/contracts/script/SeedFrontendDay1Review.s.sol
++++ b/contracts/script/SeedFrontendDay1Review.s.sol
+@@ -13,6 +13,7 @@ import {IStabilityPool} from "src/Interfaces/IStabilityPool.sol";
+ import {IStrategy} from "src/Interfaces/IStrategy.sol";
+ import {ITroveManager} from "src/Interfaces/ITroveManager.sol";
+ import {IWETH} from "src/Interfaces/IWETH.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ interface ILocalMintableToken {
+     function mint(address account, uint256 amount) external;
+@@ -69,6 +70,7 @@ contract SeedFrontendDay1Review is Script {
+     BranchRefs[ACTIVE_YIELD_BRANCHES] branches;
+ 
+     function run() external {
++        ScriptSecurityPolicy.requireLocalChain(block.chainid);
+         uint256 deployerKey = vm.envUint("DEPLOYER");
+         require(deployerKey == DEPLOYER_KEY, "Day1 review: expected hosted/local Anvil deployer");
+ 
+diff --git a/contracts/script/SeedLocalDemo.s.sol b/contracts/script/SeedLocalDemo.s.sol
+index 0736cfaa..e7934cc5 100644
+--- a/contracts/script/SeedLocalDemo.s.sol
++++ b/contracts/script/SeedLocalDemo.s.sol
+@@ -11,6 +11,7 @@ import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
+ import {ICollateralVault} from "src/Interfaces/ICollateralVault.sol";
+ import {IWETH} from "src/Interfaces/IWETH.sol";
+ import {ERC20Faucet} from "test/TestContracts/ERC20Faucet.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ /// @dev Seeds the local JPYdf deployment (DeployLiquity2 with the DF dToken wiring) with
+ ///      demo data for frontend development: underlying mints, vault deposits (dToken mint),
+@@ -63,6 +64,7 @@ contract SeedLocalDemo is Script {
+     BranchRefs[5] branches;
+ 
+     function run() external {
++        ScriptSecurityPolicy.requireLocalChain(block.chainid);
+         uint256 deployerKey = vm.envUint("DEPLOYER");
+         string memory manifest = vm.readFile("deployment-manifest.json");
+ 
+diff --git a/contracts/script/VerifyDFGovernanceHandover.s.sol b/contracts/script/VerifyDFGovernanceHandover.s.sol
+index f4a197f4..c33867c3 100644
+--- a/contracts/script/VerifyDFGovernanceHandover.s.sol
++++ b/contracts/script/VerifyDFGovernanceHandover.s.sol
+@@ -2,6 +2,7 @@
+ pragma solidity 0.8.24;
+ 
+ import {Script} from "forge-std/Script.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ 
+ import {CollateralVault} from "src/CollateralVault.sol";
+ import {DToken} from "src/DToken.sol";
+@@ -315,12 +316,9 @@ contract VerifyDFGovernanceHandover is Script {
+             return value;
+         } catch {}
+ 
+-        try vm.envAddress("DEPLOYER") returns (address value) {
+-            return value;
+-        } catch {}
+-
+-        try vm.envUint("DEPLOYER") returns (uint256 privateKey) {
+-            return vm.addr(privateKey);
++        try vm.envBytes("DEPLOYER") returns (bytes memory raw) {
++            ScriptSecurityPolicy.requirePublicAddress("DEPLOYER", raw);
++            return vm.envAddress("DEPLOYER");
+         } catch {}
+ 
+         return address(0);
+diff --git a/contracts/test/DFGovernanceHandoverXAUTGate.t.sol b/contracts/test/DFGovernanceHandoverXAUTGate.t.sol
+index 34d42a20..d46fdf51 100644
+--- a/contracts/test/DFGovernanceHandoverXAUTGate.t.sol
++++ b/contracts/test/DFGovernanceHandoverXAUTGate.t.sol
+@@ -12,6 +12,7 @@ import {IDToken} from "src/Interfaces/IDToken.sol";
+ import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
+ import {IStrategy} from "src/Interfaces/IStrategy.sol";
+ import {AcceptDFGovernanceHandover} from "script/AcceptDFGovernanceHandover.s.sol";
++import {ScriptSecurityPolicy} from "script/ScriptSecurityPolicy.sol";
+ import {PrepareDFGovernanceHandover} from "script/PrepareDFGovernanceHandover.s.sol";
+ import {VerifyDFGovernanceHandover} from "script/VerifyDFGovernanceHandover.s.sol";
+ import {MockStrategy} from "./TestContracts/MockStrategy.sol";
+@@ -116,6 +117,10 @@ contract VerifyDFGovernanceHandoverHarness is VerifyDFGovernanceHandover {
+ }
+ 
+ contract AcceptDFGovernanceHandoverHarness is AcceptDFGovernanceHandover {
++    function requireLocalChainForHarness(uint256 chainId) external pure {
++        _requireLocalChain(chainId);
++    }
++
+     function verifiedSharedInterestRouter(string memory manifest, uint256 totalBranches)
+         external
+         pure
+@@ -144,6 +149,12 @@ contract AcceptDFGovernanceHandoverHarness is AcceptDFGovernanceHandover {
+     }
+ }
+ 
++contract ScriptSecurityPolicyHarness {
++    function requirePublicAddress(string memory environmentVariable, bytes memory encodedValue) external pure {
++        ScriptSecurityPolicy.requirePublicAddress(environmentVariable, encodedValue);
++    }
++}
++
+ contract NonForwarderInterestRouter {
+     address public owner;
+     address public pendingOwner;
+@@ -172,6 +183,7 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+     PrepareDFGovernanceHandoverHarness internal prepare;
+     VerifyDFGovernanceHandoverHarness internal verifyHandover;
+     AcceptDFGovernanceHandoverHarness internal acceptHandover;
++    ScriptSecurityPolicyHarness internal signerPolicy;
+     address internal pilRecipient;
+     address internal routerOwner;
+     MockJpydfRecipientValidator internal tokenValidator;
+@@ -180,6 +192,7 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+         prepare = new PrepareDFGovernanceHandoverHarness();
+         verifyHandover = new VerifyDFGovernanceHandoverHarness();
+         acceptHandover = new AcceptDFGovernanceHandoverHarness();
++        signerPolicy = new ScriptSecurityPolicyHarness();
+         pilRecipient = makeAddr("pilRecipient");
+         routerOwner = makeAddr("routerOwner");
+         tokenValidator = new MockJpydfRecipientValidator();
+@@ -188,6 +201,36 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+         vm.setEnv("DF_XAUT_DAY1_MAX_ALLOCATE_MAX_MOVE", vm.toString(DAY1_XAUT_ALLOCATE_MAX_MOVE));
+     }
+ 
++    function test_DeploymentSignerPolicyAcceptsOnlyPublicAddress() public view {
++        signerPolicy.requirePublicAddress("DEPLOYER", abi.encodePacked(address(this)));
++    }
++
++    function test_DeploymentSignerPolicyRejectsPrivateKeyBytes() public {
++        bytes memory encodedPrivateKey = abi.encode(uint256(1));
++        vm.expectRevert(
++            abi.encodeWithSelector(
++                ScriptSecurityPolicy.ScriptSecurityPolicy__PublicAddressRequired.selector,
++                "DEPLOYER",
++                encodedPrivateKey.length
++            )
++        );
++        signerPolicy.requirePublicAddress("DEPLOYER", encodedPrivateKey);
++    }
++
++    function test_AcceptHandoverAllowsOnlyLocalChains() public {
++        acceptHandover.requireLocalChainForHarness(31_337);
++        acceptHandover.requireLocalChainForHarness(31_338);
++
++        vm.expectRevert(abi.encodeWithSelector(ScriptSecurityPolicy.ScriptSecurityPolicy__LocalChainOnly.selector, 1));
++        acceptHandover.requireLocalChainForHarness(1);
++    }
++
++    function test_AcceptHandoverRejectsProductionBeforeReadingSecrets() public {
++        vm.chainId(1);
++        vm.expectRevert(abi.encodeWithSelector(ScriptSecurityPolicy.ScriptSecurityPolicy__LocalChainOnly.selector, 1));
++        acceptHandover.run();
++    }
++
+     function test_PrepareRejectsUnlimitedDXAUTCap() public {
+         vm.expectRevert(bytes("DF handover: XAUT cap unlimited"));
+         prepare.requireXAUTDay1Gate(DXAUT_BRANCH_INDEX, type(uint256).max, DAY1_XAUT_ALLOCATE_MAX_MOVE);
+diff --git a/contracts/utils/deploy-cli.ts b/contracts/utils/deploy-cli.ts
+index e21895f3..6b88375d 100644
+--- a/contracts/utils/deploy-cli.ts
++++ b/contracts/utils/deploy-cli.ts
+@@ -1,4 +1,4 @@
+-import { privateKeyToAccount } from "viem/accounts";
++import { getAddress } from "viem";
+ import { $, chalk, echo, fs, minimist, question } from "zx";
+ 
+ const HELP = `
+@@ -22,10 +22,14 @@ Options:
+   --bridge-admin <DF_BRIDGE_ADMIN>         Bridge admin contract address for
+                                            dormant bridge readiness. Required
+                                            outside local.
+-  --deployer <DEPLOYER>                    Address or private key to deploy with.
+-                                           Requires a Ledger if an address is used.
++  --deployer <DEPLOYER>                    Public address to deploy from. Private
++                                           keys are prohibited.
++  --account <KEYSTORE_ACCOUNT>             Foundry keystore account name.
++  --aws                                    Sign with AWS KMS.
++  --ledger                                 Sign with a Ledger hardware wallet
++                                           (default outside local presets).
+   --ledger-path <LEDGER_PATH>              HD path to use with the Ledger (only used
+-                                           when DEPLOYER is an address).
++                                           when Ledger is the selected signer).
+   --dry-run                                Don't broadcast transaction, only
+                                            simulate execution.
+   --etherscan-api-key <ETHERSCAN_API_KEY>  Etherscan API key to verify the contracts
+@@ -44,6 +48,7 @@ Options:
+   --skip-confirmation                      Run non-interactively (skip confirmation).
+   --slow                                   Only send a transaction after the previous
+                                            one has been confirmed.
++  --trezor                                 Sign with a Trezor hardware wallet.
+   --unlocked                               Used when the deployer account is unlocked
+                                            in the client (i.e. no private key or
+                                            Ledger device needed).
+@@ -54,10 +59,11 @@ Options:
+                                            provider.
+ 
+ Note: options can also be set via corresponding environment variables,
+-e.g. --chain-id can be set via CHAIN_ID instead. Parameters take precedence over variables.
++e.g. --chain-id via CHAIN_ID. Signer variables are KEYSTORE_ACCOUNT, AWS_SIGNER,
++LEDGER, TREZOR, and UNLOCKED. Parameters take precedence over variables.
+ `;
+ 
+-const ANVIL_FIRST_ACCOUNT = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
++const ANVIL_FIRST_ACCOUNT = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+ const HOSTED_ANVIL_CHAIN_ID = 31_338;
+ const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
+ const MULTICALL3_RUNTIME_PATHS = [
+@@ -79,7 +85,11 @@ const argv = minimist(process.argv.slice(2), {
+     "dry-run",
+     "slow",
+     "unlocked",
++    "aws",
++    "ledger",
++    "trezor",
+     "chain-id",
++    "account",
+     "bridge-admin",
+     "deployer",
+     "etherscan-api-key",
+@@ -111,6 +121,8 @@ export async function main() {
+     options.chainId ??= 31337;
+     options.deployer ??= ANVIL_FIRST_ACCOUNT;
+     options.rpcUrl ??= "http://127.0.0.1:8545";
++    options.unlocked = options.unlocked
++      || (!options.account && !options.aws && !options.ledger && !options.ledgerPath && !options.trezor);
+   }
+ 
+   // network preset: hosted-anvil
+@@ -118,6 +130,8 @@ export async function main() {
+     options.chainId ??= HOSTED_ANVIL_CHAIN_ID;
+     options.deployer ??= ANVIL_FIRST_ACCOUNT;
+     options.rpcUrl ??= process.env.JPYDF_HOSTED_ANVIL_RPC_URL;
++    options.unlocked = options.unlocked
++      || (!options.account && !options.aws && !options.ledger && !options.ledgerPath && !options.trezor);
+   }
+ 
+   // network preset: mainnet
+@@ -201,24 +215,43 @@ export async function main() {
+   }
+ 
+   let deployerAddress: string;
++  try {
++    deployerAddress = getAddress(options.deployer);
++  } catch {
++    throw new Error("--deployer must be a 20-byte public address; private keys are prohibited");
++  }
+ 
+-  if (options.deployer.startsWith("0x") && options.deployer.length === 42) {
+-    // DEPLOYER is an address
+-    deployerAddress = options.deployer;
+-
+-    if (options.unlocked) {
+-      forgeArgs.push("--unlocked");
+-    } else {
+-      // Ledger signing
+-      forgeArgs.push("--ledger");
+-      if (options.ledgerPath) {
+-        forgeArgs.push("--hd-paths");
+-        forgeArgs.push(options.ledgerPath);
+-      }
+-    }
++  const selectedSigners = [options.unlocked, options.account, options.aws, options.ledger, options.trezor].filter(
++    Boolean,
++  );
++  if (selectedSigners.length > 1) {
++    throw new Error("select exactly one signer: --account, --aws, --ledger, --trezor, or --unlocked");
++  }
++  if (options.ledgerPath && selectedSigners.length !== 0 && !options.ledger) {
++    throw new Error("--ledger-path is only valid with the default Ledger signer");
++  }
++  if (options.unlocked && !isLocalDevChainId(options.chainId) && !isLoopbackRpcUrl(options.rpcUrl)) {
++    throw new Error("--unlocked is restricted to local/dev chains or a loopback fork RPC");
++  }
++
++  let signer = "Ledger";
++  if (options.unlocked) {
++    forgeArgs.push("--unlocked");
++    signer = "unlocked RPC account";
++  } else if (options.account) {
++    forgeArgs.push("--account", options.account);
++    signer = `Foundry keystore (${options.account})`;
++  } else if (options.aws) {
++    forgeArgs.push("--aws");
++    signer = "AWS KMS";
++  } else if (options.trezor) {
++    forgeArgs.push("--trezor");
++    signer = "Trezor";
+   } else {
+-    // DEPLOYER is a private key, get its address
+-    deployerAddress = privateKeyToAccount(options.deployer).address;
++    forgeArgs.push("--ledger");
++    if (options.ledgerPath) {
++      forgeArgs.push("--hd-paths", options.ledgerPath);
++    }
+   }
+ 
+   echo`
+@@ -227,7 +260,10 @@ Deploying JPYdf contracts with the following settings:
+   CHAIN_ID:               ${options.chainId}
+   DEPLOYMENT_MODE:        ${options.mode}
+   DEPLOYER (address):     ${deployerAddress}
+-  BRIDGE_ADMIN:           ${options.bridgeAdmin ?? chalk.yellow("local LocalBridgeAdmin fallback will be deployed/reused")}
++  SIGNER:                 ${signer}
++  BRIDGE_ADMIN:           ${
++    options.bridgeAdmin ?? chalk.yellow("local LocalBridgeAdmin fallback will be deployed/reused")
++  }
+   SALT:                   ${options.salt ?? chalk.yellow("block.timestamp will be used !!")}
+   ETHERSCAN_API_KEY:      ${options.etherscanApiKey && "(secret)"}
+   LEDGER_PATH:            ${options.ledgerPath}
+@@ -255,7 +291,7 @@ Deploying JPYdf contracts with the following settings:
+     }
+   }
+ 
+-  process.env.DEPLOYER = options.deployer;
++  process.env.DEPLOYER = deployerAddress;
+   process.env.DEPLOYMENT_MODE = options.mode;
+   if (options.bridgeAdmin) {
+     process.env.DF_BRIDGE_ADMIN = options.bridgeAdmin;
+@@ -401,6 +437,14 @@ function isLocalDevChainId(chainId: number): boolean {
+   return chainId === 31337 || chainId === HOSTED_ANVIL_CHAIN_ID;
+ }
+ 
++function isLoopbackRpcUrl(value: string): boolean {
++  try {
++    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(value).hostname);
++  } catch {
++    return false;
++  }
++}
++
+ function redactDeployOptionsForArtifact(options: Record<string, unknown>) {
+   const { deployer, etherscanApiKey, rpcUrl, verifierUrl, ...safeOptions } = options;
+   void deployer;
+@@ -420,7 +464,7 @@ function redactUrlForDisplay(value: unknown) {
+ 
+   try {
+     const url = new URL(value);
+-    if (["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname)) {
++    if (isLoopbackRpcUrl(value)) {
+       return value;
+     }
+     return `${url.protocol}//${url.host}/[redacted]`;
+@@ -507,6 +551,8 @@ function parseBool(optionValue: string | undefined, envValue?: string | undefine
+ 
+ async function parseArgs() {
+   const options = {
++    account: argv.account,
++    aws: argv.aws,
+     chainId: safeParseInt(argv["chain-id"]),
+     bridgeAdmin: argv["bridge-admin"],
+     debug: argv["debug"],
+@@ -514,6 +560,7 @@ async function parseArgs() {
+     etherscanApiKey: argv["etherscan-api-key"],
+     help: argv["help"],
+     ledgerPath: argv["ledger-path"],
++    ledger: argv.ledger,
+     mode: argv["mode"],
+     salt: argv["salt"],
+     rpcUrl: argv["rpc-url"],
+@@ -521,6 +568,7 @@ async function parseArgs() {
+     dryRun: argv["dry-run"],
+     skipConfirmation: argv["skip-confirmation"],
+     slow: argv["slow"],
++    trezor: argv.trezor,
+     unlocked: argv["unlocked"],
+     verify: argv["verify"],
+     verifier: argv["verifier"],
+@@ -532,6 +580,8 @@ async function parseArgs() {
+   const [networkPreset] = argv._;
+ 
+   options.chainId ??= safeParseInt(process.env.CHAIN_ID ?? "");
++  options.account ??= process.env.KEYSTORE_ACCOUNT;
++  options.aws = parseBool(options.aws, process.env.AWS_SIGNER);
+   options.bridgeAdmin ??= process.env.DF_BRIDGE_ADMIN;
+   options.debug = parseBool(options.debug, process.env.DEBUG);
+   options.deployer ??= process.env.DEPLOYER;
+@@ -539,12 +589,14 @@ async function parseArgs() {
+   options.etherscanApiKey ??= process.env.ETHERSCAN_API_KEY;
+   options.help = parseBool(options.help);
+   options.ledgerPath ??= process.env.LEDGER_PATH;
++  options.ledger = parseBool(options.ledger, process.env.LEDGER);
+   options.mode ??= process.env.DEPLOYMENT_MODE;
+   options.rpcUrl ??= process.env.RPC_URL;
+   options.resume = parseBool(options.resume, process.env.RESUME);
+   options.salt ??= process.env.SALT;
+   options.skipConfirmation = parseBool(options.skipConfirmation, process.env.SKIP_CONFIRMATION);
+   options.slow = parseBool(options.slow, process.env.SLOW);
++  options.trezor = parseBool(options.trezor, process.env.TREZOR);
+   options.unlocked = parseBool(options.unlocked, process.env.UNLOCKED);
+   options.verify = parseBool(options.verify, process.env.VERIFY);
+   options.verifier ??= process.env.VERIFIER;
+diff --git a/contracts/utils/local-stack.sh b/contracts/utils/local-stack.sh
+index a2095f66..dfe9c74a 100755
+--- a/contracts/utils/local-stack.sh
++++ b/contracts/utils/local-stack.sh
+@@ -85,7 +85,7 @@ done
+ 
+ if [ "$SKIP_DEPLOY" = false ]; then
+   echo "==> 1/5 Deploying JPYdf contracts (slow broadcast)..."
+-  DEPLOYER="$DEPLOYER_KEY" SALT="$SALT" DF_TREASURY="$DF_TREASURY" \
++  DEPLOYER="$DEPLOYER_ADDRESS" SALT="$SALT" DF_TREASURY="$DF_TREASURY" \
+     DF_INTEREST_ROUTER_RECIPIENT="$DF_INTEREST_ROUTER_RECIPIENT" \
+     DF_INTEREST_ROUTER_OWNER="$DF_INTEREST_ROUTER_OWNER" \
+     DF_STRATEGY_KIND_0="$DF_STRATEGY_KIND_0" \
+@@ -103,7 +103,7 @@ if [ "$SKIP_DEPLOY" = false ]; then
+     DF_STRATEGY_KIND_4="$DF_STRATEGY_KIND_4" \
+     DF_STRATEGY_WEIGHT_BPS_4="$DF_STRATEGY_WEIGHT_BPS_4" \
+     DF_STRATEGY_CAP_4="$DF_STRATEGY_CAP_4" forge script DeployLiquity2Script \
+-    --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --broadcast --slow
++    --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --broadcast --slow --unlocked
+ fi
+ 
+ echo "==> 2/5 Injecting Multicall3 at ${MULTICALL3}..."
+diff --git a/documents/en/engineering/guides/Deployment-Configuration-Spec.md b/documents/en/engineering/guides/Deployment-Configuration-Spec.md
+index 01533e8e..4cdf793a 100644
+--- a/documents/en/engineering/guides/Deployment-Configuration-Spec.md
++++ b/documents/en/engineering/guides/Deployment-Configuration-Spec.md
+@@ -112,7 +112,7 @@ Only with DF wiring:
+ 
+ | Env / option | Requirement | Meaning |
+ | --- | --- | --- |
+-| `DEPLOYER` | required | private key or Ledger address |
++| `DEPLOYER` | required | Public deployer address only; private keys are rejected. Sign through `./deploy` with Ledger (default), `--account` (Foundry keystore), `--aws` (AWS KMS), `--trezor`, or `--unlocked` for local/fork use only. |
+ | `DEPLOYMENT_MODE` | default `complete` | `complete` / `jpydf-only` / `use-existing-jpydf` |
+ | `SALT` | optional | CREATE2 salt. Defaults to `block.timestamp` when omitted |
+ | `DF_BRIDGE_ADMIN` | required on mainnet / Sepolia / unknown non-mainnet | Bridge-ready dormant extension holder for `JpydfToken`. Mainnet must use a Safe / Timelock contract, not the deployer. |
+diff --git a/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index 6cfcfc01..3b0929fd 100644
+--- a/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -106,6 +106,8 @@ The broadcast freeze package also records:
+ | submission | slow mode, gas policy, multiplier, and stuck/replacement policy |
+ | predicted address | JPYdf address derived from frozen salt/deployer and matched to receipt/manifest |
+ 
++`DEPLOYER` is always the public broadcaster address. The deploy CLI and production-capable Forge scripts reject private-key-shaped values and never forward a private key through the child-process environment. Use the CLI's Foundry keystore, Ledger, Trezor, or AWS KMS signer mode for production; `--unlocked` is reserved for a controlled local/fork RPC.
++
+ Holder separation must match the holder design, Safe-threshold policy, and allocator-signer policy referenced by [Mainnet Safe Role Assignment Gate](Mainnet-Safe-Role-Assignment-Gate.md). Address selection alone is not approval.
+ 
+ Enter cap and `allocateMaxMove` values in token units. Freeze branch 0 and branches 3–7 at zero. Branch 2 has a positive dToken cap but `allocateMaxMove=0` because it has no Strategy.
+diff --git a/documents/en/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md b/documents/en/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md
+index d76c539b..fcbc68d5 100644
+--- a/documents/en/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md
++++ b/documents/en/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md
+@@ -24,7 +24,7 @@ The target is governance handover for the mainnet Day-1 manifest produced by `De
+ | ---------------------- | ------------------------------------------------------------------------------------------------------ |
+ | `DF_HANDOVER_MANIFEST` | Manifest to hand over. Usually `deployment-manifest.json`                                              |
+ | `DF_CURRENT_ADMIN`     | Admin address holding Vault roles / 2-step ownership after deploy                                      |
+-| `DEPLOYER`             | Fallback when `DF_CURRENT_ADMIN` is omitted. For broadcast, do not leave private keys in shell history |
++| `DEPLOYER`             | Fallback public address when `DF_CURRENT_ADMIN` is omitted. Private keys are rejected; source the broadcast signer from a Foundry keystore, hardware wallet, or KMS. |
+ | `DF_HANDOVER_TOTAL_BRANCHES` | Explicitly `8` on Day-1; include every manifest branch in ownership/inert-cap verification |
+ | `DF_HANDOVER_ACTIVE_BRANCHES` | Explicitly `3` on Day-1; active-wired prefix for Vault parameter and Strategy handover (branches 0–2) |
+ 
+@@ -128,7 +128,7 @@ Before broadcasting `PrepareDFGovernanceHandover` on mainnet, all of the followi
+ 
+ ### 5.2 Production accept
+ 
+-`AcceptDFGovernanceHandover.s.sol` is a local / CI helper and is not used for production Safe / Timelock control planes. On mainnet, each holder calls `acceptOwnership()` from its own control plane.
++`AcceptDFGovernanceHandover.s.sol` is a local / CI helper and is not used for production Safe / Timelock control planes. On mainnet, each holder calls `acceptOwnership()` from its own control plane. The helper itself reverts on any chain other than 31337 / 31338 before reading a manifest or private-key environment variable.
+ 
+ | Target                                   | accept caller            |
+ | ---------------------------------------- | ------------------------ |
+diff --git a/documents/jp/engineering/guides/Deployment-Configuration-Spec.md b/documents/jp/engineering/guides/Deployment-Configuration-Spec.md
+index cb6460b0..ed84cfe6 100644
+--- a/documents/jp/engineering/guides/Deployment-Configuration-Spec.md
++++ b/documents/jp/engineering/guides/Deployment-Configuration-Spec.md
+@@ -224,7 +224,7 @@ Verified Evidenceの生成処理は次をfail-closedにする。
+ 
+ | Env / option | 必須性 | 意味 |
+ | --- | --- | --- |
+-| `DEPLOYER` | 必須 | private key または Ledger address |
++| `DEPLOYER` | 必須 | public deployer address のみ。秘密鍵は指定不可。署名は `./deploy` の Ledger（default）/ `--account`（Foundry keystore）/ `--aws`（AWS KMS）/ `--trezor`、または local/fork 限定の `--unlocked` で行う |
+ | `DEPLOYMENT_MODE` | default `complete` | `complete` / `jpydf-only` / `use-existing-jpydf` |
+ | `SALT` | 実装上は任意、mainnet production は必須 | CREATE2 salt。未指定時の `block.timestamp` fallback は local / test 用であり、mainnet broadcast では [`Mainnet-Deploy-Env-Freeze-Runbook.md`](../../protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md) に従って明示 freeze する |
+ | `DF_BRIDGE_ADMIN` | mainnet / Sepolia / unknown non-mainnet で必須（local 31337 は未指定なら `LocalBridgeAdmin` を deploy） | `JpydfToken` の bridge-ready dormant extension holder。mainnet は Safe / Timelock contract、deployer と同一不可。token 本体も contract-only を強制する |
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-06-Production-Signer-Custody-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-06-Production-Signer-Custody-Differential-Review.md
+new file mode 100644
+index 00000000..ec032d36
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-06-Production-Signer-Custody-Differential-Review.md
+@@ -0,0 +1,213 @@
++# External Audit Low 06: production signer custody 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行の deploy input は
++> `documents/jp/engineering/guides/Deployment-Configuration-Spec.md`、mainnet ceremony は
++> `Mainnet-Deploy-Env-Freeze-Runbook.md` と `Mainnet-Governance-Handover-Runbook.md` を参照する。
++
++## Executive Summary
++
++外部監査 Low 06 の主要 claim は再現する。baseline の production-capable deploy / handover scripts と
++`./deploy` CLI は、`DEPLOYER` に raw private key を受け取り、Forge child process へ渡せた。
++また `AcceptDFGovernanceHandover` は production では使わないという runbook 上の制約だけで、
++mainnet 上の実行を code では拒否していなかった。
++
++判定は **Low accepted** とする。この mechanism 自体が key を外部へ送信するわけではなく、exploit には
++operator host、process environment、shell history、debug/log、または child-process inspection へのアクセスが必要である。
++一方、露出した deployer / handover holder key の権限は大きく、production ceremony から raw-key 経路を
++除去すべきという結論は正しい。
++
++| Severity | New finding count |
++| --- | ---: |
++| Critical | 0 |
++| High | 0 |
++| Medium | 0 |
++| Low | 0 |
++
++**Overall residual risk**: Low
++**Recommendation**: APPROVE。production-capable path は public address と Forge signer を分離し、local key helper は
++chain 31337 / 31338 に fail-closed した。hardware wallet / keystore / KMS の実署名 ceremony は production gate で
++別途実施し、その端末上で key value を evidence に残さない。
++
++**Key metrics**:
++
++- reviewed implementation files: 21 / 21
++- implementation diff: +194 / -80 lines（review artifact 自身を除く）
++- modified `contracts/src/**` / public ABI / storage: 0
++- shared policy call sites: 8 scripts、9 calls（test harness を除く）
++- repository code size: 276 first-party Solidity / TypeScript / shell files、Surgical strategy
++- security regressions / merge blockers: 0
++
++## Scope And Baseline
++
++- 外部指摘: Low 06 — deployer / handover holder private keys loaded from environment
++- baseline: `origin/develop` at `1adab16629b0c3c0acad595fa9d6f9b35cc27574`
++- high-risk scope:
++  - `contracts/utils/deploy-cli.ts`
++  - `contracts/script/DeployLiquity2.s.sol`
++  - `contracts/script/DeployPILAllocatorPhaseA.s.sol`
++  - `contracts/script/DeployLiquidationCandidateGetter.s.sol`
++  - `contracts/script/PrepareDFGovernanceHandover.s.sol`
++  - `contracts/script/VerifyDFGovernanceHandover.s.sol`
++  - `contracts/script/AcceptDFGovernanceHandover.s.sol`
++- operational callers: `contracts/fork`, `contracts/utils/local-stack.sh`, contracts CI workflow
++- local-key-only adjuncts: `SeedLocalDemo.s.sol`, `SeedFrontendDay1Review.s.sol`
++- normative sources: JP / EN deployment configuration, deploy freeze, governance handover runbooks
++- excluded: vendored dependencies、production contract business logic、external signer implementation internals
++
++## Claim-By-Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| deploy scripts accept `DEPLOYER` private key | True | baseline は 20-byte 以外を `envUint` として broadcast した |
++| CLI derives an address from a supplied key and forwards the key | True | baseline `privateKeyToAccount` branch の後に `process.env.DEPLOYER = options.deployer` |
++| handover prepare / verify derive current admin from a key | True | `envUint("DEPLOYER")` fallback が存在した |
++| accept helper loads Timelock / PriceFeed / Strategy owner keys | True | 3つの `DF_*_PRIVATE_KEY` を読み、各 holder として broadcast する |
++| accept helper is intended for production | False |既存 runbook と NatSpec は local / CI helper と明示。ただし baseline は code-level chain guard がなく、誤用を防げなかった |
++| environment use guarantees key compromise | False | host/process/log への観測能力が必要。ただし不要な exposure surface であり削除対象 |
++| leaked deployer remains permanently privileged | Context-dependent | handover 完了後は deployer role を失う。ceremony 中または holder key 漏えい時の影響は大きい |
++| production signing should use hardware / keystore / KMS / Safe | True | key material と public broadcaster の分離が trust boundary を明確にする |
++
++## What Changed
++
++| Surface | Before | After | Risk / blast radius |
++| --- | --- | --- | --- |
++| shared script policy | 各 script が長さを独自分岐 | `ScriptSecurityPolicy` が 20-byte public address と local chain を正本化 | High / 8 scripts |
++| core deploy | `DEPLOYER` key で internal signing | public address のみ、Forge signer で broadcast | High / all deployments |
++| auxiliary deploy / handover | `envUint` fallback | unset は Forge signer fallback、指定時は public address のみ | High / 5 scripts |
++| deploy CLI | address または key | address-only + Ledger / Trezor / Foundry keystore / AWS KMS / unlocked-local modes | High / CLI callers |
++| unlocked signer | 任意 RPC で選択可 | chain 31337 / 31338 または loopback fork RPC のみ | High / CLI callers |
++| production accept | docs-only prohibition | 31337 / 31338 以外は manifest / key env read 前に revert | High / one helper |
++| local/fork helpers | Anvil key を deploy env に設定 | public Anvil address + impersonation / `--unlocked` | Medium / 3 callers |
++| local seeders | name/comment onlyの local 境界 | private key read 前に 31337 / 31338 guard | Medium / 2 scripts |
++| CI | handover prepare に raw Anvil key | public address + explicit `--unlocked` | Medium / one job |
++| JP / EN docs | implementation と signer policy が不一致 | address-only input、signer mode、local helper boundary を同期 | Low |
++
++Commit history では raw-key deploy path は upstream import `d62e2ea3` から存在し、
++`AcceptDFGovernanceHandover` の holder-key path は `d3014c31` の DF hardening 時に local drill 用として追加された。
++過去の security fix を取り除く変更や、以前削除された raw-key path の再導入はない。
++
++## Adversarial Analysis
++
++**Attacker model**:
++
++- WHO: deploy operator host の environment / process metadata / shell history / debug output を読める攻撃者
++- ACCESS: on-chain admin 権限は不要だが、ceremony host 上の local observation 権限が必要
++- ENTRY: baseline の `./deploy --deployer <key>`、Forge script `DEPLOYER=<key>`、または accept helper の holder-key env
++- EXPLOITABILITY: Medium。remote public caller だけでは到達せず、host compromise / misconfigured logging が前提
++
++Baseline attack sequence:
++
++1. operator が raw key を CLI argument または environment に置く。
++2. key が Node process と Forge child environment、または Forge cheatcode read の対象になる。
++3. 攻撃者が process inspection、shell/log collection、crash/debug artifact から key を取得する。
++4. handover 完了前の deployer、または Timelock / PriceFeed / Strategy holder として署名し、許可された privileged action を実行する。
++
++修正後は production-capable script の `DEPLOYER` が 20-byte public address でなければ broadcast 前に revert する。
++CLI は key から address を導出せず、正規化した public address だけを child environment に設定する。
++production holder accept は Safe / Timelock control plane 側で行い、local accept helper は mainnet / Sepolia / unknown chain から到達できない。
++
++## Differential Side-Effect Review
++
++| Invariant / surface | Assessment | Result |
++| --- | --- | --- |
++| deployed contract logic | `contracts/src/**` に差分なし | Runtime behavior unchanged |
++| ABI / selectors / storage | production contract / ABI file に差分なし | Consumer and upgrade layout unchanged |
++| CREATE2 / deploy addresses | `deployer` の address bytes と salt algorithm は不変 | Same address input yields same CREATE2 derivation |
++| signer availability | mainnet は Ledger default、明示 Ledger / Trezor / keystore / AWS KMS を選択可 | No raw-key fallback |
++| signer ambiguity | signer mode 複数指定を reject、Ledger path は Ledger 以外で reject | Fail-closed |
++| unlocked RPC | external mainnet / Sepolia / unknown RPC を reject | Local dev chains and loopback fork only |
++| local deploy liveness | Anvil account #0 public address と `--unlocked` に移行 | 8-branch deployment completed |
++| fork liveness | public `DEPLOYER` + auto impersonation、chain 1 loopback は許可 | Existing mainnet-fork architecture preserved |
++| optional script signer | `DEPLOYER` unset 時の Forge-managed signer fallback を維持 | Hardware / keystore direct use preserved |
++| handover current-admin read | `DF_CURRENT_ADMIN` priority は不変 | Address comparisons unchanged |
++| accept local drills | 31337 / hosted 31338 のみ | CI drill preserved; production misuse removed |
++| seed scripts | known public Anvil key は local chain guard 後だけ読む | Demo liveness preserved |
++| logs / artifacts | public address、signer kind、keystore account nameだけ表示 | No key value added |
++
++### Residual operational boundary
++
++- `AcceptDFGovernanceHandover` と seeders は local Anvil drill のため key env を保持するが、最初の処理で
++  chain 31337 / 31338 を検証する。これらは価値を持つ production key の入力経路ではない。
++- Console devnet Timelock scripts の `DEVNET_OPERATOR_PRIVATE_KEY` は別 lane であり、既存
++  `ConsoleDevnetChainGuard` が expected chain 1 を拒否し、actual / expected mismatch も拒否する。
++- hardware wallet / AWS KMS / Foundry keystore の実デバイス・IAM ceremony は本 review 環境では実行していない。
++  production Go 判定には既存 runbook に従う operator rehearsal と receipt / signer address 照合が必要である。
++
++## Test Coverage Analysis
++
++| Behavior | Evidence | Result |
++| --- | --- | --- |
++| 20-byte address acceptance | shared policy unit test | PASS |
++| 32-byte private-key rejection | exact custom-error unit test + CLI negative smoke | PASS |
++| Accept mainnet rejection ordering | `run()` on chain 1 without manifest/key env | PASS before reads |
++| local chain allowlist | 31337 and 31338 positive + chain 1 negative | PASS |
++| conflicting signer modes | CLI Ledger + AWS negative smoke | PASS |
++| external mainnet unlocked signer | CLI negative smoke | PASS |
++| Foundry keystore forwarding | network-free Forge shim checks `--account` and public child `DEPLOYER` | PASS through Forge invocation |
++| loopback mainnet-fork unlocked mode | network-free Forge shim reaches Forge invocation | PASS |
++| real local deployment | Anvil port 18545, public `DEPLOYER`, unlocked signer, 8 branches | PASS |
++| compile | `forge build` | PASS |
++| full regression | 78 suites | 1,453 passed; 0 failed; 1 skipped |
++| formatting / shell syntax | TypeScript dprint, `bash -n`, `git diff --check` | PASS |
++
++The only skipped test is the suite's pre-existing environment-dependent lane. No changed high-risk validation is untested at the
++shared-policy / CLI-boundary level. Hardware/KMS signing is intentionally an operational ceremony rather than a repository unit test.
++
++## Blast Radius Analysis
++
++| Changed boundary | Direct changed call sites | Repository references | Priority |
++| --- | ---: | ---: | --- |
++| `requirePublicAddress` | 6 across 5 production-capable scripts | deploy / handover entrypoints included in 131 operational references | P1 |
++| `requireLocalChain` | 3 local-key scripts | CI + local/hosted helper lanes | P1 |
++| deploy CLI signer selection | 1 central CLI | root/local docs、CI、fork helper | P1 |
++| production contract state | 0 | 0 | none |
++
++Blast radius は運用 entrypoint 全体に広いが、変更は broadcast 前の validation / signer selection に限定される。
++on-chain state transition、value accounting、external contract call sequence には到達後の差分がない。
++
++## Historical Context And Regression Check
++
++- `git blame` で `DeployLiquity2` と `deploy-cli.ts` の raw-key branch は upstream import `d62e2ea3` に由来する。
++- `AcceptDFGovernanceHandover` の holder key reads は `d3014c31`、multi-strategy 拡張は `3396328f` に由来する。
++- `git log -S` では raw-key behavior が過去の security fix として追加された証拠はない。
++- 本変更は validation を削除せず、public-address validation と local-chain validation を追加する。
++- raw-key signing code の再導入、access modifier 変更、production contract external call 追加はない。
++
++## Recommendations
++
++### Immediate
++
++- [x] production-capable `DEPLOYER` を public address only にする
++- [x] CLI から raw-key derivation / child forwarding を削除する
++- [x] signer mode を相互排他的にし、external production RPC の `--unlocked` を拒否する
++- [x] production accept を Safe / control plane に限定し、local helper を code で chain-gate する
++- [x] CI / fork / local helper と JP / EN docs を同時移行する
++
++### Before production
++
++- [ ] hardware wallet / Foundry keystore / AWS KMS の選定済み mode で operator rehearsal を行う
++- [ ] signed sender が freeze package の public `DEPLOYER` と一致することを receipt で照合する
++- [ ] Safe / Timelock holder の accept calldata、target、order、threshold signer を runbook 通り再確認する
++
++### Technical debt
++
++- なし。local-only key helpers を production signer abstraction へ拡張しない。用途分離と fail-closed guard を維持する。
++
++## Analysis Methodology
++
++**Strategy**: SURGICAL。first-party code 276 files のうち、変更された 21 files 全てと high-risk caller / 1-hop
++dependency を確認した。
++
++- baseline / head の各 diff region を比較
++- removed raw-key code の `git log -S` / `git blame`
++- validation call-site と operational caller の blast-radius scan
++- process/environment、signer confusion、chain spoof / wrong-RPC、local liveness の attacker modeling
++- shared policy の positive / negative tests、CLI negative smokes、実 Anvil deployment
++- full Foundry regression / invariant suite
++- production contract / ABI / storage diff absenceの確認
++
++**Limitations**: external Ledger / Trezor device、AWS account / KMS IAM、real Foundry keystore password prompt、production
++Safe control plane はこの local review では実行していない。これらは secret を持ち込まない production rehearsal で検証する。
++
++**Confidence**: High for repository implementation and local/fork liveness; Medium for external signer operations until the
++production ceremony evidence is completed.
+diff --git a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index a8e6fe7b..93d35556 100644
+--- a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -271,7 +271,9 @@ handover prepare / pending verify を同一 fork state で実行する。`Prepar
+ 1. `MAINNET_RPC_URL` と `FORK_BLOCK` を固定し、fork block number を evidence に記録する。
+ 2. `DEPLOYER` は fork evidence では public address を使う。helper は anvil
+    `--auto-impersonate` と `anvil_setBalance` で local fork 上だけ funding する。production
+-   broadcast では Foundry keystore / Ledger 等を使い、private key を shell history に残さない。
++   broadcast では `./deploy` の Foundry keystore / Ledger / hardware wallet / KMS signer を使う。
++   deploy CLI と production-capable Forge scripts は private-key 形式の `DEPLOYER` を拒否し、
++   child process の環境へ秘密鍵を渡さない。
+ 3. 上記 env と operator values を読み込む。helper は未コミット tracked diff がある状態では停止する。例外的に dirty tree を使う場合は
+    `DF_ALLOW_DIRTY_EVIDENCE=true` を明示し、その理由を evidence に残す。
+ 4. deploy + manifest + handover pending evidence を同一 fork state で実行する。
+diff --git a/documents/jp/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md b/documents/jp/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md
+index 06ce66d7..83e19e77 100644
+--- a/documents/jp/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md
++++ b/documents/jp/protocol/launch/gates/Mainnet-Governance-Handover-Runbook.md
+@@ -36,7 +36,7 @@ governance handover。
+ | ---------------------- | ---------------------------------------------------------------------------------------------- |
+ | `DF_HANDOVER_MANIFEST` | handover 対象 manifest。通常は `deployment-manifest.json`                                      |
+ | `DF_CURRENT_ADMIN`     | deploy 後に Vault role / 2-step owner を保持している admin address                             |
+-| `DEPLOYER`             | `DF_CURRENT_ADMIN` 未指定時の fallback。broadcast 時は private key を shell history に残さない |
++| `DEPLOYER`             | `DF_CURRENT_ADMIN` 未指定時の fallback public address。private key は拒否する。broadcast の signer は Foundry keystore / hardware wallet / KMS から供給する |
+ | `DF_HANDOVER_TOTAL_BRANCHES` | Day-1 は明示的に `8`。manifest の全 branch を ownership / inert-cap 検証対象にする |
+ | `DF_HANDOVER_ACTIVE_BRANCHES` | Day-1 は明示的に `2`。Vault parameter / Strategy handover を行う active-wired prefix（branch 0–1） |
+ 
+@@ -154,7 +154,8 @@ mainnet で `PrepareDFGovernanceHandover` を broadcast する前に、以下を
+ 
+ `AcceptDFGovernanceHandover.s.sol` は local / CI helper であり、production の Safe /
+ Timelock control plane には使わない。mainnet では各 holder が自分の control plane から
+-`acceptOwnership()` を実行する。
++`acceptOwnership()` を実行する。helper 自体も chain ID 31337 / 31338 以外では、manifest や
++private-key env を読む前に revert する。
+ 
+ | Target                                   | accept caller            |
+ | ---------------------------------------- | ------------------------ |

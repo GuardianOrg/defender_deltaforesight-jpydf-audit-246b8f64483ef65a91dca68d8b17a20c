@@ -1,0 +1,66 @@
+diff --git a/source-snapshot/contracts/src/ActivePool.sol b/source-snapshot/contracts/src/ActivePool.sol
+index da3f2e7d..4a97ea9f 100644
+--- a/source-snapshot/contracts/src/ActivePool.sol
++++ b/source-snapshot/contracts/src/ActivePool.sol
+@@ -127,11 +127,11 @@ contract ActivePool is IActivePool {
+         // interest minting events.
+         return Math.ceilDiv(aggWeightedDebtSum * (block.timestamp - lastAggUpdateTime), ONE_YEAR * DECIMAL_PRECISION);
+     }
+ 
+     function calcPendingSPYield() external view returns (uint256) {
+-        return calcPendingAggInterest() * effectiveSPYieldSplit() / DECIMAL_PRECISION;
++        return calcPendingAggInterest() * SP_YIELD_SPLIT / DECIMAL_PRECISION;
+     }
+ 
+     function calcPendingAggBatchManagementFee() public view returns (uint256) {
+         uint256 periodEnd = shutdownTime != 0 ? shutdownTime : block.timestamp;
+         uint256 periodStart = Math.min(lastAggBatchManagementFeesUpdateTime, periodEnd);
+@@ -268,11 +268,11 @@ contract ActivePool is IActivePool {
+         uint256 pendingAggInterest = calcPendingAggInterest();
+         mintedAmount = pendingAggInterest + _upfrontFee;
+ 
+         // Mint part of the JPYDF interest to the SP and part to the router for LPs.
+         if (mintedAmount > 0) {
+-            uint256 spYield = effectiveSPYieldSplit() * mintedAmount / DECIMAL_PRECISION;
++            uint256 spYield = SP_YIELD_SPLIT * mintedAmount / DECIMAL_PRECISION;
+             uint256 remainderToLPs = mintedAmount - spYield;
+ 
+             jpydfToken.mint(address(interestRouter), remainderToLPs);
+ 
+             if (spYield > 0) {
+diff --git a/source-snapshot/contracts/src/Dependencies/Constants.sol b/source-snapshot/contracts/src/Dependencies/Constants.sol
+index 292e908c..a1b6f32b 100644
+--- a/source-snapshot/contracts/src/Dependencies/Constants.sol
++++ b/source-snapshot/contracts/src/Dependencies/Constants.sol
+@@ -127,31 +127,6 @@ uint256 constant ONE_YEAR = 365 days;
+ uint256 constant UPFRONT_INTEREST_PERIOD = 7 days;
+ uint256 constant INTEREST_RATE_ADJ_COOLDOWN = 7 days;
+ 
+ uint256 constant SP_YIELD_SPLIT = 75 * _1pct; // 75%
+ 
+-/// @dev The v1 cleanup exceptions are deliberately independent from MIN_DEBT.
+-///      The persistent v2 canary keeps production SP / Trove / burn behavior.
+-bool constant MAINNET_PILOT_CLEANUP_OVERLAY = false;
+-
+-/// @dev Identifies the retired v1 cleanup overlay. Remove per jpydf-v2 #1548.
+-function isMainnetPilotOverlay() view returns (bool) {
+-    return block.chainid == 1 && MAINNET_PILOT_CLEANUP_OVERLAY;
+-}
+-
+-/// @dev Maximum JPYdf supply mismatch tolerated when the disposable pilot
+-///      closes its final Trove. One aggregate-interest ceiling operation can
+-///      add one wei, so a multi-wallet pilot needs a bound above two while
+-///      remaining economically negligible. Any larger residual or a residual
+-///      held outside the closer reverts atomically.
+-uint256 constant PILOT_MAX_JPYDF_ROUNDING_DUST = 1e6;
+-
+-/// @dev TEST-ONLY mainnet pilot overlay. The production constant above remains
+-///      canonical, while the disposable chain-ID-1 / 1,000-JPYdf build routes
+-///      all newly minted fee/interest JPYdf through InterestRouterForwarder so
+-///      its final Trove can close with totalSupply == 0. Remove per #1548.
+-function effectiveSPYieldSplit() view returns (uint256) {
+-    if (isMainnetPilotOverlay()) return 0;
+-    return SP_YIELD_SPLIT;
+-}
+-
+ uint256 constant MIN_JPYDF_IN_SP = 1e18;

@@ -1,0 +1,6 @@
+Same test file on pre-fix source e95fa3350e2d2c3b6e00b1dea76d00a19d17653c
+[FAIL: healthy branch reported oracle failure] test_attackAfterOwnerRecovery_allPricePaths()
+[FAIL: healthy branch reported oracle failure] test_measuredLoss_staleCache_noPauseAndNoOverPricing()
+[FAIL: starved probe produced a price above the measured value: 149992500374981250937 > 104994750262486875655] test_measuredLoss_freshCache_starvedProbeCannotUsePreLossCache()
+[PASS] test_urgentPath_starvationRevertsOrQuotesLive()
+Suite result: FAILED. 1 passed; 3 failed; 0 skipped; finished in 896.49ms (1.86s CPU time)

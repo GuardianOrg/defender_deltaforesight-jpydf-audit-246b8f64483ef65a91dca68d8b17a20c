@@ -1,0 +1,20 @@
+Candidate 11828df54c9ab5508db2fd0500b02d6b87bbfe32; upstream local validation.
+The baseline reproduction uses the previous source with renamed contract identifiers.
+
+baseline-reproduction:
+[PASS] test_PreFixCollisionLeaves100TokensStrandedAfterRetirement() (gas: 4276192)
+Ran 1 test suite in 15.67ms (1.39ms CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)
+
+focused:
+[PASS] testFuzz_CollisionRollsBackFundingAndRecoversNextEpoch(uint96) (runs: 256, μ: 2279340, ~: 2279424)
+Ran 3 test suites in 99.02ms (126.55ms CPU time): 48 tests passed, 0 failed, 0 skipped (48 total tests)
+
+coverage:
+[PASS] testFuzz_CollisionRollsBackFundingAndRecoversNextEpoch(uint96) (runs: 32, μ: 3957756, ~: 3957834)
+Ran 7 test suites in 1.57s (1.79s CPU time): 67 tests passed, 0 failed, 0 skipped (67 total tests)
+
+Production EIP-170 size gate: passed.
+PILAllocator runtime: 7788 bytes.
+UniV4MerklInitiative runtime: 6713 bytes.
+Slither: 188 contracts / 93 detectors; eight reports after filtering to the changed production paths.
+See r2-l02-differential-review.md for individual dispositions.

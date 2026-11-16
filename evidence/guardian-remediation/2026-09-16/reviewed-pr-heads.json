@@ -1,0 +1,74 @@
+[
+  {
+    "baseRefName": "main",
+    "body": "Guardian **L-03**: the shared 1,000-token liquidation reward cap applies to high-value dwstETH as well as dUSDC. This candidate uses the client-selected **2 dwstETH / 1,000 dUSDC** limits while retaining the 0.5% rate on the SP-offset collateral portion and the fixed WETH payment.\n\nTroveManager receives a bounded cap at construction. DeployLiquity2 uses the same branch-specific input for CREATE2 prediction and deployment. The cap occupies a constructor-only storage slot with no setter: an immutable implementation exceeded EIP-170, while this implementation is **24,563 bytes (13 bytes of headroom)**. The 30 existing storage fields retain their slots, offsets and types; the cap is appended at slot 30. This adds a storage read to liquidation. Constructor ABI and creation bytecode change; deploy/verification manifests must be regenerated for the accepted integration candidate.\n\nThe test deployer supports the same explicit input. Specs and the Japanese/English parameter manifest describe the branch caps and unchanged reward calculation. Reserved branches keep their existing 1,000-unit bootstrap limit; collateral-specific activation review is still required, and a different cap requires redeployment.\n\nValidation:\n- 25 focused tests pass, including 256-run fuzz checks, cap boundary atoms, zero/partial/full SP coverage, both selected caps, SP allocation, borrower surplus, redistributed debt, collateral conservation, invalid cap inputs and deployment parameter selection.\n- Existing fast Foundry gate passes: `forge test --root source-snapshot/contracts --threads 1 --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill' -q`.\n- Production `utils/check-contract-sizes.sh` passes; original compiler/settings retained.\n- Baseline/candidate storage-layout comparison passes; `git diff --check` and changed relative documentation links pass. Japanese lint has no findings on changed lines.\n\nThis is an independent Draft remediation candidate, not final economic approval or an auditor-verified resolution. No production deployment or Guardian board status change. Original frozen manifests remain baseline evidence; final integrated remediation identity and review are still required.\n",
+    "headRefName": "fix/guardian-l03-branch-gas-cap",
+    "headRefOid": "aae5cf7e2451ac7530e806aa010573ad17234119",
+    "isDraft": true,
+    "number": 121,
+    "title": "fix(Guardian L-03): cap liquidation rewards at 2 dwstETH / 1,000 dUSDC"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Guardian **L-09**: a Zapper-local remove manager cannot close directly through BorrowerOperations, while the existing Zapper close requires Vault redemption. A paused or illiquid Vault can therefore prevent that manager from stopping debt accrual.\n\nAdds `closeTroveToDToken`, using the existing authorization, configured receiver, exact debt repayment and gas-compensation path. It transfers the full collateral as dToken without invoking Vault redemption. The underlying exit shares the close helper. Core close restrictions still apply, and unrelated donated balances remain untouched. Updates ZAP-FR-010.\n\nValidation: all 50 CollateralYieldZapper tests pass, including direct-core manager rejection, underlying close rejection during Vault pause, unauthorized caller rejection, successful manager dToken close, receiver/collateral/gas/debt accounting, donation preservation and no queued withdrawal. `git diff --check` passes.\n\nThis is an independent remediation candidate against the audited baseline, not an auditor-approved resolution. Final integrated size/compatibility checks and refreshed remediation manifests remain required. No production deployment or board status change.\n",
+    "headRefName": "fix/guardian-l09-close-to-dtoken",
+    "headRefOid": "7164010ca21793cdce6d9826f2951bd83d677f33",
+    "isDraft": true,
+    "number": 120,
+    "title": "fix(Guardian L-09): close managed Troves directly to dToken"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Addresses **Guardian L-07 only**. When a Strategy withdrawal returns more than its measured yield, BaseStrategy sends the excess through the principal-return accounting path and caps the direct yield transfer at the measured yield. The excess no longer leaves phantom recorded principal after Sky conversion.\n\nThe Sky regression uses a nonzero actual converter fee below the configured loss allowance, reproduces the old overpayment (197.494973 USDC sent as yield versus 196.999999 USDC measured yield), checks the exact principal decrement, and drains the remaining position. The shared fix also protects other adapters that over-return; it adds no idle-balance tracking or converter interface.\n\nValidation: 234 Strategy/Vault tests PASS; `git diff --check` PASS. Specification: STGY-FR-003. Guardian review, integrated size/storage/identity gates remain pending. Original manifests describe the audited baseline, not this candidate.\n",
+    "headRefName": "fix/guardian-l07-sky-harvest",
+    "headRefOid": "215c904e3a63e909e3f8252f348a21164d5d8daa",
+    "isDraft": true,
+    "number": 119,
+    "title": "fix(Guardian L-07): account excess Sky harvest output as principal"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Addresses **Guardian I-01 only**. A registered batch manager can lower or waive its management fee while the branch is in a recoverable oracle pause. Permanent shutdown still rejects this operation; fee increases and unregistered callers remain rejected.\n\nThe regression test reproduces the old `IsShutDown` revert, demonstrates fee accrual during the pause, settles prior fees at the old rate, waives future management fees, and verifies that this does not resume the branch. Existing permanent-shutdown tests are retained.\n\nValidation: 96 shutdown/batch-management-fee tests PASS; BorrowerOperations runtime 24,559 bytes (17-byte EIP-170 margin) under pinned Solc 0.8.24/Cancun/200 runs; `git diff --check` PASS. Specification: CORE-BO-FR-016. Guardian remediation review and final integrated gates remain pending; original manifests still identify the audited baseline.\n",
+    "headRefName": "fix/guardian-i01-oracle-fee-reduction",
+    "headRefOid": "521f5e39672527a968a90f4956cc48c2e2b2359d",
+    "isDraft": true,
+    "number": 118,
+    "title": "fix(Guardian I-01): allow management fee reductions during oracle pauses"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Addresses **Guardian L-10 only**. Exhausting a historical Strategy valuation cache now invalidates it rather than producing an available zero. The shared reduction helper covers receipts, writeoffs and Morpho incident loss adjustments; partial reductions preserve the original observation timestamp.\n\nThe Sky regression exercises a low conversion quote, quote recovery, a recall exceeding the old estimate, redemption of that buffer, and a later preview failure. A fuzz test also covers exhausted and initially-zero caches while live valuation fails, followed by automatic live-read recovery. Existing full-drain assertions now expect invalidation. No new external valuation callback is introduced during receipt.\n\nValidation: 235 focused Strategy/Vault tests PASS on this isolated L-10 change; the previously combined L-08/L-10 candidate also passed the serialized fast Foundry and production size gates. Specification: VAULT-FR-005. Original source/artifact manifests remain the audited baseline and are not rewritten to certify this remediation candidate. Guardian review and final integrated identity checks remain pending.\n",
+    "headRefName": "fix/guardian-l10-exhausted-cache",
+    "headRefOid": "7e673095b0d167e61c4564042987f263f8dbf696",
+    "isDraft": true,
+    "number": 117,
+    "title": "fix(Guardian L-10): invalidate exhausted Strategy valuation caches"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Addresses **Guardian L-08 only**. `backingRatioForPricing` now returns `(1e18, true)` when known conservative assets cover every dToken and queued-claim liability, even when another registered Strategy cannot be valued. It still returns unavailable when that unknown contribution is needed.\n\nThe regression test reproduces the original nonzero-Strategy outage, verifies full custody coverage, rejects a one-atom shortfall, and verifies automatic recovery. The source change is a reordered coverage check with no new storage or external calls. Specification: VAULT-FR-016.\n\nValidation: 234 focused Strategy/Vault tests PASS on this isolated L-08 change; before splitting L-10 into its own PR, the combined candidate also passed the serialized fast Foundry gate and production size gate. Original source/artifact manifests remain baseline evidence, not a certification of this candidate. Guardian remediation review and final integrated identity checks remain pending. Slither's installed crytic-compile could not import Forge build-info (`KeyError: output`); no static-analysis pass claimed.\n",
+    "headRefName": "fix/guardian-l08-l10-vault-valuation",
+    "headRefOid": "de3accd7cace6fc18e6c1dd54efb759c275b2275",
+    "isDraft": true,
+    "number": 116,
+    "title": "fix(Guardian L-08): keep pricing available when known assets cover liabilities"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Addresses Guardian **I-02, I-03, I-04, I-05**. Corrects source-switch cached-price semantics, distinguishes a truncated redemption request from its expected fill, moves removal prerequisites away from emergency disabling, and identifies WRITEOFF_ROLE for residual loss recognition.\n\nThe redemption specification is updated at existing requirement CORE-RH-FR-003. All Solidity changes are comments; event signatures and executable tokens remain unchanged. Source hashes and compiler metadata still change, so this remains a remediation candidate for Guardian review rather than an update to the accepted frozen identity.\n\nValidation: stripped-comment executable-token comparison against main PASS; `git diff --check` PASS. No new runtime tests for comment-only changes.\n",
+    "headRefName": "docs/guardian-i02-i05",
+    "headRefOid": "e50a51bbc19cd08ce3263a6d4e100c055e995e7c",
+    "isDraft": true,
+    "number": 115,
+    "title": "docs(Guardian I-02, I-03, I-04, I-05): correct oracle, redemption and incident guidance"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Guardian's board currently contains 10 Low and 9 Informational findings. This records every ID, the proposed treatment, required evidence, and the PR mapping so remediation review can follow finding IDs rather than unrelated implementation titles.\n\nIt also records the September 10 Oracle proposal and Guardian's requested tests. The previous preference for retaining the 72-hour borrowing policy is marked historical; the 24-hour liquidation grace remains conditional on validation. No board status, client response, risk acceptance, frozen source, or audit identity is changed.\n\nValidation: production companion verification PASS; changed relative paths PASS; `git diff --check` PASS. Implementation links will be added as scoped remediation PRs are created.\n",
+    "headRefName": "docs/guardian-findings-disposition",
+    "headRefOid": "487d154a874c646369840b9ed2ab75b5ec028a27",
+    "isDraft": true,
+    "number": 114,
+    "title": "docs(Guardian): track L-01–L-10, I-01–I-09 and Oracle remediation decisions"
+  }
+]

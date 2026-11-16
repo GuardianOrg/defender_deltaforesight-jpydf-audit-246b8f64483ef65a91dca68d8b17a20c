@@ -1,0 +1,307 @@
+diff --git a/contracts/src/CollateralVault.sol b/contracts/src/CollateralVault.sol
+index da2f6d41..5cd941bc 100644
+--- a/contracts/src/CollateralVault.sol
++++ b/contracts/src/CollateralVault.sol
+@@ -330,7 +330,7 @@ contract CollateralVault is
+ 
+         // Checks
+         if (requestOwner == address(0)) revert RequestNotFound();
+-        if (req.claimed) revert RequestNotFound();
++        if (req.claimed) return 0;
+         if (block.timestamp < req.claimableAt) revert RequestNotReady();
+ 
+         underlyingClaimed = req.underlyingAmount;
+diff --git a/contracts/src/Interfaces/ICollateralVault.sol b/contracts/src/Interfaces/ICollateralVault.sol
+index 2f3bc8fe..d69d74c6 100644
+--- a/contracts/src/Interfaces/ICollateralVault.sol
++++ b/contracts/src/Interfaces/ICollateralVault.sol
+@@ -180,6 +180,7 @@ interface ICollateralVault {
+ 
+     /// @notice Settle a matured withdrawal request to its recorded owner.
+     /// @dev Anyone may trigger settlement, but the caller cannot redirect the payment.
++    ///      Returns zero without another transfer when the request is already settled.
+     function claim(uint256 _requestId) external returns (uint256 underlyingClaimed);
+ 
+     /// @notice Add underlying to the Vault's protected backstop reserve without minting dToken.
+diff --git a/contracts/test/CollateralVault.t.sol b/contracts/test/CollateralVault.t.sol
+index 6d3ad960..694d1b1e 100644
+--- a/contracts/test/CollateralVault.t.sol
++++ b/contracts/test/CollateralVault.t.sol
+@@ -713,15 +713,29 @@ contract CollateralVaultTest is Test {
+         assertEq(vault.pendingWithdrawals(), 0, "pending liability cleared");
+     }
+ 
+-    function test_Claim_DoubleClaim_Reverts() public {
++    function test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent() public {
+         (uint256 id, uint256 owed) = _seedRequest(alice, 100e8, 30e8);
+         deal(address(underlying), address(vault), owed);
+         vm.warp(block.timestamp + 1 days + 1);
+-        vm.startPrank(alice);
+-        vault.claim(id);
+-        vm.expectRevert(CollateralVault.RequestNotFound.selector);
+-        vault.claim(id);
+-        vm.stopPrank();
++
++        uint256 aliceBalanceBefore = underlying.balanceOf(alice);
++        uint256 bobBalanceBefore = underlying.balanceOf(bob);
++        vm.prank(bob);
++        assertEq(vault.claim(id), owed, "front-run settles the request");
++        assertEq(underlying.balanceOf(alice) - aliceBalanceBefore, owed, "recorded owner receives payout");
++        assertEq(underlying.balanceOf(bob), bobBalanceBefore, "front-runner receives nothing");
++
++        uint256 aliceBalanceAfterSettlement = underlying.balanceOf(alice);
++        vm.recordLogs();
++        vm.prank(alice);
++        assertEq(vault.claim(id), 0, "owner retry is idempotent");
++        Vm.Log[] memory retryLogs = vm.getRecordedLogs();
++
++        assertEq(underlying.balanceOf(alice), aliceBalanceAfterSettlement, "no second payout");
++        assertEq(retryLogs.length, 0, "no second claim event");
++        assertEq(vault.pendingWithdrawals(), 0, "liability settled exactly once");
++        (,,, bool claimedFlag) = vault.withdrawRequests(id);
++        assertTrue(claimedFlag, "request remains settled");
+     }
+ 
+     function test_Claim_UnknownId_Reverts() public {
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 6adaa235..7942a6e3 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -99,6 +99,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | V13 | 2026-08-05 | jpydf-v2 / develop (docs worktree at origin/develop) | `629e1c05` | forge 1.7.1 local | none | `forge test --match-path 'test/MorphoV2*.t.sol'` (30 passed); `forge test --match-path test/DeployLiquity2StrategySelector.t.sol` (34 passed) | Claude | PASS: MorphoV2Strategy 29 tests, MorphoV2BackingRatio 1 test, deploy selector 34 tests. Confirmed hard-zero max\* operation, deposit rejection recovery (cap / receive gate / zero-share / lying return), fail-soft withdraw (liquidity short / send gate / mismatch / zero burn), donation exclusion, immediate loss reflection, staged emergency recovery with `maxShares` and donated-share recovery, bounded `forceDeallocate` penalty with `_ownShares` resync, self-only isolated frames, reentrancy blocking, and `morpho-v2` deploy binding with Day-1 branch policy |
+ | V21 | 2026-08-08 | jpydf-v2 / `fix/preaudit-morpho-pricing-rails` | `825e9674` | forge 1.7.1 local | none | affected 5 suites; fast PR gate; full local gate; `forge build --sizes`; `cloc 2.06`; `git diff --check` | Codex | PASS: affected 253, fast 1,536, full local 1,589; all with 0 failed / 0 skipped. Verified fee-on-transfer receiver delta, Strategy receipt/cache ambiguity, and unavailable/recovering Sky quotes. Vault runtime 23,047 bytes (margin 1,529); full body 5,219 nSLOC |
+ | PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | none | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35, fast 1,547, all with 0 failed / 0 skipped. The price-feed integration regression failed before the fix and passed after remediation. Sky Strategy runtime 20,173 bytes (margin 4,403); converter runtime 5,596 bytes (margin 18,980) |
++| PRELIM-L01 | 2026-08-12 | jpydf-audit / `audit/preliminary-l01-remediation` | source `fe3d3d0` + M-01/M-02/L-01 overlays | forge 1.7.1 local | none | CollateralVault focused; push-model invariant; fast PR gate; production size gate; pre-fix mutation; production-source `forge fmt --check`; `git diff --check` | Codex | PASS: Vault focused 197, invariant 4, fast 1,547; all with 0 failed / 0 skipped. Before the fix, the owner-retry idempotence regression failed with `RequestNotFound`; after remediation it passed. Vault runtime 23,032 bytes (margin 1,544). The test file has unrelated pre-existing fmt drift, so the full-file fmt gate was not applied; the changed block and production sources were checked separately |
+ 
+ ---
+ 
+@@ -111,7 +112,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | §4 System sources (Product Overview / Launch Risk Gate / ADR) | 8 | 5 | - | - | - | - | CON 5, NFR 6, RISK 9, ARCH 6, ADR 7 | 0 | 46 | 0 | 0 |
+ | §5 Liquity-v2-Core-Spec (🔵 Core Inheritance) | - | - | - | - | - | - | `CORE-*` uses the dedicated Core ledger as source of truth | 0 | 0 | 13 | 0 |
+ | §6 dToken (DTKN) | 10 | 10 | 7 | 5 | 5 | 0 | - | 3 | 40 | 13 | 0 |
+-| §7 CollateralVault (VAULT) | 19 | 14 | 9 | 4 | 15 | 0 | - | 3 | 64 | 40 | 2 |
++| §7 CollateralVault (VAULT) | 19 | 14 | 9 | 4 | 15 | 0 | - | 3 | 64 | 40 | 3 |
+ | §8 Strategy (STGY) | 12 | 11 | 8 | 5 | 12 | 2 | - | 2 | 52 | 0 | 0 |
+ | §9 AaveV3Strategy (AAVE) | 7 | 5 | 5 | 3 | 4 | 5 | - | 8 | 37 | 0 | 0 |
+ | §9A ERC4626Strategy (E4626) | - | - | 8 | - | - | - | - | - | 8 | 0 | 0 |
+@@ -127,7 +128,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | §13D InterestRouter (IRTR) | 5 | 6 | 5 | 5 | 3 | 0 | - | 6 | 30 | 1 | 0 |
+ | §13E PILAllocator / UniV4MerklInitiative (PILA) | 16 | 8 | 6 | 6 | 7 | 0 | - | 8 | 51 | 0 | 38 |
+ | §14 Frontend (FRNT) | 36 | 4 | 8 | 5 | 3 | 6 | - | 9 | 71 | 3 | 1 |
+-| **Total (active)** | **185** | **126** | **88** | **41** | **89** | **13** | **48** | **72** | **662** | **116** | **110** |
++| **Total (active)** | **185** | **126** | **88** | **41** | **89** | **13** | **48** | **72** | **662** | **116** | **111** |
+ | §9B LidoStrategy (LIDO, archived) | 9 | 10 | 8 | 3 | 5 | 5 | - | 7 | 47 | 0 | 39 |
+ | §9D EtherfiWeETHStrategy (EFWEETH, archived) | - | - | 13 | - | - | - | - | 0 | 13 | 0 | 13 |
+ | §15 Multichain (MCHN, excluded) | 13 | 8 | 6 | 5 | 6 | - | - | 3 | 41 | 1 | - |
+@@ -136,6 +137,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ - The "Verified" column is the number of IDs whose rows are all PASS or N/A. Update per campaign.
+ - **V21 update (2026-08-08)**: Remediated the additional variants from the cross-skill review. VAULT-FR-002 now tracks receiver delta, VAULT-FR-005 invalidates ambiguous declared/received cache state, ZAP-FR-006 / ZAP-SEC-005 cover fee-on-transfer minimums, and SKY-SEC-011 separates unavailable quotes from measured zero. The §9C dashboard had omitted existing SKY-SEC-008..010; reconciling those three plus new 011 changes 7→11 and adds four to active SEC / IDs / Verified.
+ - **PRELIM-M02 update (2026-08-12)**: Refined SKY-SEC-011 for preliminary finding M-02. An explicit Sky reverse-route halt continues principal-capped 1:1 valuation without recognizing unrealized yield. Invalid fee, status-read failure, and every other quote failure remain fail-closed and are not inferred to be halts. Requirement and Verified totals are unchanged.
++- **PRELIM-L01 update (2026-08-12)**: Refined VAULT-FR-006 for preliminary finding L-01. A retry for an existing, settled request returns `0` without a second transfer, accounting mutation, or event; an unissued ID still reverts with `RequestNotFound`. Permissionless triggering and fixed owner payout remain unchanged. Re-certifying VAULT-FR-006 updates §7 / active Verified from **2 to 3 / 110 to 111**; requirement-ID totals are unchanged.
+ - **V10 update (2026-07-07)**: Added EFWEETH-SEC-014 and updated the active ID total from **615 to 616**. `WeETHWithdrawAdapter` is now included as first-party production source / audit scope and marked PASS based on Etherfi focused tests, deploy selector tests, build, and diff check.
+ - **V11 update (2026-07-07)**: Active ID total remains **616**. Added a DF-specific identity marker to `WeETHWithdrawAdapter` and marked the `EtherfiWeETHStrategy.initialize` marker-less ABI-compatible adapter rejection PASS based on focused tests, deploy selector tests, build, fmt, and diff check.
+ - **Artifact-boundary sync (2026-07-31)**: Added the existing missing `SYS-RISK-008`, the new `SYS-RISK-009`, and `ADR-007`, updating the active ID total from **616 to 619**. The rows remain Not run because operational Evidence has not been collected.
+@@ -397,7 +399,7 @@ Source of truth: [CollateralVault.md](../../protocol/product/spec/CollateralVaul
+ | VAULT-FR-003 | redeemWithPermit (exact check -> permit -> burn(self), all reverts) | unit, integration | ☐ | ☐ | | Not run | |
+ | VAULT-FR-004 | allocate (cooldown/pause/M==0, all-outbound stop plus no cooldown consumption and automatic recovery on partial valuation, cap clamp, fixed weights, exact-recovery deposit-reject skip, recovery-mismatch full revert, no reallocation) | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-005 | receiveFromStrategy (registration check, balance-delta accounting, zero short-circuit, invalidate cache on declared/received mismatch) | unit, invariant=VAULT-INV-005 | ☑ | ☑ | `test_ReceiveFromStrategy_OnlyFromRegistered`; `test_ReceiveFromStrategy_ZeroAmountFromRegistered`; `test_FeeOnTransferToken_PrincipalMatchesSent`; `test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage` | PASS(V21/unit) | Fails closed rather than guessing upstream position decrease; invariant not run |
+-| VAULT-FR-006 | claim (permissionless trigger, fixed owner payout, existence/time/buffer reverts, no partial claim, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 | ☐ | ☐ | | Not run | |
++| VAULT-FR-006 | claim (permissionless trigger, fixed owner payout, settled retry returns 0, unissued/time/buffer reverts, no partial claim, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 | ☑ | ☑ | `test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent`; `test_Claim_PermissionlessTriggerPaysContractRequestOwner`; `test_Claim_UnknownId_Reverts`; `forge test --match-path test/InvariantPushModel.t.sol` | PASS(PRELIM-L01) | An owner retry after prior settlement does not mutate state/balances or emit another event; it cannot prevent gas expenditure by an already-submitted no-op transaction |
+ | VAULT-FR-007 | transferYieldToTreasury (M<=L early return, buffer clamp, min valuation, backstop excluded) | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-008 | whitelist / addStrategy / removeStrategy (guards, Underlying invariant, principal==0, add=GOV / remove=GUARDIAN) | unit, invariant=VAULT-INV-007/008 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-009 | updateStrategy (GOV) / writeoffStrategyPrincipal (WRITEOFF, weight invariant, clamp) | unit, invariant=VAULT-INV-009 | ☐ | ☐ | | Not run | |
+@@ -522,7 +524,7 @@ Error catalog (each error must actually fire in at least one test):
+ | 17 | InvalidWeight | updateStrategy with enabled==false and weight>0 (VAULT-FR-009) | ☐ | | Not run | |
+ | 18 | StrategyNotFound | target validation fails in updateStrategy / writeoff | ☐ | | Not run | |
+ | 19 | StrategyHasPrincipal | removeStrategy when principal!=0 (VAULT-FR-008) | ☐ | | Not run | |
+-| 20 | RequestNotFound | unissued claim ID / double claim (VAULT-FR-006) | ☐ | | Not run | |
++| 20 | RequestNotFound | unissued claim ID (settled IDs return 0; VAULT-FR-006) | ☑ | `CollateralVaultTest::test_Claim_UnknownId_Reverts` | PASS(PRELIM-L01) | Selector retained; meaning narrowed to unissued IDs |
+ | 21 | Retired: NotRequestOwner | Removed; any caller may settle, but payment is fixed to request owner (VAULT-FR-006) | ☑ | `CollateralVaultTest::test_Claim_PermissionlessTriggerPaysContractRequestOwner` | PASS(unit) | Error selector removed |
+ | 22 | RequestNotReady | claim before claimableAt | ☐ | | Not run | |
+ | 23 | InsufficientBuffer | buffer shortage at claim (no partial claim; retry later) | ☐ | | Not run | |
+diff --git a/documents/en/protocol/product/spec/CollateralVault.md b/documents/en/protocol/product/spec/CollateralVault.md
+index 6f5aa78c..5b0a8c5c 100644
+--- a/documents/en/protocol/product/spec/CollateralVault.md
++++ b/documents/en/protocol/product/spec/CollateralVault.md
+@@ -294,26 +294,27 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ - **Signature**: `claim(uint256 _requestId)`
+ - **Purpose**: Allow a user to withdraw from the Vault after `withdrawDelay` has elapsed for a `WithdrawRequest` issued during a buffer-insufficient redeem. The purpose is to receive the remaining amount that could not be paid immediately.
+ - **Authorization**: permissionless. Anyone may trigger settlement of a matured request, but payment is fixed to the recorded `req.owner`; the caller cannot redirect it. It is **not affected by `pausedDeposit` / `pausedRedeem`, but is subject to `pausedClaim` (GUARDIAN, [VAULT-FR-014](#vault-fr-014))**. Normal operation should not stop receipt of vested withdrawals; this pause is intended only for equitable repair freezes during real Strategy loss (`A < L_effective`) to prevent first-come buffer drains.
+-- **Preconditions (Checks)**: `pausedClaim == false` (`Paused` while stopped); request exists; `req.claimed == false`; `block.timestamp >= req.claimableAt`; `bufferBalance() >= req.underlyingAmount`.
++- **Preconditions (Checks)**: `pausedClaim == false` (`Paused` while stopped); request exists. Settlement of an unsettled request requires `block.timestamp >= req.claimableAt` and `bufferBalance() >= req.underlyingAmount`. An already-settled request returns `0` idempotently.
+ - **Behavior (Effects)** (Checks -> buffer validation -> Effects -> Interaction CEI order):
+   1. **Existence validation** — if `withdrawRequests[_requestId].owner == address(0)`, revert with `RequestNotFound` (prevents calls to unissued IDs)
+-  2. **Double-claim validation** — if `req.claimed == true`, revert with `RequestNotFound`
++  2. **Settled short-circuit** — if `req.claimed == true`, return `0` without changing state, transferring funds, or emitting an event. A permissionless settlement that front-runs the owner's transaction does not make the owner's retry revert
+   3. **Time validation** — if `block.timestamp < req.claimableAt`, revert with `RequestNotReady` (no early claim)
+   4. **Buffer balance validation** — if `bufferBalance() < req.underlyingAmount`, revert with `InsufficientBuffer` (no partial claim; retry after buffer recovery)
+   5. **State update (Effects)** — `req.claimed = true`, `pendingWithdrawals -= req.underlyingAmount`
+   6. **Payment (Interactions)** — transfer `req.underlyingAmount` to the recorded `req.owner` via `safeTransfer`; there is no caller payout or arbitrary receiver parameter
+-- **Revert / early return**: `pausedClaim` -> `Paused`; `_requestId == 0` or unissued ID -> `RequestNotFound`; already claimed -> `RequestNotFound`; `block.timestamp < req.claimableAt` -> `RequestNotReady`; `bufferBalance() < req.underlyingAmount` -> `InsufficientBuffer` (state changes roll back; retry after buffer recovery).
++- **Revert / early return**: `pausedClaim` -> `Paused`; `_requestId == 0` or unissued ID -> `RequestNotFound`; already claimed -> early return `0`; `block.timestamp < req.claimableAt` -> `RequestNotReady`; `bufferBalance() < req.underlyingAmount` -> `InsufficientBuffer` (state changes roll back; retry after buffer recovery).
+ - **Emitted event**: `WithdrawClaimed(user, requestId, amount)` (`user` is `req.owner` regardless of caller, `amount` is `req.underlyingAmount`, [VAULT-EVT-006](#11-events-and-monitoring-requirements-evt)).
+ - **Design notes**:
+   - **WithdrawRequest struct**: issued during a buffer-insufficient redeem and persisted in `withdrawRequests[requestId]`. Fields: `owner` (address, fixed payout recipient; records redeem `_receiver`) / `underlyingAmount` (uint256, shortfall `remaining`) / `claimableAt` (uint256, `block.timestamp + withdrawDelay`) / `claimed` (bool, double-claim prevention). `requestId` is assigned by `nextRequestId` (initial 1, +1 per redeem issuance). `requestId = 0` is reserved for "immediate completion" and is not registered in `withdrawRequests`.
+   - **Permissionless trigger / fixed payout**: even when redeem `msg.sender` (caller) and `_receiver` (final receiver) differ, `WithdrawRequest.owner = _receiver` stores the entitlement and fixed payout recipient. For an EOA, Safe, or contract with no arbitrary execution function, the owner, a keeper, or any third party may trigger `claim()` and the Underlying still goes only to the owner. The caller cannot steal or redirect it.
++  - **Idempotent retry**: if a permissionless caller front-runs the owner's claim transaction, the owner's later call succeeds with `0` and performs no second transfer, event, or `pendingWithdrawals` decrement. The caller still pays gas for an already-settled transaction; this hardening removes the revert-based grief and failed UX, not the cost of an unnecessary transaction.
+   - **Ordering**: no FIFO constraint. Requests past `claimableAt` can be claimed in any order. There is a **race condition** where the first user to call after buffer recovery receives funds; the accepted risk and operational response are in [§12](#12-failure-and-exception-behavior-err).
+   - **Expiration**: none. A request remains claimable indefinitely while `claimed == false`.
+   - **Partial claim**: not allowed. If buffer is insufficient, the full claim reverts.
+   - **Role of `pendingWithdrawals`**: tracks the total unclaimed balance. It is added in `allocate()` as `B_target += pendingWithdrawals` to prevent claim funds from flowing to Strategies ([VAULT-FR-004](#vault-fr-004)). In `transferYieldToTreasury()` it (a) is treated as a user liability via `L_effective = L_user + L_pending` to prevent accounting over-transfer, and (b) is part of the liquidity reserve `B_reserve` (the same one `allocate` keeps, including `pendingWithdrawals`) that the transfer cap subtracts from the liquid buffer, so claim liquidity is not drained by a Treasury sweep ([VAULT-FR-007](#vault-fr-007)).
+-  - **CEI note**: if buffer is insufficient, the function reverts before Effects, so `claimed = true` is not persisted. `nonReentrant` also prevents reentrancy.
+-  - Example: user A calls `redeem(100, A)` with buffer 30 / shortfall 70 -> `WithdrawRequest{owner:A, underlyingAmount:70, claimableAt: now+1day, claimed:false}` is issued with requestId=5. After 24h, ALLOCATOR replenishes 70 into the buffer via `sendToVault(70)` on the target Strategy. Keeper B calls `claim(5)` -> existence/unclaimed/time/buffer OK -> `claimed=true`, `pendingWithdrawals -= 70` -> send 70 to A while B receives nothing. A second `claim(5)` reverts with `RequestNotFound` (claimed flag).
+-- **Verification**: unit (existence/double/time/buffer reverts, permissionless trigger with fixed payout, no caller receipt, contract receiver, no partial claim, no expiry), invariant=[VAULT-INV-004](#vault-inv-004).
++  - **CEI note**: if buffer is insufficient, the function reverts before Effects, so `claimed = true` is not persisted. The settled short-circuit exits before any external call. `nonReentrant` also prevents reentrancy.
++  - Example: user A calls `redeem(100, A)` with buffer 30 / shortfall 70 -> `WithdrawRequest{owner:A, underlyingAmount:70, claimableAt: now+1day, claimed:false}` is issued with requestId=5. After 24h, ALLOCATOR replenishes 70 into the buffer via `sendToVault(70)` on the target Strategy. Keeper B calls `claim(5)` -> existence/unclaimed/time/buffer OK -> `claimed=true`, `pendingWithdrawals -= 70` -> send 70 to A while B receives nothing. A retry by A returns `0` without another transfer, event, or accounting update. An unissued ID still reverts with `RequestNotFound`.
++- **Verification**: unit (existence/time/buffer reverts, settled idempotent return, owner retry after permissionless front-run, fixed payout, no caller receipt, contract receiver, no partial claim, no expiry), invariant=[VAULT-INV-004](#vault-inv-004).
+ 
+ ### <a id="vault-fr-007"></a>VAULT-FR-007: `transferYieldToTreasury` (Treasury transfer of profit)
+ 
+@@ -717,7 +718,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ | <a id="vault-inv-001"></a>VAULT-INV-001 | Solvency principle: in healthy state, `totalUnderlying() >= L_effective` (`= L_user + L_pending`). `A < L_effective` (principal impairment) is primarily **prevented** through buffer / cap / Strategy selection; if broken, `backingRatio()` ([VAULT-FR-016](#vault-fr-016)) returns below `1e18` and lowers collateral value through the oracle ([Oracle Requirements Specification](Oracle.md) `ORCL-FR-014`) so core liquidation mechanisms absorb it (not left as unaddressed failure, [VAULT-FR-007](#vault-fr-007)) | invariant |
+ | <a id="vault-inv-002"></a>VAULT-INV-002 | Successful redeem preserves CEI order (exact required amount calculation -> `dToken.burn` -> `safeTransfer`), and `_dTokenAmount` is fully burned after immediate/delayed allocation. Non-exact dToken amount reverts with `InvalidDTokenAmount` before burn ([VAULT-FR-002](#vault-fr-002)) | invariant |
+ | <a id="vault-inv-003"></a>VAULT-INV-003 | In buffer-insufficient redeem, `immediate payment + WithdrawRequest.underlyingAmount == underlyingNeeded`, and `pendingWithdrawals` increases by `remaining` (first-come-takes-all + delayed rule, [VAULT-FR-002](#vault-fr-002)) | invariant |
+-| <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(unclaimed WithdrawRequest.underlyingAmount)`. Successful claim reduces exactly that amount, and double claim is impossible (`claimed` flag, [VAULT-FR-006](#vault-fr-006)) | invariant |
++| <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(unclaimed WithdrawRequest.underlyingAmount)`. The first successful claim reduces exactly that amount; an already-settled retry returns `0` without changing accounting, transfer, or event state (`claimed` flag, [VAULT-FR-006](#vault-fr-006)) | invariant |
+ | <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`. Strategies with live valuation readable use `min(estimatedTotalUnderlying_i, principal_i)`; valuation failure uses fresh cache; stale/missing/disabled cache is 0. This raw balance is the sum of liquid buffer and protected backstop reserve, while `bufferBalance()` excludes reserve. If live refresh fails after Vault->Strategy allocation, fallback cache is incremented by known outflow. `receiveFromStrategy` accounts `received` by balance delta, not declared amount; exact delivery reduces fallback cache by actual receipt, while declared/received mismatch invalidates it ([VAULT-FR-005](#vault-fr-005) / [VAULT-FR-007](#vault-fr-007)) | invariant |
+ | <a id="vault-inv-006"></a>VAULT-INV-006 | Per-call buffer->Strategy movement by `allocate()` is at most `allocateMaxMove`, and each Strategy allocation is at most cap headroom (`cap_i - est_i`). A failed managed-assets preflight stops all outbound movement. After a successful preflight, amounts reduced by caps or skipped due to a per-Strategy valuation reread/deposit failure are not reallocated and remain in buffer. Deposit rejection is skipped only after exact recovery; any mismatch reverts the whole call ([VAULT-FR-004](#vault-fr-004)) | invariant |
+ | <a id="vault-inv-007"></a>VAULT-INV-007 | `addToWhitelist` / `addStrategy` reject EOA / undeployed strategy, and `addStrategy` succeeds only when `whitelistedStrategies[strategy] == true`, `vault.underlying() != address(0)`, and `strategy.underlying() == vault.underlying()` ([VAULT-FR-008](#vault-fr-008)) | invariant |
+@@ -1032,7 +1033,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ | `StrategyNotFound` | target validation failure in `updateStrategy` / `writeoffStrategyPrincipal` |
+ | `StrategyHasPrincipal` | `principal != 0` in `removeStrategy` ([VAULT-FR-008](#vault-fr-008)) |
+ | `StrategyHasAssets` | live `estimatedTotalUnderlying()` cannot be read, or `estimatedTotalUnderlying != 0`, in `removeStrategy` |
+-| `RequestNotFound` | unissued ID / double claim in `claim` ([VAULT-FR-006](#vault-fr-006)) |
++| `RequestNotFound` | unissued ID in `claim` (an already-settled ID returns `0`, [VAULT-FR-006](#vault-fr-006)) |
+ | `RequestNotReady` | `claim` called before `claimableAt` |
+ | `InsufficientBuffer` | insufficient buffer during `claim` (no partial claim; retry later) |
+ | `InsufficientBackstop` | `_amount > backstopBalance()` in `releaseBackstopToBuffer` |
+@@ -1052,7 +1053,7 @@ Pass condition for each requirement = the verification method in the table is sa
+ | VAULT-FR-003 | redeemWithPermit (exact check -> permit -> burn(self), each revert) | unit, integration |
+ | VAULT-FR-004 | allocate (cooldown/pause/M==0, all-outbound stop and automatic recovery on partial valuation, cap clamp, fixed weights, deposit-failure skip, full revert only when exact recovery fails) | unit, invariant=VAULT-INV-006 |
+ | VAULT-FR-005 | receiveFromStrategy (registration check, balance delta, zero short-circuit) | unit, invariant=VAULT-INV-005 |
+-| VAULT-FR-006 | claim (permissionless trigger, fixed owner payout, existence/time/buffer, no partial, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 |
++| VAULT-FR-006 | claim (permissionless trigger, fixed owner payout, settled idempotent return, existence/time/buffer, no partial, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 |
+ | VAULT-FR-007 | transferYieldToTreasury (M<=L early path, buffer clamp, min valuation, backstop exclusion) | unit, invariant=VAULT-INV-001/005 |
+ | VAULT-FR-008 | whitelist/addStrategy/removeStrategy (guards, Underlying invariant, principal==0, live estimatedTotalUnderlying==0, add=GOV / remove=GUARDIAN) | unit, invariant=VAULT-INV-007/008 |
+ | VAULT-FR-009 | updateStrategy (GOV) / writeoffStrategyPrincipal and forceDeallocateMorphoV2 (WRITEOFF, incident guards) | unit, invariant=VAULT-INV-009 |
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index e8376284..ec3af926 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -106,6 +106,7 @@ source ~/.config/deltaforesight/rpc.env
+ | V14 | 2026-08-06 | jpydf-v2 / develop | `90a784f2` | forge 1.7.1 local | なし | `forge test --match-path test/DFWstETHPriceFeed.t.sol`（36 passed）; `forge test --match-path test/DFWstETHPriceFeedProxyIntegration.t.sol`（10 passed）; `forge test --match-path test/CollateralYieldZapper.t.sol`（47 passed） | Claude | PASS: spec に存在するが台帳に行が無かった `ORCL-FR-015`（dwstETH composite feed）と、requirement ID 自体が無かった Zapper の native ETH on-ramp（新規 `ZAP-FR-015`）を追加。実装・テストは merge 済みで、欠けていたのは要件行と spec 記述のみ |
+ | V21 | 2026-08-08 | jpydf-v2 / `fix/preaudit-morpho-pricing-rails` | `825e9674` | forge 1.7.1 local | なし | affected 5 suites; fast PR gate; full local gate; `forge build --sizes`; `cloc 2.06`; `git diff --check` | Codex | PASS: affected 253、fast 1,536、full local 1,589、全て 0 failed / 0 skipped。fee-on-transfer receiver delta、Strategy receipt/cache ambiguity、Sky quote unavailable/recovery を確認。Vault runtime 23,047 bytes（margin 1,529）、full body 5,219 nSLOC |
+ | PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | なし | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35、fast 1,547、全て 0 failed / 0 skipped。pre-fix では価格 feed 統合回帰が失敗し、remediation 後に成功。Sky Strategy runtime 20,173 bytes（margin 4,403）、converter runtime 5,596 bytes（margin 18,980） |
++| PRELIM-L01 | 2026-08-12 | jpydf-audit / `audit/preliminary-l01-remediation` | source `fe3d3d0` + M-01/M-02/L-01 overlays | forge 1.7.1 local | なし | CollateralVault focused; push-model invariant; fast PR gate; production size gate; pre-fix mutation; production-source `forge fmt --check`; `git diff --check` | Codex | PASS: Vault focused 197、invariant 4、fast 1,547、全て 0 failed / 0 skipped。pre-fix では owner retry の idempotence 回帰が `RequestNotFound` で失敗し、remediation 後に成功。Vault runtime 23,032 bytes（margin 1,544）。既存 test file には本変更外の fmt drift があるため全ファイル fmt gate は適用せず、本変更ブロックと production source を個別確認 |
+ 
+ ---
+ 
+@@ -118,7 +119,7 @@ source ~/.config/deltaforesight/rpc.env
+ | §4 System sources（Product Overview / Launch Risk Gate / ADR） | 8 | 5 | — | — | — | — | CON 5・NFR 6・RISK 9・ARCH 6・ADR 7 | 0 | 46 | 0 | 0 |
+ | §5 Liquity-v2-Core-Spec（🔵 CORE） | — | — | — | — | — | — | `CORE-*` は Core 専用台帳を正本 | 0 | 0 | 13 | 0 |
+ | §6 dToken（DTKN） | 10 | 10 | 7 | 5 | 5 | 0 | — | 3 | 40 | 13 | 0 |
+-| §7 CollateralVault（VAULT） | 19 | 14 | 9 | 4 | 15 | 0 | — | 3 | 64 | 40 | 2 |
++| §7 CollateralVault（VAULT） | 19 | 14 | 9 | 4 | 15 | 0 | — | 3 | 64 | 40 | 3 |
+ | §8 Strategy（STGY） | 12 | 11 | 8 | 5 | 12 | 2 | — | 2 | 52 | 0 | 0 |
+ | §9 AaveV3Strategy（AAVE） | 7 | 5 | 5 | 3 | 4 | 5 | — | 8 | 37 | 0 | 0 |
+ | §9A ERC4626Strategy（E4626） | — | — | 8 | — | — | — | — | — | 8 | 0 | 0 |
+@@ -134,7 +135,7 @@ source ~/.config/deltaforesight/rpc.env
+ | §13D InterestRouter（IRTR） | 5 | 6 | 5 | 5 | 3 | 0 | — | 6 | 30 | 1 | 0 |
+ | §13E PILAllocator / UniV4MerklInitiative（PILA） | 16 | 8 | 6 | 6 | 7 | 0 | — | 8 | 51 | 0 | 38 |
+ | §14 Frontend（FRNT） | 36 | 4 | 8 | 5 | 3 | 6 | — | 9 | 71 | 3 | 1 |
+-| **合計（active）** | **185** | **126** | **88** | **41** | **89** | **13** | **48** | **72** | **662** | **116** | **110** |
++| **合計（active）** | **185** | **126** | **88** | **41** | **89** | **13** | **48** | **72** | **662** | **116** | **111** |
+ | §9B LidoStrategy（LIDO・archived） | 9 | 10 | 8 | 3 | 5 | 5 | — | 7 | 47 | 0 | 39 |
+ | §9D EtherfiWeETHStrategy（EFWEETH・archived） | — | — | 13 | — | — | — | — | 0 | 13 | 0 | 13 |
+ | §15 Multichain（MCHN・対象外） | 13 | 8 | 6 | 5 | 6 | — | — | 3 | 41 | 1 | — |
+@@ -145,6 +146,7 @@ source ~/.config/deltaforesight/rpc.env
+ - **V20 更新（2026-08-08）**: 外部監査開始前の是正として、MV2-FR-003 を bounded partial retry、MV2-FR-005 を Vault incident rails / donation-first penalty 会計へ更新し、focused 74 tests と fast Foundry gate で再確認した。pricing は valuation unavailable と measured zero を分離し、VAULT-FR-016 / ORCL-FR-014 に unit evidence を追加したが、fork / invariant / full integration 未実施のため両行は PARTIAL のままとした。既に PASS だった MV2 / ORCL-FR-015 の再実証であり、active ID 数・検証済集計は変更しない。
+ - **V21 更新（2026-08-08）**: security-skill 横断 review の追加 variant を是正した。VAULT-FR-002 は receiver 実着額、VAULT-FR-005 は declared/received 不一致時 cache 無効化、ZAP-FR-006 / ZAP-SEC-005 は fee-on-transfer 下限、SKY-SEC-011 は quote 不能と測定済み0の分離を追跡する。§9C 集計が既存 SKY-SEC-008..010 を未計上だったため、新規011と併せて 7→11へ訂正し、active SEC / ID / 検証済をそれぞれ +4 とした。
+ - **PRELIM-M02 更新（2026-08-12）**: SKY-SEC-011 を予備監査 M-02 に合わせて精緻化した。明示的な Sky 逆変換 route halt は principal-capped 1:1 valuation を継続し、停止中の未実現 yield を認識しない。invalid fee、status read failure、その他の quote failure は halt と推測せず従来どおり fail-closed とする。要件 ID 数・検証済集計は不変。
++- **PRELIM-L01 更新（2026-08-12）**: VAULT-FR-006 を予備監査 L-01 に合わせて精緻化した。実在する settlement 済み request の再 claim は二重送金・二重減算・追加 event を行わず `0` を返し、未発行 ID は従来どおり `RequestNotFound` とする。permissionless trigger と owner 固定送金は維持する。VAULT-FR-006 の再認定により §7 / active 検証済を **2 → 3 / 110 → 111** に更新し、要件 ID 数は不変。
+ - **V1-MAP（2026-06-20）件数訂正**: メタ監査（[ledger-completeness-audit](../historical-reviews/2026-06-20-ledger-completeness-audit.md)）により Product-Overview（ARCH/ADR）・LIDO（INV/EVT）・Parameters（bridge-minter-timelock）の欠落 **5 行**を反映。develop の §3 集計（566）に +5 し ID 計 **571**。追加行 = **ARCH-006 / ADR-006 / LIDO-INV-010 / LIDO-EVT-005 / PRM-BRIDGE-MINTER-TIMELOCK**（うち bridge-minter は commit `756a736` 由来）。**合計行はセル和と一致するよう全面再計算済**。
+ - **台帳同期（2026-06-24）**: Strategy / Etherfi の追補 ID **6 行**（STGY-INV-011 / STGY-EVT-012 / EFWEETH-SEC-008..011）を反映し、active ID 計を **571 → 577** に更新。追加時点では検証実体未確認のため PASS にせず、未実施として扱った。
+ - **V8 更新（2026-06-24）**: EFWEETH-SEC-012 を追加し、active ID 計を **577 → 578** に更新。`test/*Strategy*.t.sol` の実走で EFWEETH-SEC-008..012 を PASS に更新した。
+@@ -405,7 +407,7 @@ placeholder 期挙動（各行 = doc §12 の表 1 行。発火実証列に ✅
+ | VAULT-FR-003 | redeemWithPermit（exact check→permit→burn(self)・各 revert） | unit, integration | ☑ | ☑ | `forge test --match-path test/CollateralVault.t.sol`（V6 / 2026-06-21: 55 passed） | PASS(unit) | round-trip / permit front-run 済み nonce + allowance / invalid permit + allowance 不足 `PermitFailed` / zero amount / zero receiver / non-exact dust before permit を確認。integration は未実施 |
+ | VAULT-FR-004 | allocate（cooldown/pause/M==0・partial valuation 時は全 outbound 停止＋cooldown 非消費＋自動復旧・cap クランプ・固定 weights・deposit reject は完全回収時のみ skip・回収不一致は全体 revert・再配分なし） | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-005 | receiveFromStrategy（登録判定・残高差分計上・ゼロ短絡・declared/received 不一致時 cache 無効化） | unit, invariant=VAULT-INV-005 | ☑ | ☑ | `test_ReceiveFromStrategy_OnlyFromRegistered`; `test_ReceiveFromStrategy_ZeroAmountFromRegistered`; `test_FeeOnTransferToken_PrincipalMatchesSent`; `test_FeeOnTransferToken_InvalidatesCacheBeforeValuationOutage` | PASS(V21/unit) | 不一致時に upstream position 減少量を推測せず fail-closed。invariant は未実施 |
+-| VAULT-FR-006 | claim（permissionless trigger・owner 固定送金・存在/時刻/buffer 各 revert・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 | ☐ | ☐ | | 未実施 | |
++| VAULT-FR-006 | claim（permissionless trigger・owner 固定送金・settlement 済み retry は 0・未発行/時刻/buffer 各 revert・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 | ☑ | ☑ | `test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent`; `test_Claim_PermissionlessTriggerPaysContractRequestOwner`; `test_Claim_UnknownId_Reverts`; `forge test --match-path test/InvariantPushModel.t.sol` | PASS(PRELIM-L01) | 先行 settlement 後の owner retry は state / balance / event を再変更しない。ただし送信済み no-op tx のガス消費自体は防げない |
+ | VAULT-FR-007 | transferYieldToTreasury（M≤L 早期・buffer クランプ・min 評価・backstop 除外） | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-008 | whitelist / addStrategy / removeStrategy（ガード・Underlying 不変条件・principal==0・add=GOV / remove=GUARDIAN） | unit, invariant=VAULT-INV-007/008 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-009 | updateStrategy（GOV）/ writeoffStrategyPrincipal・forceDeallocateMorphoV2（WRITEOFF・atomic incident pause・penalty / backing guard・tracked-loss cache 反映） | unit, invariant=VAULT-INV-009 | ☐ | ☐ | `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `MorphoV2StrategyTest` force-deallocation 群 | PARTIAL(unit) | 新 Morpho incident path の正常/異常系は V20 で実走。update/writeoff を含む要件全体の ledger 再認定と invariant は未実施 |
+@@ -530,7 +532,7 @@ placeholder 期挙動:
+ | 17 | InvalidWeight | updateStrategy で enabled==false かつ weight>0（VAULT-FR-009） | ☐ | | 未実施 | |
+ | 18 | StrategyNotFound | updateStrategy / writeoff の対象検証失敗 | ☐ | | 未実施 | |
+ | 19 | StrategyHasPrincipal | principal!=0 の removeStrategy（VAULT-FR-008） | ☐ | | 未実施 | |
+-| 20 | RequestNotFound | claim の未発行 ID / 二重 claim（VAULT-FR-006） | ☐ | | 未実施 | |
++| 20 | RequestNotFound | claim の未発行 ID（settlement 済み ID は 0 を返す、VAULT-FR-006） | ☑ | `CollateralVaultTest::test_Claim_UnknownId_Reverts` | PASS(PRELIM-L01) | error selector は維持し、意味を未発行 ID に限定 |
+ | 21 | 廃止: NotRequestOwner | 削除済み。誰でも settlement を起動できるが、送金先は request owner 固定（VAULT-FR-006） | ☑ | `CollateralVaultTest::test_Claim_PermissionlessTriggerPaysContractRequestOwner` | PASS(unit) | error selector 削除済み |
+ | 22 | RequestNotReady | claimableAt 前の claim | ☐ | | 未実施 | |
+ | 23 | InsufficientBuffer | claim 時の buffer 不足（部分 claim 不可・後日再試行） | ☐ | | 未実施 | |
+diff --git a/documents/jp/protocol/product/spec/CollateralVault.md b/documents/jp/protocol/product/spec/CollateralVault.md
+index 4fa67410..651fcb98 100644
+--- a/documents/jp/protocol/product/spec/CollateralVault.md
++++ b/documents/jp/protocol/product/spec/CollateralVault.md
+@@ -295,26 +295,27 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ - **シグネチャ**: `claim(uint256 _requestId)`
+ - **目的**: redeem 時に buffer 不足で発行された `WithdrawRequest` を、`withdrawDelay` 経過後にユーザーが Vault から引き出せるようにする。目的は、即時 redeem では受け取れなかった残額を後から受領できるようにすること。
+ - **権限**: permissionless。誰でも成熟済み request の settlement を trigger できるが、送金先は記録済み `req.owner` に固定され、caller は受取先を変更できない。**`pausedDeposit` / `pausedRedeem` の影響は受けないが、`pausedClaim`（GUARDIAN、[VAULT-FR-014](#vault-fr-014-pause--unpause緊急停止)）の停止対象**。既得の引出し受領を平時に止めることはなく、Strategy 実損（A < L_effective）時の equitable repair freeze（buffer の先着ドレイン阻止）に限って停止する運用前提とする。
+-- **事前条件（Checks）**: `pausedClaim == false`（停止中は `Paused`）；request 存在；`req.claimed == false`；`block.timestamp >= req.claimableAt`；`bufferBalance() >= req.underlyingAmount`。
++- **事前条件（Checks）**: `pausedClaim == false`（停止中は `Paused`）；request 存在。未決済 request の settlement には `block.timestamp >= req.claimableAt` と `bufferBalance() >= req.underlyingAmount` を要求する。既決済 request は idempotent に `0` を返す。
+ - **動作（Effects）**（Checks → buffer 検証 → Effects → Interaction の CEI 順）:
+   1. **存在検証** — `withdrawRequests[_requestId].owner == address(0)` なら `RequestNotFound` で revert（未発行 ID への呼出し防止）
+-  2. **二重 claim 検証** — `req.claimed == true` なら `RequestNotFound` で revert
++  2. **既決済 short-circuit** — `req.claimed == true` なら state、送金、event を変更せず `0` を返す。第三者が owner の tx より先に permissionless settlement を実行しても、owner 側 retry を revert させない
+   3. **時刻検証** — `block.timestamp < req.claimableAt` なら `RequestNotReady` で revert（早期 claim 不可）
+   4. **Buffer 残高検証** — `bufferBalance() < req.underlyingAmount` なら `InsufficientBuffer` で revert（部分 claim 不可、buffer 回復後に再試行）
+   5. **状態更新（Effects）** — `req.claimed = true`、`pendingWithdrawals -= req.underlyingAmount`
+   6. **支払い（Interactions）** — `req.underlyingAmount` を記録済み `req.owner` に `safeTransfer`。`msg.sender` への送金や任意 receiver 指定はない
+-- **revert / 早期 return**: `pausedClaim` → `Paused`；`_requestId == 0` または未発行 ID → `RequestNotFound`；既 claim 済み → `RequestNotFound`；`block.timestamp < req.claimableAt` → `RequestNotReady`；`bufferBalance() < req.underlyingAmount` → `InsufficientBuffer`（state 変更は巻き戻し、後日 buffer 回復後に再試行可）。
++- **revert / 早期 return**: `pausedClaim` → `Paused`；`_requestId == 0` または未発行 ID → `RequestNotFound`；既 claim 済み → `0` を早期 return；`block.timestamp < req.claimableAt` → `RequestNotReady`；`bufferBalance() < req.underlyingAmount` → `InsufficientBuffer`（state 変更は巻き戻し、後日 buffer 回復後に再試行可）。
+ - **発火イベント**: `WithdrawClaimed(user, requestId, amount)`（`user` は caller にかかわらず `req.owner`、`amount` は `req.underlyingAmount`、[VAULT-EVT-006](#11-イベント監視要件evt)）。
+ - **設計上のポイント**:
+   - **WithdrawRequest 構造体**: redeem の buffer 不足分岐で発行され `withdrawRequests[requestId]` に永続化される。フィールド: `owner`(address, 固定送金先。redeem の `_receiver` を記録) / `underlyingAmount`(uint256, buffer 不足分 `remaining`) / `claimableAt`(uint256, `block.timestamp + withdrawDelay`) / `claimed`(bool, 二重 claim 防止)。requestId は `nextRequestId`（初期値 1、redeem 発行ごとに +1）で採番。`requestId = 0` は「即時完了」の予約値で `withdrawRequests` に登録されない。
+   - **permissionless trigger / fixed payout**: redeem の `msg.sender`（呼出元）と `_receiver`（最終受領者）が異なる場合も、`WithdrawRequest.owner = _receiver` を entitlement / 固定送金先として保存する。EOA、Safe、任意実行機能を持たない contract receiver のいずれでも、本人・keeper・第三者が `claim()` を trigger でき、Underlying は常に owner だけへ送られる。caller は横取りやredirectをできない。
++  - **idempotent retry**: permissionless caller が owner の claim tx を front-run しても、owner の後続 tx は `0` で成功し、二重送金・二重 event・`pendingWithdrawals` の二重減算を行わない。既決済 tx の gas 自体は caller が負担するため、これは revert-based griefing と失敗 UX を除く hardening であり、不要 tx の gas 費用を払い戻す仕組みではない。
+   - **順序制御**: FIFO 制約なし。`claimableAt` を過ぎた request は任意の順序で claim 可能。buffer が回復した瞬間に最初に呼んだユーザーが受け取る**競争条件**が存在する（受容済みの既知リスクと運用対処は [§12](#12-失敗時異常系挙動err)）。
+   - **有効期限**: なし。`claimed == false` である限り無期限で claimable。
+   - **部分 claim**: 不可。buffer 不足時は全額 revert。
+   - **`pendingWithdrawals` の役割**: 未 claim 残高合計を保持。`allocate()` で `B_target += pendingWithdrawals` として加算され claim 用資金の Strategy 流出を防ぐ（[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)）。`transferYieldToTreasury()` では、(a) `L_effective = L_user + L_pending` としてユーザー負債扱いされ accounting 上の取りすぎを防ぎ、(b) 送金上限が `allocate` と同じ流動性予約 `B_reserve`（`pendingWithdrawals` を含む）を控除した liquid buffer に制限されることで、claim 用 liquidity が Treasury 送付で抜かれない（[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)）。
+-  - **CEI 順序の注記**: buffer 不足時は Effects 前に revert するため `claimed = true` は永続化されない。Reentrancy も `nonReentrant` で防御。
+-  - 例: user A が `redeem(100, A)` を呼び buffer 30 / 不足 70 → `WithdrawRequest{owner:A, underlyingAmount:70, claimableAt: now+1day, claimed:false}` が requestId=5 で発行。24h 後 ALLOCATOR が対象 Strategy の `sendToVault(70)` で 70 を buffer 補充。keeper B が `claim(5)` → 存在/未 claim/時刻/buffer OK → `claimed=true`、`pendingWithdrawals -= 70` → 70 を A へ送金し、B は受け取らない。再度 `claim(5)` を呼ぶと `RequestNotFound`（claimed フラグ）。
+-- **Verification**: unit（存在/二重/時刻/buffer 各 revert・permissionless trigger の固定送金先・caller 非受領・contract receiver・部分 claim 不可・無期限）, invariant=[VAULT-INV-004](#vault-inv-004)。
++  - **CEI 順序の注記**: buffer 不足時は Effects 前に revert するため `claimed = true` は永続化されない。既決済 short-circuit は外部 call 前に終了する。Reentrancy も `nonReentrant` で防御。
++  - 例: user A が `redeem(100, A)` を呼び buffer 30 / 不足 70 → `WithdrawRequest{owner:A, underlyingAmount:70, claimableAt: now+1day, claimed:false}` が requestId=5 で発行。24h 後 ALLOCATOR が対象 Strategy の `sendToVault(70)` で 70 を buffer 補充。keeper B が `claim(5)` → 存在/未 claim/時刻/buffer OK → `claimed=true`、`pendingWithdrawals -= 70` → 70 を A へ送金し、B は受け取らない。A の同 request retry は `0` を返し、追加送金・event・会計更新はない。未発行 ID は引き続き `RequestNotFound`。
++- **Verification**: unit（存在/時刻/buffer 各 revert・既決済 idempotent return・permissionless front-run 後の owner retry・固定送金先・caller 非受領・contract receiver・部分 claim 不可・無期限）, invariant=[VAULT-INV-004](#vault-inv-004)。
+ 
+ ### VAULT-FR-007: transferYieldToTreasury（収益の Treasury 送付）
+ 
+@@ -720,7 +721,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | <a id="vault-inv-001"></a>VAULT-INV-001 | ソルベンシー原則: 健全状態では `totalUnderlying() >= L_effective`（`= L_user + L_pending`）。`A < L_effective`（元本毀損）は buffer / cap / Strategy 選定で**未然に防ぐ**ことを第一とし、万一破れた場合は `backingRatio()`（[VAULT-FR-016](#vault-fr-016-backingratiodtoken-裏付け率の供給)）が `1e18` 未満を返し Oracle 経由（[Oracle 要件定義](./Oracle.md) `ORCL-FR-014`）で担保価値を下方修正してコアの清算機構に吸収させる（破綻として放置しない、[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)） | invariant |
+ | <a id="vault-inv-002"></a>VAULT-INV-002 | redeem 成功時は CEI 順序（必要量 exact 算出 → `dToken.burn` → `safeTransfer`）を守り、即時／遅延の按分後も `_dTokenAmount` は全量 burn される。非 exact dToken amount は burn 前に `InvalidDTokenAmount` で revert する（[VAULT-FR-002](#vault-fr-002-redeemdtoken--underlying)） | invariant |
+ | <a id="vault-inv-003"></a>VAULT-INV-003 | buffer 不足 redeem では `即時支払い + WithdrawRequest.underlyingAmount == underlyingNeeded` かつ `pendingWithdrawals` が `remaining` だけ増える（先着総取り＋遅延ルール、[VAULT-FR-002](#vault-fr-002-redeemdtoken--underlying)） | invariant |
+-| <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(未 claim の WithdrawRequest.underlyingAmount)`。claim 成功で当該分だけ減り、二重 claim はできない（`claimed` フラグ、[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)） | invariant |
++| <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(未 claim の WithdrawRequest.underlyingAmount)`。初回 claim 成功で当該分だけ減り、既決済 retry は `0` で会計・送金・event を変更しない（`claimed` フラグ、[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)） | invariant |
+ | <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`。live valuation が読める Strategy は `min(estimatedTotalUnderlying_i, principal_i)`、valuation failure 時は fresh cache、stale/missing/無効 cache は 0 評価する。この raw balance は liquid buffer と protected backstop reserve の合計であり、`bufferBalance()` は reserve を除外する。Vault→Strategy allocation 後に live refresh が失敗した場合、fallback cache は投下前に読めた live 保守値へ既知 outflow 分を足した値で seed し、古い/stale cache を fresh 化しない。`receiveFromStrategy` の `received` は declared でなく残高差分で計上され、exact delivery の fallback cache は実着額分だけ減額、declared/received mismatch の cache は無効化される（[VAULT-FR-005](#vault-fr-005-receivefromstrategystrategy--vault-の-push-受入) / [VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)） | invariant |
+ | <a id="vault-inv-006"></a>VAULT-INV-006 | `allocate()` の 1 回の buffer→Strategy 移動量は `allocateMaxMove` 以下、かつ各 Strategy への配分は cap 残（`cap_i - est_i`）以下。managed-assets preflight failure は outbound 全体を停止する。preflight 成功後、cap で削られた分・Strategy 別 valuation 再読/deposit failure で skip された分は再配分されず buffer に留まる。deposit reject 時は完全回収できた場合だけ skip し、不一致は全体 revert する（[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)） | invariant |
+ | <a id="vault-inv-007"></a>VAULT-INV-007 | `addToWhitelist` / `addStrategy` は EOA / 未デプロイ strategy を拒否し、`addStrategy` は `whitelistedStrategies[strategy] == true` かつ `vault.underlying() != address(0)` かつ `strategy.underlying() == vault.underlying()` のときのみ成功する（[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)） | invariant |
+@@ -1012,7 +1013,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | `StrategyNotFound` | `updateStrategy` / `writeoffStrategyPrincipal` の対象検証失敗 |
+ | `StrategyHasPrincipal` | `removeStrategy` で `principal != 0`（[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)） |
+ | `StrategyHasAssets` | `removeStrategy` で live `estimatedTotalUnderlying()` が読めない、または `estimatedTotalUnderlying != 0` |
+-| `RequestNotFound` | `claim` の未発行 ID / 二重 claim（[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)） |
++| `RequestNotFound` | `claim` の未発行 ID（既決済 ID は `0` を返す、[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)） |
+ | `RequestNotReady` | `claim` を `claimableAt` 前に呼ぶ |
+ | `InsufficientBuffer` | `claim` 時の buffer 不足（部分 claim 不可・後日再試行） |
+ | `InsufficientBackstop` | `releaseBackstopToBuffer` の `_amount > backstopBalance()` |
+@@ -1032,7 +1033,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | VAULT-FR-003 | redeemWithPermit（exact check→permit→burn(self)・各 revert） | unit, integration |
+ | VAULT-FR-004 | allocate（cooldown/pause/M==0・partial valuation 時の outbound 全停止と自動復旧・cap クランプ・固定 weights・deposit failure skip・exact recovery 不可時のみ全体 revert） | unit, invariant=VAULT-INV-006 |
+ | VAULT-FR-005 | receiveFromStrategy（登録判定・残高差分・ゼロ短絡） | unit, invariant=VAULT-INV-005 |
+-| VAULT-FR-006 | claim（permissionless trigger・owner 固定送金・存在/時刻/buffer・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 |
++| VAULT-FR-006 | claim（permissionless trigger・owner 固定送金・既決済 idempotent return・存在/時刻/buffer・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 |
+ | VAULT-FR-007 | transferYieldToTreasury（M<=L 早期・buffer クランプ・min 評価・backstop 除外） | unit, invariant=VAULT-INV-001/005 |
+ | VAULT-FR-008 | whitelist/addStrategy/removeStrategy（ガード・Underlying 不変条件・principal==0・live estimatedTotalUnderlying==0・add=GOV / remove=GUARDIAN） | unit, invariant=VAULT-INV-007/008 |
+ | VAULT-FR-009 | updateStrategy（GOV）/ writeoffStrategyPrincipal（WRITEOFF・weight 不変条件・クランプ） | unit, invariant=VAULT-INV-009 |

@@ -1,0 +1,312 @@
+diff --git a/contracts/utils/mainnet-preflight.ts b/contracts/utils/mainnet-preflight.ts
+index f66fd8e1..53446f17 100644
+--- a/contracts/utils/mainnet-preflight.ts
++++ b/contracts/utils/mainnet-preflight.ts
+@@ -19,6 +19,7 @@ Options:
+ `;
+ 
+ const AAVE_V3_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
++const AAVE_V3_POOL_ADDRESSES_PROVIDER = "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e";
+ const AAVE_DATA_PROVIDER = "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD";
+ 
+ const CHAINLINK_FEEDS = [
+@@ -159,6 +160,11 @@ const aTokenAbi = parseAbi([
+   "function UNDERLYING_ASSET_ADDRESS() view returns (address)",
+ ]);
+ 
++const aavePoolAddressesProviderAbi = parseAbi([
++  "function getMarketId() view returns (string)",
++  "function getPool() view returns (address)",
++]);
++
+ const aaveDataProviderAbi = parseAbi([
+   "function getReserveTokensAddresses(address asset) view returns (address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress)",
+   "function getReserveConfigurationData(address asset) view returns (uint256 decimals, uint256 ltv, uint256 liquidationThreshold, uint256 liquidationBonus, uint256 reserveFactor, bool usageAsCollateralEnabled, bool borrowingEnabled, bool stableBorrowRateEnabled, bool isActive, bool isFrozen)",
+@@ -404,7 +410,7 @@ async function verifyRpcState(rpcUrl: string, blockNumber?: bigint, manifest?: M
+     : await client.getBlock({ blockNumber });
+   assert(block.timestamp > 0n, "block timestamp unavailable");
+ 
+-  await assertHasCode(client, AAVE_V3_POOL, "Aave V3 Pool", blockNumber);
++  await verifyAaveMarket(client, blockNumber);
+   await assertHasCode(client, AAVE_DATA_PROVIDER, "Aave V3 Data Provider", blockNumber);
+ 
+   for (const feed of CHAINLINK_FEEDS) {
+@@ -426,6 +432,39 @@ async function verifyRpcState(rpcUrl: string, blockNumber?: bigint, manifest?: M
+   }
+ }
+ 
++async function verifyAaveMarket(
++  client: ReturnType<typeof createPublicClient>,
++  blockNumber?: bigint,
++) {
++  await Promise.all([
++    assertHasCode(client, AAVE_V3_POOL_ADDRESSES_PROVIDER, "Aave V3 PoolAddressesProvider", blockNumber),
++    assertHasCode(client, AAVE_V3_POOL, "Aave V3 Pool", blockNumber),
++  ]);
++
++  const [marketId, providerPool] = await Promise.all([
++    client.readContract({
++      address: normalize(AAVE_V3_POOL_ADDRESSES_PROVIDER),
++      abi: aavePoolAddressesProviderAbi,
++      functionName: "getMarketId",
++      blockNumber,
++    }),
++    client.readContract({
++      address: normalize(AAVE_V3_POOL_ADDRESSES_PROVIDER),
++      abi: aavePoolAddressesProviderAbi,
++      functionName: "getPool",
++      blockNumber,
++    }),
++  ]);
++
++  assert(
++    sameAddress(providerPool, AAVE_V3_POOL),
++    `Aave V3 ${marketId}: provider pool ${providerPool} does not match frozen pool ${AAVE_V3_POOL}`,
++  );
++  console.log(
++    `Aave V3 market ${marketId}: provider ${AAVE_V3_POOL_ADDRESSES_PROVIDER}, pool ${providerPool}`,
++  );
++}
++
+ async function assertHasCode(
+   client: ReturnType<typeof createPublicClient>,
+   address: string,
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md
+new file mode 100644
+index 00000000..7c5df5c3
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md
+@@ -0,0 +1,173 @@
++# External Audit Mid 01: Aave Pool Address Staleness 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-03)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/strategies/AaveV3Strategy.md` の `AAVE-SEC-001` / `AAVE-GOV-001` を参照する。
++
++## Executive Summary
++
++外部監査 Mid 01「AAVE Pool Address Staleness」の事実部分——`AaveV3Strategy` が Pool / aToken を
++initialize 時に固定し、setter を持たないこと——は正しい。しかし、これを Medium のコード脆弱性とし、
++`PoolAddressesProvider.getPool()` へ動的追従させる推奨は採用しない。
++
++Aave の通常の Pool implementation upgrade は既存 Pool proxy を維持する。一方、Ethereum Core、Lido、EtherFi は
++それぞれ provider、Pool、reserve aToken が異なる別 market である。旧 market の aToken position を保持した
++Strategy が provider だけを新 Pool へ追従すると、旧 aToken と新 Pool / normalized income を誤結合し、むしろ
++withdraw と valuation を壊す。
++
++判定は **Medium vulnerability rejected / operational migration risk accepted** とする。production Strategy は変更せず、
++mainnet preflight に provider -> Pool 一致の fail-closed check を追加し、既存の「旧 venue から回収し、新 Strategy を
++作る」要件と runbook を具体化する。
++
++| Severity | New finding count |
++| -------- | ----------------: |
++| Critical |                 0 |
++| High     |                 0 |
++| Medium   |                 0 |
++| Low      |                 0 |
++
++**Recommendation**: Pool / aToken の mutable setter と自動 provider follow は追加しない。preflight、回収、別 Strategy
++activation の境界を維持したまま merge 可。
++
++## Scope And Baseline
++
++- 外部指摘: Mid 01 — AAVE Pool Address Staleness
++- review baseline: `origin/develop` at `af194a1ad935f5ba7e7e3e18d3ef8d14ce055aaf`
++- production contract: `contracts/src/Strategies/AaveV3Strategy.sol`
++- operational validation: `contracts/utils/mainnet-preflight.ts`
++- normative sources:
++  - `documents/jp/protocol/product/spec/strategies/AaveV3Strategy.md`
++  - `documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md`
++- production contract、ABI、storage layout、approval mutation path: 変更なし
++
++## Git History Context
++
++- `8d9d9fa088b5d80d689a5daff1518bdade9a5c0e` (2026-06-06) の canonical spec は、Pool / aToken
++  setter が投資先変更の攻撃面になるため initialize 時に固定する設計判断を既に記録していた。
++- `fd0a3b952191060c26c787f79158ad5e227b1b6c` (2026-06-07) で synchronous
++  `AaveV3Strategy` と mock / test が導入された。
++- `8fbb5d293d06e53badb85ac1f5c38642252cade7` (2026-06-09) でその方針が stable requirement ID
++  `AAVE-SEC-001` / `AAVE-GOV-001` として整理された。したがって setter 不在は偶発的な実装漏れではない。
++
++## Primary-Source Validation
++
++確認した Aave 一次ソースは commit pin した。
++
++- Aave V3 `PoolAddressesProvider` の `setPoolImpl()` は `_updateImpl(POOL, newImpl)` を呼ぶ。既存 proxy があれば
++  `upgradeToAndCall()` し、`getPool()` が返す proxy address は維持される:
++  [PoolAddressesProvider.sol](https://github.com/aave-dao/aave-v3-origin/blob/fd1fbd9150426ca8ace9cee45b4acf912ae84f5b/src/contracts/protocol/configuration/PoolAddressesProvider.sol)
++- interface 自身も `getPool()` を「Pool proxy address」と定義する:
++  [IPoolAddressesProvider.sol](https://github.com/aave-dao/aave-v3-origin/blob/fd1fbd9150426ca8ace9cee45b4acf912ae84f5b/src/contracts/interfaces/IPoolAddressesProvider.sol)
++- Aave 公式 address book は Ethereum の market ごとに別 provider / Pool を記録する:
++  - [Core](https://github.com/aave-dao/aave-address-book/blob/a1770e87fd61db02a7725cd9eed3b1d07c3980af/src/AaveV3Ethereum.sol)
++  - [Lido](https://github.com/aave-dao/aave-address-book/blob/a1770e87fd61db02a7725cd9eed3b1d07c3980af/src/AaveV3EthereumLido.sol)
++  - [EtherFi](https://github.com/aave-dao/aave-address-book/blob/a1770e87fd61db02a7725cd9eed3b1d07c3980af/src/AaveV3EthereumEtherFi.sol)
++
++2026-08-03 時点の address book では、Core provider / Pool は
++`0x2f39...E9e` / `0x8787...A4E2`、Lido は `0xcfBf...B16d` / `0x4e03...58B1`、EtherFi は
++`0xeBa4...FCdA` / `0x0AA9...F3c0` であり、同一 chain 上でも独立した market である。
++
++## Claim-By-Claim Assessment
++
++| Audit claim                                                 | Assessment                     | Evidence / consequence                                                                |
++| ----------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
++| Strategy が Pool / aToken を固定する                        | True, intentional              | `AAVE-INV-003` / `AAVE-SEC-001` が明示的に要求する                                    |
++| Aave implementation upgrade で Pool address が stale になる | False for normal `setPoolImpl` | 同じ proxy の implementation が更新される                                             |
++| Aave が同一 chain に複数 market を展開する                  | True                           | Core / Lido / EtherFi は別 provider / Pool / aToken set                               |
++| 別 market を provider 追従だけで安全に利用できる            | False                          | 既存 position は旧 aToken にあり、新 Pool から withdraw できない                      |
++| setter がないため回復不能                                   | False                          | 旧 Strategy 回収 -> 新 Strategy 作成が正規経路。UUPS は最終復旧手段として別途存在する |
++| market deprecation は無視できる                             | False                          | external dependency の運用リスクとして監視・早期回収が必要                            |
++
++## Why Dynamic Pool Resolution Is Unsafe Here
++
++この Strategy は単なる stateless caller ではない。次の4要素を同一 market の組として保持する。
++
++1. `aavePool`: supply / withdraw / normalized income の呼出し先
++2. `aToken`: position balance と liquid underlying の所在
++3. `_ownScaledBalance`: 当 Strategy が旧 Pool で mint / burn した自己 position accounting
++4. allowance: Underlying から固定 Pool への supply 権限
++
++`getPool()` の返り値だけを変えると、旧 `aToken.scaledBalanceOf(this)` に新 Pool の normalized income を掛け、
++withdraw は新 Pool に旧 position の burn を要求する状態になる。aToken も同時に動的変更すれば、旧 position が
++追跡から消え、`_ownScaledBalance` の market provenance も失われる。したがって Pool と aToken の置換は単一 setter
++や provider lookup ではなく、asset movement を伴う Strategy migration でなければならない。
++
++## Existing And Clarified Recovery Path
++
++1. 旧 Strategy を `emergencyDisableStrategy` で停止し、新規 allocation と user flow を止める。
++2. 旧 Pool / 旧 aToken の組を維持したまま `sendToVault` または `emergencyWithdrawFromAave` で liquid 分を回収する。
++3. 残余がある間は旧 Strategy を disabled のまま登録に残す。確定損失だけを既存 writeoff 手順で反映する。
++4. 新 provider -> Pool、新 Pool reserve -> aToken、aToken -> Underlying を独立した freeze evidence で照合する。
++5. 新 Strategy を deploy / whitelist / register し、承認済み cap / weight で段階的に allocation を再開する。
++
++Aave 側流動性が失われた後では、動的 provider lookup も setter も旧 position を回収できない。したがって availability
++対策の中心は address mutation ではなく、governance event の監視、早期 disable、旧 venue からの回収である。
++
++## What Changed
++
++- `mainnet-preflight.ts` が Core `PoolAddressesProvider` の code、`getMarketId()`、`getPool()` を読み、provider Pool と
++  freeze 済み `AAVE_V3_POOL` が不一致なら fail closed する。
++- `AAVE-GOV-001` に同一 proxy upgrade と別 market migration の区別、旧 position 回収、新 Strategy activation の
++  順序を追記した。
++- Mainnet Deploy Env Freeze Runbook に provider / Pool / aToken の market-level 照合と drift 時の停止条件を追加した。
++
++## Differential Side-Effect Review
++
++| Surface                          | Assessment                                                | Result                                 |
++| -------------------------------- | --------------------------------------------------------- | -------------------------------------- |
++| Solidity production behavior     | contract diff なし                                        | Unchanged                              |
++| ABI / storage / approvals        | diff なし                                                 | Unchanged                              |
++| Preflight RPC load               | provider code read + `getMarketId()` + `getPool()` を追加 | Bounded                                |
++| Provider unavailable / malformed | deploy preflight が fail closed                           | Intended                               |
++| Existing `--manifest-only` mode  | RPC check を行わない既存 semantics を維持                 | Unchanged; RPC evidence の代替ではない |
++| Other Aave markets               | Core の固定 provider と混在させない                       | Explicitly rejected                    |
++| Migration execution              | 自動化・asset movement は行わない                         | Governance runbook boundary preserved  |
++
++## Adversarial Review
++
++- **Aave governance / provider compromise**: provider が Pool address を hard replace しても preflight は不一致で停止し、
++  DeltaForesight Strategy が自動的に新 venue を信頼しない。
++- **Old-position loss by pointer switch**: production Strategy の Pool / aToken を変更しないため、旧 position の回収経路を
++  pointer update で失わない。
++- **Allowance residue**: production approval は変更しない。新 Strategy は initialize 時に新 Pool へ独立 approval を作り、
++  旧 Strategy の approval / position と混ぜない。
++- **Valuation mix-up**: old aToken と new Pool income の組合せを構造的に作らない。
++- **Operator error**: provider / Pool / reserve aToken / Underlying の4点照合を broadcast 前 gate にする。
++
++## Verification
++
++実行結果:
++
++```text
++PASS  pnpm exec dprint check contracts/utils/mainnet-preflight.ts <本レビュー文書>
++PASS  pnpm exec tsc --noEmit
++PASS  pnpm mainnet-preflight --help
++PASS  pnpm mainnet-preflight --rpc-url <public-mainnet-rpc> --block 25676274
++      marketId = "Aave Ethereum Market"
++      provider.getPool() = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2
++PASS  forge test -vv --match-path test/AaveV3Strategy.t.sol
++      23 passed; 0 failed; 0 skipped
++PASS  forge test -vv --match-path test/DeployLiquity2StrategySelector.t.sol
++      32 passed; 0 failed; 0 skipped
++PASS  forge test -vv --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++      1376 passed; 0 failed; 0 skipped
++PASS  git diff --check
++```
++
++RPC URL は credential を含まない public endpoint を使用した。remote CI の結果は PR status に記録する。
++
++## Residual Risk And Limitations
++
++- public mainnet RPC test は実行時点の read-only evidence であり、Aave governance の将来変更を予言しない。
++- provider の generic `setAddress` による hard replacement は技術的に可能であるため、同一 provider であっても
++  `getPool()` の継続照合を止めない。
++- market migration 中に旧 Pool の流動性が不足すれば回収は部分的になる。これは address setter では解決せず、
++  incident runbook と確定損失 writeoff の対象である。
++- preflight は deploy / fork evidence gate であり、継続監視そのものではない。Aave governance / reserve 状態の監視は
++  `AAVE-GOV-003` の運用責務として残る。
++
++## Methodology
++
++- finding の各主張を local code / spec、Aave V3 origin、Aave official address book に分解して照合した。
++- `PoolAddressesProvider.setPoolImpl` / `_updateImpl` の proxy lifecycle と、複数 Ethereum market の address set を確認した。
++- dynamic provider follow を仮定し、Pool、aToken、scaled accounting、allowance の blast radius を追跡した。
++- 既存の Strategy recreation 方針を保持し、検出 gap だけを preflight と runbook で補った。
+diff --git a/documents/jp/engineering/historical-reviews/README.md b/documents/jp/engineering/historical-reviews/README.md
+index 2f0badbb..f5c88a05 100644
+--- a/documents/jp/engineering/historical-reviews/README.md
++++ b/documents/jp/engineering/historical-reviews/README.md
+@@ -6,5 +6,6 @@
+ 
+ | 文書 | Snapshot | 内容 |
+ | --- | --- | --- |
++| [`2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md`](./2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md) | 2026-08-03 | 外部監査 Mid 01 の Aave proxy / 複数 market 前提、動的 Pool 追従の副作用、preflight と Strategy migration 境界 |
+ | [`2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md`](./2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md) | 2026-08-03 | 外部監査 High 01 の成立時点、既存修正、3つの Sky 出金経路の返金回帰試験と副作用確認 |
+ | [`2026-07-27-Collateral-Parameter-Rationale.md`](./2026-07-27-Collateral-Parameter-Rationale.md) | 2026-07-27 | 担保parameterの生データ、過去候補、棄却案、旧Notionから移管した検討記録 |
+diff --git a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index 305de535..a4f62a88 100644
+--- a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -22,7 +22,7 @@
+ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+ | Chainlink feed proxy                                | <https://docs.chain.link/data-feeds/price-feeds/addresses>（Ethereum Mainnet の標準 feed。SVR / shared-SVR は採用しない）         |
+ | Chainlink feed metadata                             | <https://reference-data-directory.vercel.app/feeds-mainnet.json>（heartbeat / deviation / marketHours / decimals / proxy の照合） |
+-| Aave V3 Pool / aToken                               | <https://aave.com/docs/resources/addresses> と <https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Ethereum.sol>   |
++| Aave V3 provider / Pool / aToken                    | <https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Ethereum.sol> と <https://github.com/aave-dao/aave-v3-origin/blob/main/src/contracts/protocol/configuration/PoolAddressesProvider.sol> |
+ | WETH / USDC token address cross-check               | Aave Address Book の `AaveV3EthereumAssets`                                                                                       |
+ 
+ 外部アドレスは deploy 前に上記ソースで再照合し、値の差異があれば broadcast しない。Chainlink は同名 feed に SVR / shared-SVR が存在するため、下表の `path` が素の標準 feed であることを確認する。
+@@ -108,11 +108,16 @@ Morpho の実採用 vault evidence は
+ 
+ Aave venue evidence:
+ 
++- Aave market 固有の `PoolAddressesProvider` address / `getMarketId()` を記録し、`getPool()` が `DF_STRATEGY_AAVE_POOL_i_j` と一致する。同一 chain 上の Core / Lido / EtherFi 等を混在させない。
+ - Pool address は Aave V3 Ethereum production Pool と一次ソースで一致する。
+ - 各 aToken の `UNDERLYING_ASSET_ADDRESS()` が branch の `DF_UNDERLYING_i` と一致する。
+ - Pool reserve data の aToken address が `DF_STRATEGY_AAVE_ATOKEN_i` と一致する。
+ - fork block 時点で reserve が pause / freeze / unexpected isolation state ではないことを確認する。
+-- Pool / aToken / underlying の source、照合者、照合日時を evidence に記録する。
++- provider / Pool / aToken / underlying の source、照合者、照合日時を evidence に記録する。
++
++provider の `getPool()` が freeze 済み Pool と一致しない場合は値を自動更新せず broadcast / allocation を停止する。
++同一 provider の implementation upgrade か、新 provider・新 Pool・新 aToken を伴う market migration かを区別し、後者は
++[AAVE-GOV-001](../../product/spec/strategies/AaveV3Strategy.md#aave-gov-001-投資先差し替えは-strategy-再作成) に従って旧 Strategy の回収と新 Strategy の activation を分離する。
+ 
+ ---
+ 
+diff --git a/documents/jp/protocol/product/spec/strategies/AaveV3Strategy.md b/documents/jp/protocol/product/spec/strategies/AaveV3Strategy.md
+index 25750ccb..b968faf9 100644
+--- a/documents/jp/protocol/product/spec/strategies/AaveV3Strategy.md
++++ b/documents/jp/protocol/product/spec/strategies/AaveV3Strategy.md
+@@ -353,8 +353,11 @@
+ 
+ ### AAVE-GOV-001: 投資先差し替えは Strategy 再作成
+ 
+-- Statement: Underlying や Aave Pool / aToken を後から差し替えたい場合は、`setAavePool` / `setAToken` 等で動かすのではなく、**Strategy ごと作り直して**対応 CollateralVault のホワイトリスト＆登録（`addStrategy`）を入れ替える運用とする（[AAVE-SEC-001](#aave-sec-001-投資先アドレスの-initialize-時固定)）。
+-- Verification: manual（運用 Runbook）
++- Statement: Underlying や Aave market（Pool / aToken）を後から差し替えたい場合は、`setAavePool` / `setAToken` や `PoolAddressesProvider.getPool()` の動的追従で既存 position の接続先を動かすのではなく、**Strategy ごと作り直して**対応 CollateralVault のホワイトリスト＆登録（`addStrategy`）を入れ替える運用とする（[AAVE-SEC-001](#aave-sec-001-投資先アドレスの-initialize-時固定)）。
++- **同一 market の implementation upgrade**: Aave の通常の `PoolAddressesProvider.setPoolImpl` は既存 Pool proxy の implementation を更新する。Pool proxy と reserve の aToken proxy が同じである限り、既存 Strategy の `aavePool` / `aToken` を変更しない。deploy / activation evidence では provider の `getPool()` が固定済み Pool と一致することを確認する。
++- **別 market / hard replacement への移行**: 新しい Aave market は provider、Pool、reserve aToken を別組として扱う。旧 aToken position を新 Pool に接続してはならない。GUARDIAN が旧 Strategy を `emergencyDisableStrategy` で停止し、旧 Pool から `sendToVault` / `emergencyWithdrawFromAave` で回収する。残余がある間は旧 Strategy を disabled のまま登録に残し、回収不能額が確定した場合だけ writeoff 手順へ進む。新 provider の `getPool()`、新 Pool reserve の aToken、Underlying 対応、reserve 状態を独立した freeze package で検証して新 Strategy を deploy / 登録し、承認済み cap / weight で段階的に allocation を再開する。
++- **fail-closed**: provider の `getPool()` が freeze 済み Pool と一致しない場合は自動追従せず、deploy / allocation を停止して、同一 market の proxy 継続か別 market 移行かを判定する。旧 position の回収と新 venue の activation を1つのアドレス更新に短絡しない。
++- Verification: manual（[Mainnet Deploy Env Freeze Runbook](../../../launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md) の provider / Pool / aToken 照合と market migration 手順）
+ 
+ ### AAVE-GOV-002: testnet 先行
+ 

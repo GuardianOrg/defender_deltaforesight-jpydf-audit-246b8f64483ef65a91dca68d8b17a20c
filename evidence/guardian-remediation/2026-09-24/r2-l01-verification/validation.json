@@ -1,0 +1,33 @@
+{
+  "recordedDate": "2026-09-24",
+  "fixedSource": "937a43b5d5ea54dd9ab206516fa28168b4a4fa44",
+  "preFixSource": "e95fa3350e2d2c3b6e00b1dea76d00a19d17653c",
+  "l01Merge": "18bedbf68905705e3c8a4b01a39096fd7881a1bb",
+  "upstreamTestCommit": "68aa18daa",
+  "results": {
+    "fixed": {
+      "passed": 4,
+      "failed": 0
+    },
+    "preFix": {
+      "passed": 1,
+      "failed": 3
+    }
+  },
+  "storageLayoutChanged": false,
+  "runtimeBytecodeChanged": [
+    "CollateralVault",
+    "DFUSDCPriceFeed",
+    "DFWstETHPriceFeed",
+    "DFUSDTPriceFeed(archive)",
+    "DFWBTCPriceFeed(archive)",
+    "DFXAUTPriceFeed(archive)",
+    "sUSDSPriceFeed(archive)"
+  ],
+  "artifacts": {
+    "GuardianR2L01RemainingVerification.t.sol": "6ac605aa16e7fa711e9849c06f8d71d2c989978e46c465859d094cc1f08df8de",
+    "run-fixed.txt": "9482fd59230d2e733f69219511dae97df763c2792aeb9c39179c7773e699f611",
+    "run-prefix.txt": "6e84b0605687e1c1714c711196db81e5ab46c58b8fc8865fe36e4a22f1aeddfa",
+    "artifact-comparison.txt": "07243533f75ab40754194297d5fef9941de29b9cb36358c48af325ebbd743179"
+  }
+}

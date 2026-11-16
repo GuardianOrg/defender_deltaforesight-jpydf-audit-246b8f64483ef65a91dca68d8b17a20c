@@ -1,0 +1,181 @@
+diff --git a/contracts/test/CollateralVaultStrategy.t.sol b/contracts/test/CollateralVaultStrategy.t.sol
+index 4f262426..ffc52c3c 100644
+--- a/contracts/test/CollateralVaultStrategy.t.sol
++++ b/contracts/test/CollateralVaultStrategy.t.sol
+@@ -497,6 +497,7 @@ contract CollateralVaultStrategyTest is Test {
+         assertEq(vault.bufferBalance(), amount, "buffer unchanged");
+         assertEq(stratA.principal(), 0, "stratA not funded");
+         assertEq(stratB.principal(), 0, "stratB not funded");
++        assertEq(vault.lastAllocatorTime(), block.timestamp, "zero move is observable and consumes cooldown");
+     }
+ 
+     function test_Allocate_IgnoresProtectedBackstopReserveForTarget() public {
+@@ -771,6 +772,26 @@ contract CollateralVaultStrategyTest is Test {
+         vault.allocate(); // no revert
+     }
+ 
++    function test_AllocatorCooldown_HighValueBlocksButConfigCorrectionRecovers() public {
++        _deposit(alice, 10e8);
++        vault.allocate();
++
++        vm.expectEmit(false, false, false, true, address(vault));
++        emit AllocatorConfigUpdated(type(uint256).max, type(uint256).max, 0, 365 days);
++        vault.setAllocatorConfig(type(uint256).max, 365 days);
++
++        _warpPast(30 days);
++        vm.expectRevert(CollateralVault.CooldownNotMet.selector);
++        vault.allocate();
++
++        vm.expectEmit(false, false, false, true, address(vault));
++        emit AllocatorConfigUpdated(type(uint256).max, type(uint256).max, 365 days, 0);
++        vault.setAllocatorConfig(type(uint256).max, 0);
++
++        vault.allocate();
++        assertEq(vault.lastAllocatorTime(), block.timestamp, "corrected cooldown restores allocation liveness");
++    }
++
+     // =================================================================
+     //                  deferred-underlying addStrategy guard (jpydf-v2)
+     // =================================================================
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-03-Allocator-Zero-Modes-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-03-Allocator-Zero-Modes-Differential-Review.md
+new file mode 100644
+index 00000000..428da7bd
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-03-Allocator-Zero-Modes-Differential-Review.md
+@@ -0,0 +1,136 @@
++# External Audit Info 03: Allocator zero modes 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/CollateralVault.md` の VAULT-FR-004 / VAULT-FR-012 と
++> `documents/jp/Parameters.md` を参照する。
++
++## Executive Summary
++
++外部監査 Info 03「`setAllocatorConfig` Accepts Unvalidated `cooldown` And `maxMove` Values」の storage 観測は正しい。
++ただし推奨された `_maxMove == 0` rejection は規定仕様および Day-1 branch configuration と競合する。
++
++- `allocateMaxMove = 0`: outbound allocation を止める正規の fail-safe / inert mode
++- `allocatorCooldown = 0`: cooldown を無効化する正規の mode
++- 大きい `allocatorCooldown`: correction まで allocation liveness を止める governed misconfiguration risk
++
++`allocateMaxMove = 0` の `allocate()` は silent ではない。`Allocated(bufferBefore, targetBuffer, bufferAfter)` を発火し、
++`lastAllocatorTime` も更新する。Strategy から Vault への元本回収 `sendToVault` は両 parameter の対象外である。
++
++**判定**: Informational observation accepted; proposed code change rejected。production semantics は維持し、実
++`CollateralVault` test で zero max-move の観測可能性と、高 cooldown を GOV が 0 に戻した後の自動回復を固定する。
++
++## Scope And Baseline
++
++- 外部指摘: Info 03 — allocator cooldown / max-move に setter validation がない
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/CollateralVault.sol`
++- 規範: JP / EN `CollateralVault.md` VAULT-FR-004 / VAULT-FR-012
++- 運用値: JP / EN `Parameters.md` dToken Layer
++- 回帰証拠: `contracts/test/CollateralVaultStrategy.t.sol`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| setter に validation がない | True and specified | VAULT-FR-012 が zero / max semantics を明示する |
++| `allocateMaxMove = 0` は silent no-op | False | `Allocated` event と `lastAllocatorTime` update が残る |
++| max-move 0 は誤設定に限られる | False | no-Strategy / inert branch の outbound stop として Parameters に採用される |
++| 大きい cooldown は allocation を止める | True | `CooldownNotMet` となるが backing / redemption / Strategy recovery は止めない |
++| 停止は永久 | False | GOV が cooldown を訂正すると同じ Vault が追加 migration なしに回復する |
++| max-move は nonzero に制限すべき | Rejected | 意図した allocation stop を削除する |
++| cooldown は 30 days 以下に制限すべき | Not established | 30 days の製品要件根拠がなく、具体値は Parameters / activation gate の責務 |
++
++## Parameter Semantics
++
++### `allocateMaxMove`
++
++`allocate()` は `excess = min(bufferBefore - targetBuffer, allocateMaxMove)` とする。0 の場合は Underlying を送らず、
++集約 event と timestamp を更新して正常終了する。これは `pauseAllocation` と異なり keeper call 自体を revert させず、
++設定された「移動可能量 0」を観測可能に処理する mode である。
++
++Day-1 Parameters は no-Strategy branch の `allocateMaxMove` を 0 とする。監査推奨の nonzero check を実装すると、
++その branch configuration と deployment / handover verification が成立しない。
++
++### `allocatorCooldown`
++
++0 は実行間隔制限を無効化する。正の値では直前に成功した `allocate()` の timestamp から最小間隔を強制する。
++大きすぎる値は outbound allocation を停止するが、次を変更しない。
++
++- user deposit / redemption / claim
++- Strategy の `sendToVault` / `sendProfitToVault`
++- Guardian の `pauseAllocation` / `emergencyDisableStrategy`
++- GOV の次の `setAllocatorConfig`
++
++したがって影響は allocator outbound liveness に限定され、governance correction 後に自動回復する。
++
++## State Transition Evidence
++
++### Zero max-move
++
++| Step | Buffer | Strategy principal | Evidence |
++| --- | ---: | ---: | --- |
++| deposit | 10 | 0 | buffer funded |
++| `setAllocatorConfig(0, 0)` | 10 | 0 | config event |
++| `allocate()` | 10 | 0 | `Allocated(10, 0, 10)`; timestamp updated |
++
++### High cooldown recovery
++
++1. normal allocation succeeds and records `lastAllocatorTime`;
++2. GOV sets cooldown to 365 days;
++3. after 30 days, `allocate()` reverts with `CooldownNotMet`;
++4. GOV sets cooldown to 0;
++5. `allocate()` immediately succeeds and updates `lastAllocatorTime`.
++
++この test は停止が persistent storage corruption や migration requirement ではなく、設定値に従う可逆な state であることを示す。
++
++## Operational Boundary
++
++setter が任意 `uint256` を受けることは、任意値を Day-1 に許容する意味ではない。launch gate は initialize default の
++`allocateMaxMove = type(uint256).max` / `allocatorCooldown = 0` のまま operations に入ることを禁止し、Parameters の
++branch-specific 値との一致を handover / verification で検査する。現行 Day-1 cooldown は全 branch 30 minutes である。
++
++将来の governance proposal でも、parameter diff、simulation、`AllocatorConfigUpdated` event、post-state readback を使う。
++無根拠な universal 30-day code bound を加える代わりに、担保・Strategy の withdrawal model と keeper cadence に基づく
++具体値を versioned Parameters と activation evidence で管理する。
++
++## Verification
++
++```text
++forge test --match-contract CollateralVaultStrategyTest \
++  --match-test 'test_AllocateMaxMoveZero_DisablesOutboundAllocation|test_AllocatorCooldown_HighValueBlocksButConfigCorrectionRecovers' -vv
++forge test --match-contract CollateralVaultStrategyTest
++forge test -q --summary --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- max-move 0 で outbound 0、`Allocated` 発火、timestamp 更新
++- cooldown 365 days で 30 days 後の allocation が `CooldownNotMet`
++- cooldown 0 への correction 後に同じ Vault で allocation 成功
++- non-fork / non-invariant broad gate が成功
++- production source diff は 0
++
++`forge fmt --check test/CollateralVaultStrategy.t.sol` は `origin/develop` 既存の line 581–582 にある2行代入を
++1行へまとめる差分を報告する。監査差分外の baseline formatting は本 PR に混ぜず、追加 hunk と
++`git diff --check` の clean を確認する。
++
++## Residual Risk
++
++- GOV が異常に大きい cooldown を設定すると、次の timelocked correction まで新規 outbound allocation は停止する。
++  proposal simulation と config alert が必要である。
++- max-move 0 が意図した branch 以外へ設定されると yield deployment が停止する。`Allocated` の buffer delta 0、config
++  event、Strategy AUM / buffer ratio を monitor して検知する。
++- `type(uint256).max` に近い cooldown は `lastAllocatorTime + allocatorCooldown` の checked arithmetic を overflow
++  させ得る。この場合も allocate は revert し資金移動せず、GOV correction で回復するが、proposal simulation で reject する。
++- zero max-move は outbound stop であり、incident 時の完全な allocation / Treasury stop は Guardian
++  `pauseAllocation` を使う。
++
++## Methodology
++
++- freeze finding の claim / recommendation と current implementation / source-of-truth を比較した。
++- zero/max parameter の state transition と影響する call surface を分離した。
++- Day-1 Parameters、deployment gate、event observability を確認した。
++- 巨大 cooldown fault と later-healthy configuration を同じ Vault instance で replay した。

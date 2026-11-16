@@ -1,0 +1,2701 @@
+diff --git a/contracts/script/DeployLiquity2.s.sol b/contracts/script/DeployLiquity2.s.sol
+index 7ba4c577..15611201 100644
+--- a/contracts/script/DeployLiquity2.s.sol
++++ b/contracts/script/DeployLiquity2.s.sol
+@@ -61,6 +61,7 @@ import {DFUSDCPriceFeed} from "src/PriceFeeds/DFUSDCPriceFeed.sol";
+ import {DFUSDTPriceFeed} from "src/PriceFeeds/DFUSDTPriceFeed.sol";
+ import {DFXAUTPriceFeed} from "src/PriceFeeds/DFXAUTPriceFeed.sol";
+ import {sUSDSPriceFeed} from "src/PriceFeeds/sUSDSPriceFeed.sol";
++import {JpyUsdRateProvider} from "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import {LocalAavePool, LocalAToken} from "./local/LocalAaveVenue.sol";
+ import {LocalChainlinkAggregator} from "./local/LocalChainlinkAggregator.sol";
+ import {LocalERC20FaucetDecimals, LocalSUSDSToken, LocalWETH} from "./local/LocalTokens.sol";
+@@ -167,6 +168,7 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+ 
+     address dfJpyUsdOracle; // single shared JPY/USD leg (SYS-RISK-001 shape)
+     uint256 dfJpyUsdStaleness;
++    address dfJpyUsdRateProvider;
+     mapping(address dToken => address) dfCollUsdOracle;
+     mapping(address dToken => uint256) dfCollUsdStaleness;
+     mapping(address dToken => uint8) dfFeedKind;
+@@ -509,6 +511,12 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+                 }
+             }
+ 
++            // One deployed state machine owns the shared FX cache and freeze clock.
++            // Passing the raw aggregator to every branch would recreate independent
++            // last-good rates and timers even though the underlying oracle is shared.
++            dfJpyUsdRateProvider =
++                address(new JpyUsdRateProvider{salt: SALT}(dfJpyUsdOracle, dfJpyUsdStaleness));
++
+             string[5] memory dTokenSymbols = ["dETH", "dUSDC", "dUSDT", "dUSDS", "dXAUT"];
+             for (vars.i = 0; vars.i < vars.numCollaterals; vars.i++) {
+                 bool active = vars.i < NUM_DF_ACTIVE_BRANCHES;
+@@ -756,34 +764,26 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+         uint8 kind = dfFeedKind[address(_dToken)];
+         require(kind != 0, "DF: feed kind not registered");
+         address collUsd = dfCollUsdOracle[address(_dToken)];
+-        address jpyUsd = dfJpyUsdOracle;
++        address jpyUsdProvider = dfJpyUsdRateProvider;
+         uint256 collUsdStaleness = dfCollUsdStaleness[address(_dToken)];
+-        uint256 jpyUsdStaleness = dfJpyUsdStaleness;
+         address vault = _dToken.vault();
+         require(collUsd != address(0), "DF: missing collateral/USD oracle");
+-        require(jpyUsd != address(0), "DF: missing JPY/USD oracle");
++        require(jpyUsdProvider != address(0), "DF: missing JPY/USD rate provider");
+         require(collUsdStaleness != 0, "DF: zero collateral/USD staleness");
+-        require(jpyUsdStaleness != 0, "DF: zero JPY/USD staleness");
+ 
+         if (kind == DF_FEED_WETH) {
+             return address(
+-                new DFWETHPriceFeed(
+-                    collUsd, collUsdStaleness, jpyUsd, jpyUsdStaleness, vault, _borrowerOperationsAddress
+-                )
++                new DFWETHPriceFeed(collUsd, collUsdStaleness, jpyUsdProvider, vault, _borrowerOperationsAddress)
+             );
+         }
+         if (kind == DF_FEED_USDC) {
+             return address(
+-                new DFUSDCPriceFeed(
+-                    collUsd, collUsdStaleness, jpyUsd, jpyUsdStaleness, vault, _borrowerOperationsAddress
+-                )
++                new DFUSDCPriceFeed(collUsd, collUsdStaleness, jpyUsdProvider, vault, _borrowerOperationsAddress)
+             );
+         }
+         if (kind == DF_FEED_USDT) {
+             return address(
+-                new DFUSDTPriceFeed(
+-                    collUsd, collUsdStaleness, jpyUsd, jpyUsdStaleness, vault, _borrowerOperationsAddress
+-                )
++                new DFUSDTPriceFeed(collUsd, collUsdStaleness, jpyUsdProvider, vault, _borrowerOperationsAddress)
+             );
+         }
+         if (kind == DF_FEED_SUSDS) {
+@@ -793,8 +793,7 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+                     collUsd,
+                     address(_dToken.underlying()),
+                     collUsdStaleness,
+-                    jpyUsd,
+-                    jpyUsdStaleness,
++                    jpyUsdProvider,
+                     vault,
+                     _borrowerOperationsAddress
+                 )
+@@ -802,7 +801,7 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+         }
+         require(kind == DF_FEED_XAUT, "DF: unknown feed kind");
+         return address(
+-            new DFXAUTPriceFeed(collUsd, collUsdStaleness, jpyUsd, jpyUsdStaleness, vault, _borrowerOperationsAddress)
++            new DFXAUTPriceFeed(collUsd, collUsdStaleness, jpyUsdProvider, vault, _borrowerOperationsAddress)
+         );
+     }
+ 
+@@ -1739,7 +1738,8 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+                 string.concat('"collUsdFeed":"', dfCollUsdOracle[dToken].toHexString(), '",'),
+                 string.concat('"collUsdStaleness":"', dfCollUsdStaleness[dToken].toString(), '",'),
+                 string.concat('"jpyUsdFeed":"', dfJpyUsdOracle.toHexString(), '",'),
+-                string.concat('"jpyUsdStaleness":"', dfJpyUsdStaleness.toString(), '",')
++                string.concat('"jpyUsdStaleness":"', dfJpyUsdStaleness.toString(), '",'),
++                string.concat('"jpyUsdRateProvider":"', dfJpyUsdRateProvider.toHexString(), '",')
+             ),
+             string.concat('"underlying":"', address(deployed.underlyings[branchIndex]).toHexString(), '"'),
+             "}"
+@@ -1795,7 +1795,8 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+                 string.concat('"interestRouterOwner":"', router.owner().toHexString(), '",'),
+                 string.concat('"interestRouterPendingOwner":"', router.pendingOwner().toHexString(), '",'),
+                 string.concat('"jpyUsdFeed":"', dfJpyUsdOracle.toHexString(), '",'),
+-                string.concat('"jpyUsdStaleness":"', dfJpyUsdStaleness.toString(), '"')
++                string.concat('"jpyUsdStaleness":"', dfJpyUsdStaleness.toString(), '",'),
++                string.concat('"jpyUsdRateProvider":"', dfJpyUsdRateProvider.toHexString(), '"')
+             ),
+             "}"
+         );
+diff --git a/contracts/src/Interfaces/IJpyUsdRateProvider.sol b/contracts/src/Interfaces/IJpyUsdRateProvider.sol
+new file mode 100644
+index 00000000..bb3ecefe
+--- /dev/null
++++ b/contracts/src/Interfaces/IJpyUsdRateProvider.sol
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: MIT
++
++pragma solidity 0.8.24;
++
++interface IJpyUsdRateProvider {
++    function fetchJpyUsdRate() external returns (uint256 rate, bool freezeExpired);
++}
+diff --git a/contracts/src/PriceFeeds/DFPriceFeedBase.sol b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+index 8a0a46d4..5421b187 100644
+--- a/contracts/src/PriceFeeds/DFPriceFeedBase.sol
++++ b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
+ 
+ import "openzeppelin-contracts/contracts/utils/math/Math.sol";
+ 
++import "../Interfaces/IJpyUsdRateProvider.sol";
+ import "./MainnetPriceFeedBase.sol";
+ 
+ interface IBackingRatioSource {
+@@ -18,8 +19,8 @@ interface IBackingRatioSource {
+  *      `PriceSource` state, `lastGoodPrice`, shutdown — remains the shared
+  *      acquisition path, with the documented Chainlink response-validation hardening)
+  *      and adds, in this NEW file only:
+- *        - a JPY/USD Chainlink oracle (`jpyUsdOracle`), common to all branches, and
+- *        - a USD→JPY conversion with a soft-freeze fallback for the shared JPY leg
++ *        - a shared JPY/USD rate provider (`jpyUsdRateProvider`), and
++ *        - a USD→JPY conversion using its global soft-freeze state
+  *          (`_convertUsdPriceToJpyWithFreeze`; see ORCL-SEC-005), and
+  *        - a Vault backing-ratio layer for dToken collateral valuation.
+  *      The collateral/USD oracle is the upstream `ethUsdOracle` slot reused as
+@@ -32,17 +33,11 @@ interface IBackingRatioSource {
+  */
+ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+     error InvalidCollateralVault();
++    error InvalidJpyUsdRateProvider();
+ 
+-    // Maximum time a branch may keep operating on a frozen shared JPY/USD rate
+-    // after the JPY oracle first fails its validity checks. The JPY feed already
+-    // has a 72h staleness threshold to cover normal FX market closures; this adds
+-    // a bounded incident window instead of an indefinite last-good fallback.
+-    uint256 public constant MAX_JPY_FREEZE_DURATION = 24 hours;
+-
+-    // JPY/USD Chainlink oracle. Returns USD per JPY (~0.006667). Shared by every
+-    // branch — its failure is handled by soft-freezing on lastGoodJpyRate, not by
+-    // terminal branch shutdown.
+-    Oracle public jpyUsdOracle;
++    // All branch feeds point to the same provider contract, so the cached JPY rate,
++    // freeze onset, recovery, and terminal expiration cannot diverge per branch.
++    IJpyUsdRateProvider public immutable jpyUsdRateProvider;
+ 
+     // CollateralVault that accounts for dToken backing. The price feed only reads
+     // this value; repair/accounting remains Vault-side.
+@@ -53,31 +48,10 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+     // as an oracle failure rather than silently reusing this value.
+     uint256 public lastGoodBacking;
+ 
+-    // Last valid JPY/USD rate (USD per JPY, 18-dec, > 0). Seeded by the healthy
+-    // deploy-time fetch and updated on every healthy fetch. Reused when the JPY/USD
+-    // oracle fails — see `_convertUsdPriceToJpyWithFreeze` and ORCL-SEC-005.
+-    uint256 public lastGoodJpyRate;
+-
+-    // Timestamp the current JPY soft-freeze began, or 0 when the live JPY/USD rate is in
+-    // use. It is bounded by the cached rate's staleness boundary even if no one called the
+-    // branch at that time. Once the freeze exceeds MAX_JPY_FREEZE_DURATION, the branch
+-    // shuts down instead of serving an arbitrarily stale FX rate (ORCL-SEC-005).
+-    uint256 public jpyFrozenSince;
+-
+-    // Chainlink updatedAt paired with lastGoodJpyRate. This provenance makes the freeze
+-    // window depend on the cached rate's actual age rather than the first failing call.
+-    uint256 public lastGoodJpyUpdatedAt;
+-
+-    // Emitted when the JPY/USD leg first fails and the feed starts reusing lastGoodJpyRate.
+-    event JpyRateFrozen(uint256 timestamp, uint256 frozenRate);
+-    // Emitted when JPY/USD recovers and the feed resumes the live rate.
+-    event JpyRateUnfrozen(uint256 timestamp, uint256 liveRate);
+-
+     constructor(
+         address _collUsdOracleAddress,
+         uint256 _collUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     ) MainnetPriceFeedBase(_collUsdOracleAddress, _collUsdStalenessThreshold, _borrowerOperationsAddress) {
+@@ -85,16 +59,8 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+         collateralVault = _collateralVaultAddress;
+         lastGoodBacking = 1e18;
+ 
+-        // Store the JPY/USD oracle (the collateral/USD oracle is stored by the
+-        // upstream MainnetPriceFeedBase constructor as `ethUsdOracle`).
+-        jpyUsdOracle.aggregator = AggregatorV3Interface(_jpyUsdOracleAddress);
+-        jpyUsdOracle.stalenessThreshold = _jpyUsdStalenessThreshold;
+-        jpyUsdOracle.decimals = jpyUsdOracle.aggregator.decimals();
+-
+-        // Both feeds must be 8-decimal Chainlink aggregators (the upstream base
+-        // asserts the same for the collateral/USD oracle). The 18-dec normalization
+-        // in _getOracleAnswer relies on this.
+-        assert(jpyUsdOracle.decimals == 8);
++        if (_jpyUsdRateProviderAddress.code.length == 0) revert InvalidJpyUsdRateProvider();
++        jpyUsdRateProvider = IJpyUsdRateProvider(_jpyUsdRateProviderAddress);
+ 
+         // Fetch an initial price and confirm the oracle setup is live at deploy time.
+         _fetchStandardPricePrimary();
+@@ -150,7 +116,7 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+         // never serves an arbitrarily stale FX rate (Oracle.md ORCL-SEC-005).
+         (uint256 collJpyPrice, bool jpyFreezeExpired) = _convertUsdPriceToJpyWithFreeze(collUsdPrice);
+         if (jpyFreezeExpired) {
+-            return (_shutDownAndSwitchToLastGoodPrice(address(jpyUsdOracle.aggregator)), true);
++            return (_shutDownFromSharedJpyFailure(), true);
+         }
+ 
+         (uint256 dTokenJpyPrice, bool backingUnavailable) = _applyBackingRatio(collJpyPrice);
+@@ -172,48 +138,30 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+      *      Example: ETH=$3,000, JPY/USD=0.006667 →
+      *          3000e18 * 1e18 / 6.667e15 ≈ 450,000e18 (= ¥450,000).
+      *
+-     *      Healthy JPY/USD: refresh `lastGoodJpyRate` and its matching Chainlink `updatedAt`.
+-     *      On failure, start the freeze at the earlier of first observation and the cached
+-     *      rate's staleness boundary. A dormant branch therefore receives no fresh 24h
+-     *      window for an already-stale cached rate, while an invalid/reverting read before
+-     *      that boundary starts at first observation. Reuse `lastGoodJpyRate` while the
+-     *      resulting freeze is younger than MAX_JPY_FREEZE_DURATION; after that, return
+-     *      `jpyFreezeExpired == true` so the caller can use the normal branch shutdown path.
+-     *      `lastGoodJpyRate` is always > 0 at runtime — it is seeded by the healthy deploy-time
+-     *      fetch and only ever updated to strictly-positive values — so the division cannot
+-     *      divide by zero.
++     *      The provider owns the last-good rate, report provenance, freeze timer, and terminal
++     *      expiry. Every branch therefore receives the same rate and expiry decision.
+      *
+-     *      Note: the gas-griefing guard is preserved. An out-of-gas JPY read reverts with
+-     *      `InsufficientGasForExternalCall` from inside `_getOracleAnswer` rather than
+-     *      returning `down == true`, so it is never silently treated as a freeze.
++     *      Note: the provider preserves the gas-griefing guard. An out-of-gas Chainlink
++     *      read reverts with `InsufficientGasForExternalCall` rather than being silently
++     *      treated as a freeze.
+      */
+     function _convertUsdPriceToJpyWithFreeze(uint256 _usdPrice) internal returns (uint256, bool) {
+-        (uint256 jpyUsdRate, bool jpyUsdOracleDown, uint256 updatedAt) = _getOracleAnswerWithTimestamp(jpyUsdOracle);
+-
+-        if (jpyUsdOracleDown) {
+-            jpyUsdRate = lastGoodJpyRate;
+-            if (jpyFrozenSince == 0) {
+-                jpyFrozenSince = block.timestamp;
+-                if (block.timestamp - lastGoodJpyUpdatedAt >= jpyUsdOracle.stalenessThreshold) {
+-                    jpyFrozenSince = lastGoodJpyUpdatedAt + jpyUsdOracle.stalenessThreshold;
+-                }
+-                emit JpyRateFrozen(jpyFrozenSince, jpyUsdRate);
+-            }
+-            if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
+-                return (0, true);
+-            }
+-        } else {
+-            lastGoodJpyRate = jpyUsdRate;
+-            lastGoodJpyUpdatedAt = updatedAt;
+-            if (jpyFrozenSince != 0) {
+-                jpyFrozenSince = 0;
+-                emit JpyRateUnfrozen(block.timestamp, jpyUsdRate);
+-            }
+-        }
+-
++        (uint256 jpyUsdRate, bool jpyFreezeExpired) = jpyUsdRateProvider.fetchJpyUsdRate();
++        if (jpyFreezeExpired) return (0, true);
+         return (Math.mulDiv(_usdPrice, 1e18, jpyUsdRate), false);
+     }
+ 
++    /// @dev The provider latches shared expiry before this call. Catch a source-level
++    ///      BorrowerOperations authorization failure so the enclosing PriceFeedProxy call
++    ///      does not roll that provider mutation back. The source still enters its terminal
++    ///      state and returns failure=true; the registered proxy then performs shutdown.
++    function _shutDownFromSharedJpyFailure() internal returns (uint256) {
++        try borrowerOperations.shutdownFromOracleFailure() {} catch {}
++        priceSource = PriceSource.lastGoodPrice;
++        emit ShutDownFromOracleFailure(address(jpyUsdRateProvider));
++        return lastGoodPrice;
++    }
++
+     /**
+      * @dev Apply the Vault's dToken backing ratio. A normal read failure returns
+      *      `backingUnavailable=true` so the caller can enter the standard oracle
+diff --git a/contracts/src/PriceFeeds/DFUSDCPriceFeed.sol b/contracts/src/PriceFeeds/DFUSDCPriceFeed.sol
+index 2b380b03..238321b3 100644
+--- a/contracts/src/PriceFeeds/DFUSDCPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFUSDCPriceFeed.sol
+@@ -15,16 +15,14 @@ contract DFUSDCPriceFeed is DFPriceFeedBase {
+     constructor(
+         address _usdcUsdOracleAddress,
+         uint256 _usdcUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     )
+         DFPriceFeedBase(
+             _usdcUsdOracleAddress,
+             _usdcUsdStalenessThreshold,
+-            _jpyUsdOracleAddress,
+-            _jpyUsdStalenessThreshold,
++            _jpyUsdRateProviderAddress,
+             _collateralVaultAddress,
+             _borrowerOperationsAddress
+         )
+diff --git a/contracts/src/PriceFeeds/DFUSDTPriceFeed.sol b/contracts/src/PriceFeeds/DFUSDTPriceFeed.sol
+index 90ea2b0c..7c1c1b5b 100644
+--- a/contracts/src/PriceFeeds/DFUSDTPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFUSDTPriceFeed.sol
+@@ -15,16 +15,14 @@ contract DFUSDTPriceFeed is DFPriceFeedBase {
+     constructor(
+         address _usdtUsdOracleAddress,
+         uint256 _usdtUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     )
+         DFPriceFeedBase(
+             _usdtUsdOracleAddress,
+             _usdtUsdStalenessThreshold,
+-            _jpyUsdOracleAddress,
+-            _jpyUsdStalenessThreshold,
++            _jpyUsdRateProviderAddress,
+             _collateralVaultAddress,
+             _borrowerOperationsAddress
+         )
+diff --git a/contracts/src/PriceFeeds/DFWBTCPriceFeed.sol b/contracts/src/PriceFeeds/DFWBTCPriceFeed.sol
+index c88891c8..9a171443 100644
+--- a/contracts/src/PriceFeeds/DFWBTCPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFWBTCPriceFeed.sol
+@@ -28,16 +28,14 @@ contract DFWBTCPriceFeed is DFPriceFeedBase {
+         uint256 _wbtcBtcStalenessThreshold,
+         address _btcUsdOracleAddress,
+         uint256 _btcUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     )
+         DFPriceFeedBase(
+             _btcUsdOracleAddress,
+             _btcUsdStalenessThreshold,
+-            _jpyUsdOracleAddress,
+-            _jpyUsdStalenessThreshold,
++            _jpyUsdRateProviderAddress,
+             _collateralVaultAddress,
+             _borrowerOperationsAddress
+         )
+@@ -96,7 +94,7 @@ contract DFWBTCPriceFeed is DFPriceFeedBase {
+ 
+         (uint256 wbtcJpyPrice, bool jpyFreezeExpired) = _convertUsdPriceToJpyWithFreeze(wbtcUsdPrice);
+         if (jpyFreezeExpired) {
+-            return (_shutDownAndSwitchToLastGoodPrice(address(jpyUsdOracle.aggregator)), true);
++            return (_shutDownFromSharedJpyFailure(), true);
+         }
+ 
+         (uint256 dTokenJpyPrice, bool backingUnavailable) = _applyBackingRatio(wbtcJpyPrice);
+diff --git a/contracts/src/PriceFeeds/DFWETHPriceFeed.sol b/contracts/src/PriceFeeds/DFWETHPriceFeed.sol
+index 2326945a..82cf11e0 100644
+--- a/contracts/src/PriceFeeds/DFWETHPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFWETHPriceFeed.sol
+@@ -15,16 +15,14 @@ contract DFWETHPriceFeed is DFPriceFeedBase {
+     constructor(
+         address _ethUsdOracleAddress,
+         uint256 _ethUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     )
+         DFPriceFeedBase(
+             _ethUsdOracleAddress,
+             _ethUsdStalenessThreshold,
+-            _jpyUsdOracleAddress,
+-            _jpyUsdStalenessThreshold,
++            _jpyUsdRateProviderAddress,
+             _collateralVaultAddress,
+             _borrowerOperationsAddress
+         )
+diff --git a/contracts/src/PriceFeeds/DFXAUTPriceFeed.sol b/contracts/src/PriceFeeds/DFXAUTPriceFeed.sol
+index 3c693d90..3da0465e 100644
+--- a/contracts/src/PriceFeeds/DFXAUTPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFXAUTPriceFeed.sol
+@@ -20,16 +20,14 @@ contract DFXAUTPriceFeed is DFPriceFeedBase {
+     constructor(
+         address _xauUsdOracleAddress,
+         uint256 _xauUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     )
+         DFPriceFeedBase(
+             _xauUsdOracleAddress,
+             _xauUsdStalenessThreshold,
+-            _jpyUsdOracleAddress,
+-            _jpyUsdStalenessThreshold,
++            _jpyUsdRateProviderAddress,
+             _collateralVaultAddress,
+             _borrowerOperationsAddress
+         )
+diff --git a/contracts/src/PriceFeeds/JpyUsdRateProvider.sol b/contracts/src/PriceFeeds/JpyUsdRateProvider.sol
+new file mode 100644
+index 00000000..692f2403
+--- /dev/null
++++ b/contracts/src/PriceFeeds/JpyUsdRateProvider.sol
+@@ -0,0 +1,125 @@
++// SPDX-License-Identifier: MIT
++
++pragma solidity 0.8.24;
++
++import "../Dependencies/AggregatorV3Interface.sol";
++import "../Interfaces/IJpyUsdRateProvider.sol";
++
++/**
++ * @title JpyUsdRateProvider
++ * @notice Single source of JPY/USD rate and soft-freeze state for every collateral branch.
++ * @dev A shared contract is required because inherited state remains local to each deployed
++ *      price feed. Healthy Chainlink responses refresh one shared cache. Invalid, stale, or
++ *      reverting responses reuse that cache for at most MAX_JPY_FREEZE_DURATION. Expiration
++ *      is latched so a later recovery cannot make branches that have not fetched yet diverge
++ *      from branches that already observed the terminal shared-dependency failure.
++ */
++contract JpyUsdRateProvider is IJpyUsdRateProvider {
++    error InsufficientGasForExternalCall();
++    error InvalidOracle();
++    error InvalidStalenessThreshold();
++    error InvalidInitialOracleResponse();
++    error UnexpectedOracleDecimals();
++
++    uint256 public constant MAX_JPY_FREEZE_DURATION = 24 hours;
++
++    AggregatorV3Interface public immutable jpyUsdOracle;
++    uint256 public immutable stalenessThreshold;
++    uint8 public immutable oracleDecimals;
++
++    uint256 public lastGoodJpyRate;
++    uint256 public lastGoodJpyUpdatedAt;
++    uint256 public jpyFrozenSince;
++    bool public jpyFreezeExpired;
++
++    event JpyRateFrozen(uint256 timestamp, uint256 frozenRate);
++    event JpyRateUnfrozen(uint256 timestamp, uint256 liveRate);
++    event JpyFreezeExpired(uint256 timestamp, uint256 frozenRate);
++
++    struct ChainlinkResponse {
++        uint80 roundId;
++        uint80 answeredInRound;
++        int256 answer;
++        uint256 updatedAt;
++        bool success;
++    }
++
++    constructor(address _jpyUsdOracleAddress, uint256 _stalenessThreshold) {
++        if (_jpyUsdOracleAddress.code.length == 0) revert InvalidOracle();
++        if (_stalenessThreshold == 0) revert InvalidStalenessThreshold();
++
++        jpyUsdOracle = AggregatorV3Interface(_jpyUsdOracleAddress);
++        stalenessThreshold = _stalenessThreshold;
++        oracleDecimals = jpyUsdOracle.decimals();
++        if (oracleDecimals != 8) revert UnexpectedOracleDecimals();
++
++        ChainlinkResponse memory response = _getCurrentChainlinkResponse();
++        if (!_isFresh(response)) revert InvalidInitialOracleResponse();
++
++        lastGoodJpyRate = _scaleTo18Decimals(response.answer);
++        lastGoodJpyUpdatedAt = response.updatedAt;
++    }
++
++    function fetchJpyUsdRate() external returns (uint256 rate, bool freezeExpired) {
++        if (jpyFreezeExpired) return (lastGoodJpyRate, true);
++
++        ChainlinkResponse memory response = _getCurrentChainlinkResponse();
++        if (_isFresh(response)) {
++            rate = _scaleTo18Decimals(response.answer);
++            lastGoodJpyRate = rate;
++            lastGoodJpyUpdatedAt = response.updatedAt;
++
++            if (jpyFrozenSince != 0) {
++                jpyFrozenSince = 0;
++                emit JpyRateUnfrozen(block.timestamp, rate);
++            }
++            return (rate, false);
++        }
++
++        rate = lastGoodJpyRate;
++        if (jpyFrozenSince == 0) {
++            uint256 freezeStartedAt = block.timestamp;
++            if (block.timestamp - lastGoodJpyUpdatedAt >= stalenessThreshold) {
++                freezeStartedAt = lastGoodJpyUpdatedAt + stalenessThreshold;
++            }
++            jpyFrozenSince = freezeStartedAt;
++            emit JpyRateFrozen(freezeStartedAt, rate);
++        }
++
++        if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
++            jpyFreezeExpired = true;
++            emit JpyFreezeExpired(block.timestamp, rate);
++            return (rate, true);
++        }
++
++        return (rate, false);
++    }
++
++    function _getCurrentChainlinkResponse() internal view returns (ChainlinkResponse memory response) {
++        uint256 gasBefore = gasleft();
++
++        try jpyUsdOracle.latestRoundData() returns (
++            uint80 roundId, int256 answer, uint256, /* startedAt */ uint256 updatedAt, uint80 answeredInRound
++        ) {
++            response.roundId = roundId;
++            response.answeredInRound = answeredInRound;
++            response.answer = answer;
++            response.updatedAt = updatedAt;
++            response.success = true;
++            return response;
++        } catch {
++            if (gasleft() <= gasBefore / 64) revert InsufficientGasForExternalCall();
++            return response;
++        }
++    }
++
++    function _isFresh(ChainlinkResponse memory _response) internal view returns (bool) {
++        return _response.success && _response.roundId != 0 && _response.answeredInRound >= _response.roundId
++            && _response.updatedAt != 0 && _response.updatedAt <= block.timestamp
++            && block.timestamp - _response.updatedAt < stalenessThreshold && _response.answer > 0;
++    }
++
++    function _scaleTo18Decimals(int256 _answer) internal pure returns (uint256) {
++        return uint256(_answer) * 1e10;
++    }
++}
+diff --git a/contracts/src/PriceFeeds/sUSDSPriceFeed.sol b/contracts/src/PriceFeeds/sUSDSPriceFeed.sol
+index 7367b374..e321c19c 100644
+--- a/contracts/src/PriceFeeds/sUSDSPriceFeed.sol
++++ b/contracts/src/PriceFeeds/sUSDSPriceFeed.sol
+@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
+ 
+ import "openzeppelin-contracts/contracts/utils/math/Math.sol";
+ 
++import "../Interfaces/IJpyUsdRateProvider.sol";
+ import "./CompositePriceFeed.sol";
+ 
+ // Minimal ERC-4626 view used as the sUSDS rate provider. convertToAssets(1e18)
+@@ -36,12 +37,9 @@ interface ISUSDSBackingRatioSource {
+  *      rejects a rate provider unless the ERC-4626 token and its asset both report 18
+  *      decimals.
+  *
+- *      The JPY/backing layer is duplicated from DFPriceFeedBase BY DESIGN:
+- *      sUSDS must inherit `CompositePriceFeed` for the canonical-rate machinery,
+- *      and `CompositePriceFeed` already extends `MainnetPriceFeedBase`. Sharing
+- *      the JPY/backing layer via multiple inheritance would form a diamond over
+- *      `MainnetPriceFeedBase` with awkward constructor wiring; the small duplicated
+- *      block is preferred over that complexity. The requirement still holds —
++ *      The JPY rate and freeze state come from the same shared provider as every
++ *      standard DF feed. This avoids branch-local rate and timer divergence. The
++ *      backing-ratio layer remains local because sUSDS inherits CompositePriceFeed.
+  *      `CompositePriceFeed` is intentionally limited to the primary ->
+  *      lastGoodPrice path required by sUSDS; the unused upstream LST
+  *      ETHUSDxCanonical fallback was removed with the WSTETH/RETH feeds. The
+@@ -55,41 +53,20 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+     error InvalidCollateralVault();
+     error InvalidRateProvider();
+     error InvalidRateProviderDecimals();
++    error InvalidJpyUsdRateProvider();
+ 
+-    // Same bounded JPY soft-freeze window as DFPriceFeedBase. The JPY feed has a
+-    // 72h staleness threshold for normal FX market closures; after entering the
+-    // freeze, a further 24h outage becomes a branch shutdown instead of an
+-    // indefinite last-good fallback.
+-    uint256 public constant MAX_JPY_FREEZE_DURATION = 24 hours;
+-
+-    // JPY/USD Chainlink oracle (USD per JPY, ~0.006667). Same field as DFPriceFeedBase.
+-    Oracle public jpyUsdOracle;
++    IJpyUsdRateProvider public immutable jpyUsdRateProvider;
+ 
+     address public immutable collateralVault;
+     // Last valid backing ratio, retained for observability. A live backing read
+     // failure is treated as oracle failure rather than silently reusing this value.
+     uint256 public lastGoodBacking;
+ 
+-    // Soft-freeze of the SHARED JPY/USD leg — same design as DFPriceFeedBase (duplicated
+-    // here because this feed must inherit CompositePriceFeed; see contract NatSpec).
+-    // lastGoodJpyRate: last valid JPY/USD rate (USD per JPY, 18-dec, > 0), reused on
+-    // JPY-leg failure instead of shutting the branch down. jpyFrozenSince: onset of the
+-    // current freeze (0 when live), bounded by the cached rate's staleness boundary. A
+-    // freeze older than MAX_JPY_FREEZE_DURATION is escalated to branch shutdown.
+-    uint256 public lastGoodJpyRate;
+-    uint256 public jpyFrozenSince;
+-    // Chainlink updatedAt paired with lastGoodJpyRate; see DFPriceFeedBase.
+-    uint256 public lastGoodJpyUpdatedAt;
+-
+-    event JpyRateFrozen(uint256 timestamp, uint256 frozenRate);
+-    event JpyRateUnfrozen(uint256 timestamp, uint256 liveRate);
+-
+     constructor(
+         address _usdsUsdOracleAddress,
+         address _susdsAddress,
+         uint256 _usdsUsdStalenessThreshold,
+-        address _jpyUsdOracleAddress,
+-        uint256 _jpyUsdStalenessThreshold,
++        address _jpyUsdRateProviderAddress,
+         address _collateralVaultAddress,
+         address _borrowerOperationsAddress
+     ) CompositePriceFeed(_usdsUsdOracleAddress, _susdsAddress, _usdsUsdStalenessThreshold, _borrowerOperationsAddress) {
+@@ -99,13 +76,8 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+         collateralVault = _collateralVaultAddress;
+         lastGoodBacking = 1e18;
+ 
+-        // The collateral/USD oracle (USDS/USD) is stored by CompositePriceFeed →
+-        // MainnetPriceFeedBase as `ethUsdOracle`; the rate provider (sUSDS) as
+-        // `rateProviderAddress`. Here we add the JPY/USD oracle.
+-        jpyUsdOracle.aggregator = AggregatorV3Interface(_jpyUsdOracleAddress);
+-        jpyUsdOracle.stalenessThreshold = _jpyUsdStalenessThreshold;
+-        jpyUsdOracle.decimals = jpyUsdOracle.aggregator.decimals();
+-        assert(jpyUsdOracle.decimals == 8);
++        if (_jpyUsdRateProviderAddress.code.length == 0) revert InvalidJpyUsdRateProvider();
++        jpyUsdRateProvider = IJpyUsdRateProvider(_jpyUsdRateProviderAddress);
+ 
+         // Fetch an initial price and confirm the oracle setup is live at deploy time.
+         _fetchPricePrimary(false);
+@@ -157,7 +129,7 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+         // stale FX (ORCL-SEC-005).
+         (uint256 susdsJpyPrice, bool jpyFreezeExpired) = _convertUsdPriceToJpyWithFreeze(susdsUsdPrice);
+         if (jpyFreezeExpired) {
+-            return (_shutDownAndSwitchToLastGoodPrice(address(jpyUsdOracle.aggregator)), true);
++            return (_shutDownFromSharedJpyFailure(), true);
+         }
+ 
+         (uint256 dTokenJpyPrice, bool backingUnavailable) = _applyBackingRatio(susdsJpyPrice);
+@@ -186,45 +158,24 @@ contract sUSDSPriceFeed is CompositePriceFeed {
+         }
+     }
+ 
+-    /// @dev Same JPY conversion + soft-freeze as DFPriceFeedBase (see contract NatSpec for
+-    ///      why it is duplicated rather than shared). collJpy =
+-    ///      mulDiv(collUsd, 1e18, jpyUsdRate), all 18-dec. Healthy JPY/USD refreshes
+-    ///      lastGoodJpyRate and its matching updatedAt. On failure, the freeze starts at the
+-    ///      earlier of first observation and the cached rate's staleness boundary. The feed
+-    ///      reuses lastGoodJpyRate while the resulting freeze is younger than
+-    ///      MAX_JPY_FREEZE_DURATION. After that, return jpyFreezeExpired == true so the caller
+-    ///      can use the normal branch shutdown path. lastGoodJpyRate is > 0 at runtime (seeded
+-    ///      by the healthy deploy-time fetch, only updated to positive values), so the division
+-    ///      cannot divide by zero.
+-    ///      The gas-griefing guard is preserved: an OOG JPY read reverts from inside
+-    ///      _getOracleAnswer rather than returning down == true.
++    /// @dev USD→JPY conversion through the shared provider. The provider owns the
++    ///      last-good cache, freeze timer, recovery, and terminal expiration.
+     function _convertUsdPriceToJpyWithFreeze(uint256 _usdPrice) internal returns (uint256, bool) {
+-        (uint256 jpyUsdRate, bool jpyUsdOracleDown, uint256 updatedAt) = _getOracleAnswerWithTimestamp(jpyUsdOracle);
+-
+-        if (jpyUsdOracleDown) {
+-            jpyUsdRate = lastGoodJpyRate;
+-            if (jpyFrozenSince == 0) {
+-                jpyFrozenSince = block.timestamp;
+-                if (block.timestamp - lastGoodJpyUpdatedAt >= jpyUsdOracle.stalenessThreshold) {
+-                    jpyFrozenSince = lastGoodJpyUpdatedAt + jpyUsdOracle.stalenessThreshold;
+-                }
+-                emit JpyRateFrozen(jpyFrozenSince, jpyUsdRate);
+-            }
+-            if (block.timestamp - jpyFrozenSince >= MAX_JPY_FREEZE_DURATION) {
+-                return (0, true);
+-            }
+-        } else {
+-            lastGoodJpyRate = jpyUsdRate;
+-            lastGoodJpyUpdatedAt = updatedAt;
+-            if (jpyFrozenSince != 0) {
+-                jpyFrozenSince = 0;
+-                emit JpyRateUnfrozen(block.timestamp, jpyUsdRate);
+-            }
+-        }
+-
++        (uint256 jpyUsdRate, bool jpyFreezeExpired) = jpyUsdRateProvider.fetchJpyUsdRate();
++        if (jpyFreezeExpired) return (0, true);
+         return (Math.mulDiv(_usdPrice, 1e18, jpyUsdRate), false);
+     }
+ 
++    /// @dev Preserve the provider's already-latched global expiry even when this source is
++    ///      behind a PriceFeedProxy and therefore is not the registered BO caller. Returning
++    ///      failure=true makes the registered proxy perform the branch shutdown.
++    function _shutDownFromSharedJpyFailure() internal returns (uint256) {
++        try borrowerOperations.shutdownFromOracleFailure() {} catch {}
++        priceSource = PriceSource.lastGoodPrice;
++        emit ShutDownFromOracleFailure(address(jpyUsdRateProvider));
++        return lastGoodPrice;
++    }
++
+     function _applyBackingRatio(uint256 _jpyPrice) internal returns (uint256, bool) {
+         uint256 gasBefore = gasleft();
+ 
+diff --git a/contracts/test/DFPriceFeed.t.sol b/contracts/test/DFPriceFeed.t.sol
+index 24f447ba..3d49e50a 100644
+--- a/contracts/test/DFPriceFeed.t.sol
++++ b/contracts/test/DFPriceFeed.t.sol
+@@ -8,6 +8,7 @@ import "src/PriceFeeds/DFUSDCPriceFeed.sol";
+ import "src/PriceFeeds/DFUSDTPriceFeed.sol";
+ import "src/PriceFeeds/DFXAUTPriceFeed.sol";
+ import "src/PriceFeeds/DFWBTCPriceFeed.sol";
++import "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "src/PriceFeeds/PriceFeedProxy.sol";
+ import "src/Interfaces/IMainnetPriceFeed.sol";
+ import "src/PriceFeeds/MainnetPriceFeedBase.sol";
+@@ -15,9 +16,9 @@ import "./TestContracts/ChainlinkOracleMock.sol";
+ import "./TestContracts/GasGuzzlerOracle.sol";
+ import "openzeppelin-contracts/contracts/utils/math/Math.sol";
+ 
+-// Minimal BorrowerOperations stub: the DF feed calls shutdownFromOracleFailure()
+-// directly (it is the registered feed in production). Here we only need to observe
+-// that the call happened.
++// Minimal permissive BorrowerOperations stub for direct-source unit tests. Production
++// registers PriceFeedProxy instead; the dedicated proxy integration suites exercise
++// that authorization boundary and delegated shutdown path.
+ contract MockBO {
+     bool public shutDownCalled;
+ 
+@@ -63,6 +64,7 @@ contract MockBackingVault {
+ contract DFPriceFeedTest is Test {
+     ChainlinkOracleMock collUsd;
+     ChainlinkOracleMock jpyUsd;
++    JpyUsdRateProvider jpyRateProvider;
+     MockBO bo;
+     MockBackingVault backingVault;
+ 
+@@ -84,6 +86,7 @@ contract DFPriceFeedTest is Test {
+         jpyUsd.setDecimals(8);
+         jpyUsd.setPrice(JPY_USD_8DEC);
+         jpyUsd.setUpdatedAt(block.timestamp);
++        jpyRateProvider = new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+ 
+         bo = new MockBO();
+         backingVault = new MockBackingVault();
+@@ -91,7 +94,7 @@ contract DFPriceFeedTest is Test {
+ 
+     function _deployWeth() internal returns (DFWETHPriceFeed) {
+         return new DFWETHPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(jpyUsd), JPY_STALENESS, address(backingVault), address(bo)
++            address(collUsd), COLL_STALENESS, address(jpyRateProvider), address(backingVault), address(bo)
+         );
+     }
+ 
+@@ -101,8 +104,7 @@ contract DFPriceFeedTest is Test {
+             COLL_STALENESS,
+             address(collUsd),
+             COLL_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo)
+         );
+@@ -139,7 +141,7 @@ contract DFPriceFeedTest is Test {
+     function test_USDC_jpyConversion() public {
+         collUsd.setPrice(1e8); // USDC = $1.00
+         DFUSDCPriceFeed feed = new DFUSDCPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(jpyUsd), JPY_STALENESS, address(backingVault), address(bo)
++            address(collUsd), COLL_STALENESS, address(jpyRateProvider), address(backingVault), address(bo)
+         );
+         (uint256 price,) = feed.fetchPrice();
+         assertApproxEqRel(price, 150e18, 0.001e18); // ~¥150
+@@ -149,7 +151,7 @@ contract DFPriceFeedTest is Test {
+         collUsd.setPrice(72_000_000); // USDC = $0.72
+         backingVault.setBackingRatio(75e16); // dUSDC backing = 75%
+         DFUSDCPriceFeed feed = new DFUSDCPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(jpyUsd), JPY_STALENESS, address(backingVault), address(bo)
++            address(collUsd), COLL_STALENESS, address(jpyRateProvider), address(backingVault), address(bo)
+         );
+ 
+         uint256 marketJpy = _jpyFromUsd(72e16);
+@@ -169,7 +171,7 @@ contract DFPriceFeedTest is Test {
+     function test_USDT_jpyConversion() public {
+         collUsd.setPrice(1e8); // USDT = $1.00
+         DFUSDTPriceFeed feed = new DFUSDTPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(jpyUsd), JPY_STALENESS, address(backingVault), address(bo)
++            address(collUsd), COLL_STALENESS, address(jpyRateProvider), address(backingVault), address(bo)
+         );
+         (uint256 price,) = feed.fetchPrice();
+         assertApproxEqRel(price, 150e18, 0.001e18); // ~¥150
+@@ -178,7 +180,7 @@ contract DFPriceFeedTest is Test {
+     function test_XAUT_jpyConversion() public {
+         collUsd.setPrice(2400e8); // XAU = $2,400 (1 XAUT ≈ 1 XAU, Day-1 Standard)
+         DFXAUTPriceFeed feed = new DFXAUTPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(jpyUsd), JPY_STALENESS, address(backingVault), address(bo)
++            address(collUsd), COLL_STALENESS, address(jpyRateProvider), address(backingVault), address(bo)
+         );
+         (uint256 price,) = feed.fetchPrice();
+         // 2400 / 0.006667 ≈ 359,982 → ~¥360,000
+@@ -500,6 +502,52 @@ contract DFPriceFeedTest is Test {
+         assertEq(price, goodPrice);
+     }
+ 
++    function test_sharedProviderKeepsFeedsAtSameJpyRateAndFreezeTime() public {
++        collUsd.setPrice(1e8);
++        DFWETHPriceFeed olderFeed = _deployWeth();
++
++        vm.warp(block.timestamp + 1 hours);
++        collUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setPrice(500_000); // JPY/USD = 0.005, or 200 JPY per USD
++        jpyUsd.setUpdatedAt(block.timestamp);
++        DFWETHPriceFeed newerFeed = _deployWeth();
++
++        vm.warp(block.timestamp + JPY_STALENESS + 1);
++        collUsd.setUpdatedAt(block.timestamp);
++
++        (uint256 olderPrice, bool olderFailure) = olderFeed.fetchPrice();
++        (uint256 newerPrice, bool newerFailure) = newerFeed.fetchPrice();
++
++        assertFalse(olderFailure);
++        assertFalse(newerFailure);
++        assertEq(address(olderFeed.jpyUsdRateProvider()), address(newerFeed.jpyUsdRateProvider()));
++        assertEq(olderPrice, newerPrice, "all feeds use the provider's single frozen JPY rate");
++        assertEq(jpyRateProvider.lastGoodJpyRate(), uint256(500_000) * 1e10);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp - 1);
++    }
++
++    function test_sharedExpiryPreventsLaterBranchRecoverySplit() public {
++        collUsd.setPrice(1e8);
++        DFWETHPriceFeed firstFeed = _deployWeth();
++        DFWETHPriceFeed dormantFeed = _deployWeth();
++        uint256 freezeStart = block.timestamp + JPY_STALENESS;
++
++        vm.warp(freezeStart + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
++        collUsd.setUpdatedAt(block.timestamp);
++        (, bool firstFailure) = firstFeed.fetchPrice();
++
++        assertTrue(firstFailure);
++        assertTrue(jpyRateProvider.jpyFreezeExpired());
++
++        jpyUsd.setPrice(500_000);
++        jpyUsd.setUpdatedAt(block.timestamp);
++        (, bool dormantFailure) = dormantFeed.fetchPrice();
++
++        assertTrue(dormantFailure, "later branch observes latched expiry despite raw-oracle recovery");
++        assertEq(uint256(dormantFeed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
++        assertEq(jpyRateProvider.lastGoodJpyRate(), uint256(JPY_USD_8DEC) * 1e10);
++    }
++
+     function test_jpyUsdAnsweredInRoundBehindRoundId_substitutesLastGoodRate_noShutdown() public {
+         collUsd.setPrice(3000e8);
+         DFWETHPriceFeed feed = _deployWeth();
+@@ -512,7 +560,7 @@ contract DFPriceFeedTest is Test {
+         assertFalse(failure);
+         assertFalse(bo.shutDownCalled());
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp);
+         assertEq(price, goodPrice);
+     }
+ 
+@@ -528,7 +576,7 @@ contract DFPriceFeedTest is Test {
+         assertFalse(failure);
+         assertFalse(bo.shutDownCalled());
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp);
+         assertEq(price, goodPrice);
+     }
+ 
+@@ -544,7 +592,7 @@ contract DFPriceFeedTest is Test {
+         assertFalse(failure);
+         assertFalse(bo.shutDownCalled());
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp);
+         assertEq(price, goodPrice);
+     }
+ 
+@@ -591,19 +639,19 @@ contract DFPriceFeedTest is Test {
+         collUsd.setPrice(3000e8);
+         DFWETHPriceFeed feed = _deployWeth();
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), 0, "not frozen while healthy");
++        assertEq(jpyRateProvider.jpyFrozenSince(), 0, "not frozen while healthy");
+ 
+         // Enter the freeze.
+         uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart, "freeze onset anchored to stale boundary");
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart, "freeze onset anchored to stale boundary");
+ 
+         // JPY/USD recovers → freeze cleared.
+         jpyUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), 0, "freeze cleared on recovery");
++        assertEq(jpyRateProvider.jpyFrozenSince(), 0, "freeze cleared on recovery");
+     }
+ 
+     function test_jpyFrozenSince_recordedOnceDuringContinuousFreeze() public {
+@@ -614,13 +662,13 @@ contract DFPriceFeedTest is Test {
+         vm.warp(block.timestamp + 73 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        uint256 onset = feed.jpyFrozenSince();
++        uint256 onset = jpyRateProvider.jpyFrozenSince();
+ 
+         // A later fetch while still frozen must NOT advance the onset timestamp.
+         vm.warp(block.timestamp + 10 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), onset, "onset is sticky during a continuous freeze");
++        assertEq(jpyRateProvider.jpyFrozenSince(), onset, "onset is sticky during a continuous freeze");
+     }
+ 
+     function test_jpyFreezeExpires_shutsDownAtLastGoodPrice() public {
+@@ -634,8 +682,8 @@ contract DFPriceFeedTest is Test {
+         assertFalse(freezeFailure, "fresh freeze stays live");
+         assertFalse(bo.shutDownCalled());
+ 
+-        uint256 freezeStartedAt = feed.jpyFrozenSince();
+-        vm.warp(freezeStartedAt + feed.MAX_JPY_FREEZE_DURATION());
++        uint256 freezeStartedAt = jpyRateProvider.jpyFrozenSince();
++        vm.warp(freezeStartedAt + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
+         collUsd.setPrice(3300e8);
+         collUsd.setUpdatedAt(block.timestamp);
+ 
+@@ -653,7 +701,7 @@ contract DFPriceFeedTest is Test {
+         DFWETHPriceFeed feed = _deployWeth();
+         uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+ 
+-        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        vm.warp(expectedFreezeStart + jpyRateProvider.MAX_JPY_FREEZE_DURATION() + 1);
+         collUsd.setUpdatedAt(block.timestamp);
+ 
+         (uint256 price, bool failure) = feed.fetchPrice();
+@@ -661,7 +709,7 @@ contract DFPriceFeedTest is Test {
+         assertTrue(failure);
+         assertTrue(bo.shutDownCalled());
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+         assertEq(price, feed.lastGoodPrice());
+     }
+ 
+@@ -673,13 +721,13 @@ contract DFPriceFeedTest is Test {
+         uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+-        vm.expectEmit(true, true, true, true, address(feed));
+-        emit DFPriceFeedBase.JpyRateFrozen(expectedFreezeStart, feed.lastGoodJpyRate());
++        vm.expectEmit(true, true, true, true, address(jpyRateProvider));
++        emit JpyUsdRateProvider.JpyRateFrozen(expectedFreezeStart, jpyRateProvider.lastGoodJpyRate());
+         feed.fetchPrice();
+ 
+         jpyUsd.setUpdatedAt(block.timestamp);
+-        vm.expectEmit(true, true, true, true, address(feed));
+-        emit DFPriceFeedBase.JpyRateUnfrozen(block.timestamp, uint256(JPY_USD_8DEC) * 1e10);
++        vm.expectEmit(true, true, true, true, address(jpyRateProvider));
++        emit JpyUsdRateProvider.JpyRateUnfrozen(block.timestamp, uint256(JPY_USD_8DEC) * 1e10);
+         feed.fetchPrice();
+     }
+ 
+@@ -743,8 +791,9 @@ contract DFPriceFeedTest is Test {
+         newJpyUsd.setPrice(500_000); // JPY/USD = 0.005 USD per JPY => ¥200 per $1
+         newJpyUsd.setUpdatedAt(block.timestamp);
+ 
++        JpyUsdRateProvider newProvider = new JpyUsdRateProvider(address(newJpyUsd), JPY_STALENESS);
+         DFWETHPriceFeed newSource = new DFWETHPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(newJpyUsd), JPY_STALENESS, address(backingVault), address(bo)
++            address(collUsd), COLL_STALENESS, address(newProvider), address(backingVault), address(bo)
+         );
+ 
+         proxy.proposeSource(address(newSource));
+@@ -791,13 +840,13 @@ contract DFPriceFeedTest is Test {
+     function test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() public {
+         collUsd.setPrice(3000e8);
+         DFWETHPriceFeed feed = _deployWeth();
+-        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "constructor stores cached rate provenance");
++        assertEq(jpyRateProvider.lastGoodJpyUpdatedAt(), block.timestamp, "provider stores cached rate provenance");
+ 
+         vm.warp(block.timestamp + 10 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+         jpyUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "healthy read refreshes cached rate provenance");
++        assertEq(jpyRateProvider.lastGoodJpyUpdatedAt(), block.timestamp, "healthy read refreshes cached rate provenance");
+ 
+         vm.warp(block.timestamp + 10 hours);
+         collUsd.setUpdatedAt(block.timestamp);
+@@ -807,15 +856,15 @@ contract DFPriceFeedTest is Test {
+ 
+         assertFalse(failure);
+         assertFalse(bo.shutDownCalled());
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp);
+     }
+ 
+     function test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() public {
+         collUsd.setPrice(3000e8);
+         DFWETHPriceFeed feed = _deployWeth();
+-        uint256 expectedFreezeStart = feed.lastGoodJpyUpdatedAt() + JPY_STALENESS;
++        uint256 expectedFreezeStart = jpyRateProvider.lastGoodJpyUpdatedAt() + JPY_STALENESS;
+ 
+-        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        vm.warp(expectedFreezeStart + jpyRateProvider.MAX_JPY_FREEZE_DURATION() + 1);
+         collUsd.setUpdatedAt(block.timestamp);
+         jpyUsd.setPrice(0);
+ 
+@@ -823,7 +872,7 @@ contract DFPriceFeedTest is Test {
+ 
+         assertTrue(failure);
+         assertTrue(bo.shutDownCalled());
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+         assertEq(price, feed.lastGoodPrice());
+     }
+ 
+@@ -860,9 +909,9 @@ contract DFPriceFeedTest is Test {
+ 
+     function test_constructorReverts_ifJpyDecimalsNot8() public {
+         collUsd.setPrice(3000e8);
+-        jpyUsd.setDecimals(18); // violates assert(jpyUsdOracle.decimals == 8)
+-        vm.expectRevert();
+-        _deployWeth();
++        jpyUsd.setDecimals(18);
++        vm.expectRevert(JpyUsdRateProvider.UnexpectedOracleDecimals.selector);
++        new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+     }
+ 
+     function test_constructorReverts_ifCollDecimalsNot8() public {
+@@ -876,7 +925,7 @@ contract DFPriceFeedTest is Test {
+         collUsd.setPrice(3000e8);
+         vm.expectRevert(DFPriceFeedBase.InvalidCollateralVault.selector);
+         new DFWETHPriceFeed(
+-            address(collUsd), COLL_STALENESS, address(jpyUsd), JPY_STALENESS, makeAddr("no-code-vault"), address(bo)
++            address(collUsd), COLL_STALENESS, address(jpyRateProvider), makeAddr("no-code-vault"), address(bo)
+         );
+     }
+ 
+diff --git a/contracts/test/DFWBTCPriceFeed.t.sol b/contracts/test/DFWBTCPriceFeed.t.sol
+index 1c7ee641..9b3e616e 100644
+--- a/contracts/test/DFWBTCPriceFeed.t.sol
++++ b/contracts/test/DFWBTCPriceFeed.t.sol
+@@ -5,6 +5,7 @@ pragma solidity 0.8.24;
+ import "forge-std/Test.sol";
+ import "src/Interfaces/IMainnetPriceFeed.sol";
+ import "src/PriceFeeds/DFWBTCPriceFeed.sol";
++import "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "./TestContracts/ChainlinkOracleMock.sol";
+ 
+ contract MockWBTCBO {
+@@ -38,6 +39,7 @@ contract DFWBTCPriceFeedTest is Test {
+     ChainlinkOracleMock wbtcBtc;
+     ChainlinkOracleMock btcUsd;
+     ChainlinkOracleMock jpyUsd;
++    JpyUsdRateProvider jpyRateProvider;
+     MockWBTCBO bo;
+     MockWBTCBackingVault backingVault;
+ 
+@@ -65,6 +67,7 @@ contract DFWBTCPriceFeedTest is Test {
+         jpyUsd.setDecimals(8);
+         jpyUsd.setPrice(JPY_USD_8DEC);
+         jpyUsd.setUpdatedAt(block.timestamp);
++        jpyRateProvider = new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+ 
+         bo = new MockWBTCBO();
+         backingVault = new MockWBTCBackingVault();
+@@ -76,8 +79,7 @@ contract DFWBTCPriceFeedTest is Test {
+             WBTC_BTC_STALENESS,
+             address(btcUsd),
+             BTC_USD_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo)
+         );
+diff --git a/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol b/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol
+index e953904e..b9a5d308 100644
+--- a/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol
++++ b/contracts/test/DFWBTCPriceFeedProxyIntegration.t.sol
+@@ -5,6 +5,7 @@ pragma solidity 0.8.24;
+ import "forge-std/Test.sol";
+ import "src/Interfaces/IMainnetPriceFeed.sol";
+ import "src/PriceFeeds/DFWBTCPriceFeed.sol";
++import "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "src/PriceFeeds/PriceFeedProxy.sol";
+ import "./TestContracts/ChainlinkOracleMock.sol";
+ 
+@@ -43,6 +44,7 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+     ChainlinkOracleMock wbtcBtc;
+     ChainlinkOracleMock btcUsd;
+     ChainlinkOracleMock jpyUsd;
++    JpyUsdRateProvider jpyRateProvider;
+     GatedWBTCMockBO bo;
+     MockWBTCBackingVaultForProxy backingVault;
+     DFWBTCPriceFeed feed;
+@@ -72,6 +74,7 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+         jpyUsd.setDecimals(8);
+         jpyUsd.setPrice(JPY_USD_8DEC);
+         jpyUsd.setUpdatedAt(block.timestamp);
++        jpyRateProvider = new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+ 
+         bo = new GatedWBTCMockBO();
+         backingVault = new MockWBTCBackingVaultForProxy();
+@@ -81,8 +84,7 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+             WBTC_BTC_STALENESS,
+             address(btcUsd),
+             BTC_USD_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo)
+         );
+@@ -156,7 +158,7 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+         assertFalse(failure);
+         assertFalse(bo.hasBeenShutDown());
+         assertEq(price, 19_800_000e18); // 0.9 * $110,000 / frozen 0.005
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+     }
+ 
+@@ -171,8 +173,8 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+         assertFalse(freezeFailure);
+         assertFalse(bo.hasBeenShutDown());
+ 
+-        uint256 freezeStartedAt = feed.jpyFrozenSince();
+-        vm.warp(freezeStartedAt + feed.MAX_JPY_FREEZE_DURATION());
++        uint256 freezeStartedAt = jpyRateProvider.jpyFrozenSince();
++        vm.warp(freezeStartedAt + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
+         _refreshWbtcAndBtc();
+ 
+         (uint256 price, bool failure) = proxy.fetchPrice();
+@@ -180,7 +182,8 @@ contract DFWBTCPriceFeedProxyIntegrationTest is Test {
+         assertTrue(failure);
+         assertTrue(bo.hasBeenShutDown());
+         assertEq(price, frozenPrice);
+-        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
++        assertTrue(jpyRateProvider.jpyFreezeExpired(), "shared expiry latch survives proxy shutdown delegation");
++        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
+     }
+ 
+     function test_proxy_redemption_wbtcBtcFailureDegradesToLastGood() public {
+diff --git a/contracts/test/DeployLiquity2StrategySelector.t.sol b/contracts/test/DeployLiquity2StrategySelector.t.sol
+index 1defaf90..a84801da 100644
+--- a/contracts/test/DeployLiquity2StrategySelector.t.sol
++++ b/contracts/test/DeployLiquity2StrategySelector.t.sol
+@@ -46,9 +46,12 @@ contract DeployLiquity2StrategySelectorHarness is DeployLiquity2Script {
+         return _getBridgeReadinessJson(jpydfToken);
+     }
+ 
+-    function setDfOracleFreezeForHarness(address jpyUsdOracle, uint256 jpyUsdStaleness) external {
++    function setDfOracleFreezeForHarness(address jpyUsdOracle, uint256 jpyUsdStaleness, address jpyUsdRateProvider)
++        external
++    {
+         dfJpyUsdOracle = jpyUsdOracle;
+         dfJpyUsdStaleness = jpyUsdStaleness;
++        dfJpyUsdRateProvider = jpyUsdRateProvider;
+     }
+ 
+     function envFreezeJsonForHarness(IJpydfToken jpydfToken, CollateralVault collateralVault, IInterestRouter router)
+@@ -489,12 +492,13 @@ contract DeployLiquity2StrategySelectorTest is Test {
+         address recipient = makeAddr("interestRecipient");
+         address owner = makeAddr("interestOwner");
+         address jpyUsdFeed = makeAddr("jpyUsdFeed");
++        address jpyUsdRateProvider = makeAddr("jpyUsdRateProvider");
+         uint256 jpyUsdStaleness = 72 hours;
+         JpydfToken token = new JpydfToken(address(this), address(harness));
+         InterestRouterForwarder router = new InterestRouterForwarder(IERC20(address(token)), recipient, owner);
+         SelectorMockVaultTreasury vault = new SelectorMockVaultTreasury(treasury);
+ 
+-        harness.setDfOracleFreezeForHarness(jpyUsdFeed, jpyUsdStaleness);
++        harness.setDfOracleFreezeForHarness(jpyUsdFeed, jpyUsdStaleness, jpyUsdRateProvider);
+ 
+         string memory manifestFragment = string.concat(
+             '{"envFreeze":',
+@@ -515,6 +519,11 @@ contract DeployLiquity2StrategySelectorTest is Test {
+             vm.parseJsonAddress(manifestFragment, ".envFreeze.interestRouterPendingOwner"), address(0), "pending owner"
+         );
+         assertEq(vm.parseJsonAddress(manifestFragment, ".envFreeze.jpyUsdFeed"), jpyUsdFeed, "jpy feed");
++        assertEq(
++            vm.parseJsonAddress(manifestFragment, ".envFreeze.jpyUsdRateProvider"),
++            jpyUsdRateProvider,
++            "shared jpy provider"
++        );
+         assertEq(
+             vm.parseJsonString(manifestFragment, ".envFreeze.jpyUsdStaleness"),
+             vm.toString(jpyUsdStaleness),
+@@ -888,6 +897,8 @@ contract DeployLiquity2StrategySelectorTest is Test {
+ 
+     function test_DeploySelector_DeploysMultipleStrategiesForOneBranch() public {
+         uint256 branchIndex = 3;
++        address jpyUsdRateProvider = makeAddr("jpyUsdRateProvider");
++        harness.setDfOracleFreezeForHarness(makeAddr("jpyUsdFeed"), 72 hours, jpyUsdRateProvider);
+         WETH9 weth = new WETH9();
+         harness.setHarnessWETH(IWETH(address(weth)));
+         CollateralVault collateralVault = _deployVault(IERC20Metadata(address(weth)));
+@@ -935,6 +946,11 @@ contract DeployLiquity2StrategySelectorTest is Test {
+             "array second"
+         );
+         assertEq(vm.parseJsonString(dfYieldJson, ".strategies[1].strategyKind"), "etherfi-weeth", "array kind");
++        assertEq(
++            vm.parseJsonAddress(dfYieldJson, ".jpyUsdRateProvider"),
++            jpyUsdRateProvider,
++            "shared provider manifest evidence"
++        );
+     }
+ 
+     function test_DeploySelector_RevertsWhenNoneIsUsedInsideStrategyArray() public {
+diff --git a/contracts/test/JpyUsdRateProvider.t.sol b/contracts/test/JpyUsdRateProvider.t.sol
+new file mode 100644
+index 00000000..9ea5aef7
+--- /dev/null
++++ b/contracts/test/JpyUsdRateProvider.t.sol
+@@ -0,0 +1,106 @@
++// SPDX-License-Identifier: MIT
++
++pragma solidity 0.8.24;
++
++import "forge-std/Test.sol";
++import "src/PriceFeeds/JpyUsdRateProvider.sol";
++import "./TestContracts/ChainlinkOracleMock.sol";
++
++contract JpyUsdRateProviderTest is Test {
++    ChainlinkOracleMock oracle;
++    JpyUsdRateProvider provider;
++
++    uint256 constant STALENESS = 72 hours;
++    int256 constant INITIAL_RATE = 666_700;
++
++    function setUp() public {
++        vm.warp(1_700_000_000);
++        oracle = new ChainlinkOracleMock();
++        oracle.setDecimals(8);
++        oracle.setPrice(INITIAL_RATE);
++        oracle.setUpdatedAt(block.timestamp);
++        provider = new JpyUsdRateProvider(address(oracle), STALENESS);
++    }
++
++    function test_permissionlessHealthyFetchRefreshesOneSharedCache() public {
++        vm.warp(block.timestamp + 1 hours);
++        oracle.setPrice(500_000);
++        oracle.setUpdatedAt(block.timestamp);
++
++        vm.prank(makeAddr("keeper"));
++        (uint256 rate, bool expired) = provider.fetchJpyUsdRate();
++
++        assertFalse(expired);
++        assertEq(rate, 500_000 * 1e10);
++        assertEq(provider.lastGoodJpyRate(), rate);
++        assertEq(provider.lastGoodJpyUpdatedAt(), block.timestamp);
++    }
++
++    function test_staleRoundAnchorsFreezeToSharedCachedBoundary() public {
++        uint256 expectedStart = block.timestamp + STALENESS;
++        vm.warp(expectedStart + 1);
++
++        (uint256 rate, bool expired) = provider.fetchJpyUsdRate();
++
++        assertFalse(expired);
++        assertEq(rate, uint256(INITIAL_RATE) * 1e10);
++        assertEq(provider.jpyFrozenSince(), expectedStart);
++    }
++
++    function test_invalidRoundWhileCacheFreshStartsAtObservationAndRecovers() public {
++        vm.warp(block.timestamp + 1 hours);
++        oracle.setRoundData(0, 0);
++
++        provider.fetchJpyUsdRate();
++        assertEq(provider.jpyFrozenSince(), block.timestamp);
++
++        vm.warp(block.timestamp + 1 hours);
++        oracle.setRoundData(2, 2);
++        oracle.setPrice(500_000);
++        oracle.setUpdatedAt(block.timestamp);
++        (uint256 rate, bool expired) = provider.fetchJpyUsdRate();
++
++        assertFalse(expired);
++        assertEq(rate, 500_000 * 1e10);
++        assertEq(provider.jpyFrozenSince(), 0);
++    }
++
++    function test_expirationLatchesAcrossLaterOracleRecovery() public {
++        uint256 expectedStart = block.timestamp + STALENESS;
++        vm.warp(expectedStart + provider.MAX_JPY_FREEZE_DURATION());
++
++        (uint256 expiredRate, bool expired) = provider.fetchJpyUsdRate();
++        assertTrue(expired);
++        assertTrue(provider.jpyFreezeExpired());
++
++        oracle.setPrice(500_000);
++        oracle.setUpdatedAt(block.timestamp);
++        (uint256 laterRate, bool laterExpired) = provider.fetchJpyUsdRate();
++
++        assertTrue(laterExpired, "recovery cannot split branches after shared terminal expiry");
++        assertEq(laterRate, expiredRate, "latched provider never changes the terminal shared rate");
++        assertEq(provider.jpyFrozenSince(), expectedStart);
++    }
++
++    function test_constructorRejectsNoCodeOracle() public {
++        vm.expectRevert(JpyUsdRateProvider.InvalidOracle.selector);
++        new JpyUsdRateProvider(makeAddr("oracle"), STALENESS);
++    }
++
++    function test_constructorRejectsZeroStaleness() public {
++        vm.expectRevert(JpyUsdRateProvider.InvalidStalenessThreshold.selector);
++        new JpyUsdRateProvider(address(oracle), 0);
++    }
++
++    function test_constructorRejectsUnexpectedDecimals() public {
++        oracle.setDecimals(18);
++        vm.expectRevert(JpyUsdRateProvider.UnexpectedOracleDecimals.selector);
++        new JpyUsdRateProvider(address(oracle), STALENESS);
++    }
++
++    function test_constructorRejectsStaleInitialResponse() public {
++        vm.warp(block.timestamp + STALENESS);
++        vm.expectRevert(JpyUsdRateProvider.InvalidInitialOracleResponse.selector);
++        new JpyUsdRateProvider(address(oracle), STALENESS);
++    }
++}
+diff --git a/contracts/test/sUSDSPriceFeed.t.sol b/contracts/test/sUSDSPriceFeed.t.sol
+index 0b3f1cb6..218aedeb 100644
+--- a/contracts/test/sUSDSPriceFeed.t.sol
++++ b/contracts/test/sUSDSPriceFeed.t.sol
+@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
+ 
+ import "forge-std/Test.sol";
+ import "src/PriceFeeds/sUSDSPriceFeed.sol";
++import "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "src/Interfaces/IMainnetPriceFeed.sol";
+ import "./TestContracts/ChainlinkOracleMock.sol";
+ import "openzeppelin-contracts/contracts/utils/math/Math.sol";
+@@ -93,6 +94,7 @@ contract MockSUSDSBackingVault {
+ contract SUSDSPriceFeedTest is Test {
+     ChainlinkOracleMock usdsUsd;
+     ChainlinkOracleMock jpyUsd;
++    JpyUsdRateProvider jpyRateProvider;
+     MockUSDSAsset usds;
+     MockSUSDS susds;
+     MockBO bo;
+@@ -114,6 +116,7 @@ contract SUSDSPriceFeedTest is Test {
+         jpyUsd.setDecimals(8);
+         jpyUsd.setPrice(JPY_USD_8DEC);
+         jpyUsd.setUpdatedAt(block.timestamp);
++        jpyRateProvider = new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+ 
+         usds = new MockUSDSAsset(18);
+         susds = new MockSUSDS(address(usds));
+@@ -128,8 +131,7 @@ contract SUSDSPriceFeedTest is Test {
+             address(usdsUsd),
+             address(susds),
+             USDS_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo)
+         );
+@@ -285,7 +287,7 @@ contract SUSDSPriceFeedTest is Test {
+         assertFalse(failure);
+         assertFalse(bo.shutDownCalled());
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp);
+         assertEq(price, goodPrice);
+     }
+ 
+@@ -337,13 +339,13 @@ contract SUSDSPriceFeedTest is Test {
+ 
+     function test_jpyInvalidAnswerWhileCachedRateFreshStartsFreezeAtObservation() public {
+         sUSDSPriceFeed feed = _deploy();
+-        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "constructor stores cached rate provenance");
++        assertEq(jpyRateProvider.lastGoodJpyUpdatedAt(), block.timestamp, "provider stores cached rate provenance");
+ 
+         vm.warp(block.timestamp + 10 hours);
+         usdsUsd.setUpdatedAt(block.timestamp);
+         jpyUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.lastGoodJpyUpdatedAt(), block.timestamp, "healthy read refreshes cached rate provenance");
++        assertEq(jpyRateProvider.lastGoodJpyUpdatedAt(), block.timestamp, "healthy read refreshes cached rate provenance");
+ 
+         vm.warp(block.timestamp + 10 hours);
+         usdsUsd.setUpdatedAt(block.timestamp);
+@@ -353,14 +355,14 @@ contract SUSDSPriceFeedTest is Test {
+ 
+         assertFalse(failure);
+         assertFalse(bo.shutDownCalled());
+-        assertEq(feed.jpyFrozenSince(), block.timestamp);
++        assertEq(jpyRateProvider.jpyFrozenSince(), block.timestamp);
+     }
+ 
+     function test_jpyInvalidAnswerAfterCachedRateExpiredShutsDownImmediately() public {
+         sUSDSPriceFeed feed = _deploy();
+-        uint256 expectedFreezeStart = feed.lastGoodJpyUpdatedAt() + JPY_STALENESS;
++        uint256 expectedFreezeStart = jpyRateProvider.lastGoodJpyUpdatedAt() + JPY_STALENESS;
+ 
+-        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        vm.warp(expectedFreezeStart + jpyRateProvider.MAX_JPY_FREEZE_DURATION() + 1);
+         usdsUsd.setUpdatedAt(block.timestamp);
+         jpyUsd.setPrice(0);
+ 
+@@ -368,7 +370,7 @@ contract SUSDSPriceFeedTest is Test {
+ 
+         assertTrue(failure);
+         assertTrue(bo.shutDownCalled());
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+         assertEq(price, feed.lastGoodPrice());
+     }
+ 
+@@ -390,17 +392,17 @@ contract SUSDSPriceFeedTest is Test {
+     function test_jpyFreeze_setsAndClearsFrozenSince() public {
+         sUSDSPriceFeed feed = _deploy();
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), 0);
++        assertEq(jpyRateProvider.jpyFrozenSince(), 0);
+ 
+         uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         usdsUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+ 
+         jpyUsd.setUpdatedAt(block.timestamp);
+         feed.fetchPrice();
+-        assertEq(feed.jpyFrozenSince(), 0);
++        assertEq(jpyRateProvider.jpyFrozenSince(), 0);
+     }
+ 
+     function test_jpyFreeze_emitsFrozenAndUnfrozenEvents() public {
+@@ -410,13 +412,13 @@ contract SUSDSPriceFeedTest is Test {
+         uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+         vm.warp(block.timestamp + 73 hours);
+         usdsUsd.setUpdatedAt(block.timestamp);
+-        vm.expectEmit(true, true, true, true, address(feed));
+-        emit sUSDSPriceFeed.JpyRateFrozen(expectedFreezeStart, feed.lastGoodJpyRate());
++        vm.expectEmit(true, true, true, true, address(jpyRateProvider));
++        emit JpyUsdRateProvider.JpyRateFrozen(expectedFreezeStart, jpyRateProvider.lastGoodJpyRate());
+         feed.fetchPrice();
+ 
+         jpyUsd.setUpdatedAt(block.timestamp);
+-        vm.expectEmit(true, true, true, true, address(feed));
+-        emit sUSDSPriceFeed.JpyRateUnfrozen(block.timestamp, uint256(JPY_USD_8DEC) * 1e10);
++        vm.expectEmit(true, true, true, true, address(jpyRateProvider));
++        emit JpyUsdRateProvider.JpyRateUnfrozen(block.timestamp, uint256(JPY_USD_8DEC) * 1e10);
+         feed.fetchPrice();
+     }
+ 
+@@ -430,8 +432,8 @@ contract SUSDSPriceFeedTest is Test {
+         assertFalse(freezeFailure, "fresh freeze stays live");
+         assertFalse(bo.shutDownCalled());
+ 
+-        uint256 freezeStartedAt = feed.jpyFrozenSince();
+-        vm.warp(freezeStartedAt + feed.MAX_JPY_FREEZE_DURATION());
++        uint256 freezeStartedAt = jpyRateProvider.jpyFrozenSince();
++        vm.warp(freezeStartedAt + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
+         usdsUsd.setPrice(1.1e8);
+         usdsUsd.setUpdatedAt(block.timestamp);
+ 
+@@ -448,7 +450,7 @@ contract SUSDSPriceFeedTest is Test {
+         sUSDSPriceFeed feed = _deploy();
+         uint256 expectedFreezeStart = block.timestamp + JPY_STALENESS;
+ 
+-        vm.warp(expectedFreezeStart + feed.MAX_JPY_FREEZE_DURATION() + 1);
++        vm.warp(expectedFreezeStart + jpyRateProvider.MAX_JPY_FREEZE_DURATION() + 1);
+         usdsUsd.setUpdatedAt(block.timestamp);
+ 
+         (uint256 price, bool failure) = feed.fetchPrice();
+@@ -456,7 +458,7 @@ contract SUSDSPriceFeedTest is Test {
+         assertTrue(failure);
+         assertTrue(bo.shutDownCalled());
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+         assertEq(price, feed.lastGoodPrice());
+     }
+ 
+@@ -536,9 +538,9 @@ contract SUSDSPriceFeedTest is Test {
+     }
+ 
+     function test_constructorReverts_ifJpyDecimalsNot8() public {
+-        jpyUsd.setDecimals(18); // violates assert(jpyUsdOracle.decimals == 8)
+-        vm.expectRevert();
+-        _deploy();
++        jpyUsd.setDecimals(18);
++        vm.expectRevert(JpyUsdRateProvider.UnexpectedOracleDecimals.selector);
++        new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+     }
+ 
+     function test_constructorReverts_ifSusdsHasNoCode() public {
+@@ -547,8 +549,7 @@ contract SUSDSPriceFeedTest is Test {
+             address(usdsUsd),
+             makeAddr("no-code-susds"),
+             USDS_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo)
+         );
+@@ -578,8 +579,7 @@ contract SUSDSPriceFeedTest is Test {
+             address(usdsUsd),
+             address(susds),
+             USDS_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             makeAddr("no-code-vault"),
+             address(bo)
+         );
+diff --git a/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol b/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol
+index bec23408..c38dc07c 100644
+--- a/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol
++++ b/contracts/test/sUSDSPriceFeedProxyIntegration.t.sol
+@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
+ 
+ import "forge-std/Test.sol";
+ import "src/PriceFeeds/sUSDSPriceFeed.sol";
++import "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "src/PriceFeeds/PriceFeedProxy.sol";
+ import "src/Interfaces/IMainnetPriceFeed.sol";
+ import "src/Interfaces/IPriceFeed.sol";
+@@ -79,6 +80,7 @@ contract MockSUSDSBackingVaultForProxy {
+ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+     ChainlinkOracleMock usdsUsd;
+     ChainlinkOracleMock jpyUsd;
++    JpyUsdRateProvider jpyRateProvider;
+     MockUSDSAssetForProxy usds;
+     MockSUSDS susds;
+     GatedMockBO bo;
+@@ -102,6 +104,7 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+         jpyUsd.setDecimals(8);
+         jpyUsd.setPrice(JPY_USD_8DEC);
+         jpyUsd.setUpdatedAt(block.timestamp);
++        jpyRateProvider = new JpyUsdRateProvider(address(jpyUsd), JPY_STALENESS);
+ 
+         usds = new MockUSDSAssetForProxy();
+         susds = new MockSUSDS(address(usds));
+@@ -115,8 +118,7 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+             address(usdsUsd),
+             address(susds),
+             USDS_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo)
+         );
+@@ -183,7 +185,7 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+         assertFalse(bo.hasBeenShutDown());
+         assertEq(p, good); // frozen JPY rate × live (unchanged) USDS leg
+         assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
+-        assertEq(feed.jpyFrozenSince(), expectedFreezeStart);
++        assertEq(jpyRateProvider.jpyFrozenSince(), expectedFreezeStart);
+     }
+ 
+     function test_proxy_jpyFreezeExpires_proxyShutsDownAndServesLastGood() public {
+@@ -195,8 +197,8 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+         assertFalse(freezeFailure);
+         assertFalse(bo.hasBeenShutDown());
+ 
+-        uint256 freezeStartedAt = feed.jpyFrozenSince();
+-        vm.warp(freezeStartedAt + feed.MAX_JPY_FREEZE_DURATION());
++        uint256 freezeStartedAt = jpyRateProvider.jpyFrozenSince();
++        vm.warp(freezeStartedAt + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
+         usdsUsd.setPrice(1.1e8);
+         usdsUsd.setUpdatedAt(block.timestamp);
+ 
+@@ -205,7 +207,8 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+         assertTrue(fail);
+         assertTrue(bo.hasBeenShutDown(), "proxy performs the registered shutdown");
+         assertEq(p, frozenPrice, "proxy serves the source's bounded lastGoodPrice");
+-        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
++        assertTrue(jpyRateProvider.jpyFreezeExpired(), "shared expiry latch survives proxy shutdown delegation");
++        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.lastGoodPrice));
+     }
+ 
+     // JPY/USD weekend-close age within threshold is not an oracle failure.
+@@ -269,8 +272,7 @@ contract SUSDSPriceFeedProxyIntegrationTest is Test {
+             address(usdsUsd),
+             address(susds),
+             USDS_STALENESS,
+-            address(jpyUsd),
+-            JPY_STALENESS,
++            address(jpyRateProvider),
+             address(backingVault),
+             address(bo2)
+         );
+diff --git a/contracts/utils/mainnet-preflight.ts b/contracts/utils/mainnet-preflight.ts
+index 53446f17..aaed2331 100644
+--- a/contracts/utils/mainnet-preflight.ts
++++ b/contracts/utils/mainnet-preflight.ts
+@@ -224,6 +224,7 @@ type Manifest = {
+     interestRouterPendingOwner?: string;
+     jpyUsdFeed?: string;
+     jpyUsdStaleness?: string | number | bigint;
++    jpyUsdRateProvider?: string;
+   };
+   launchEvidence?: {
+     bridgeMinterCount?: number;
+@@ -787,6 +788,7 @@ function verifyManifest(path: string) {
+   assertZeroAddress("envFreeze.interestRouterPendingOwner", envFreeze.interestRouterPendingOwner);
+   assertAddress("envFreeze.jpyUsdFeed", envFreeze.jpyUsdFeed, CHAINLINK_FEEDS[0].proxy);
+   assertUint("envFreeze.jpyUsdStaleness", envFreeze.jpyUsdStaleness, CHAINLINK_FEEDS[0].staleness);
++  assertNonZeroAddress("envFreeze.jpyUsdRateProvider", envFreeze.jpyUsdRateProvider);
+ 
+   for (let i = 0; i < branches.length; i += 1) {
+     const branch = branches[i];
+@@ -808,6 +810,11 @@ function verifyManifest(path: string) {
+       assertUint(`branch ${i} collUsdStaleness`, yieldLayer.collUsdStaleness, CHAINLINK_FEEDS[i + 1].staleness);
+       assertAddress(`branch ${i} jpyUsdFeed`, yieldLayer.jpyUsdFeed, CHAINLINK_FEEDS[0].proxy);
+       assertUint(`branch ${i} jpyUsdStaleness`, yieldLayer.jpyUsdStaleness, CHAINLINK_FEEDS[0].staleness);
++      assertAddress(
++        `branch ${i} jpyUsdRateProvider`,
++        yieldLayer.jpyUsdRateProvider,
++        envFreeze.jpyUsdRateProvider,
++      );
+       assertNonZeroAddress(`branch ${i} collateralYieldZapper`, yieldLayer.collateralYieldZapper);
+       assertDay1StrategySet(i, strategies);
+     } else {
+diff --git a/documents/en/Parameters.md b/documents/en/Parameters.md
+index e14e1623..caf2ede6 100644
+--- a/documents/en/Parameters.md
++++ b/documents/en/Parameters.md
+@@ -110,7 +110,7 @@ Index of each parameter's ID, unit, on-chain representation, scope, governance,
+ | `PRM-ORACLE-003` | stETH/USD staleness | 🟢 | seconds | stETH/USD `Oracle.stalenessThreshold` | source deploy immutable | Day-1 candidate |
+ | `PRM-ORACLE-004` | USDC/USD staleness | 🟢 | seconds | USDC/USD `Oracle.stalenessThreshold` | source deploy immutable | Day-1 candidate |
+ | `PRM-ORACLE-005` | WBTC/BTC staleness | 🟢 | seconds | WBTC/BTC `Oracle.stalenessThreshold` | source deploy immutable | Freeze when Branch 4 activates |
+-| `PRM-ORACLE-006` | JPY soft-freeze maximum | 🟢 | seconds | `DFPriceFeedBase.MAX_JPY_FREEZE_DURATION` / `sUSDSPriceFeed.MAX_JPY_FREEZE_DURATION` | contract constant | Final |
++| `PRM-ORACLE-006` | JPY soft-freeze maximum | 🟢 | seconds | `JpyUsdRateProvider.MAX_JPY_FREEZE_DURATION` | contract constant | Final |
+ | `PRM-GOV-COMMON-TIMELOCK-DELAY` | Common governance delay | 🟢 | seconds | external `TimelockController.minDelay` | Timelock self-admin | §2-D |
+ | `PRM-GOV-TIMELOCK-PROPOSER-HOLDER` | Timelock proposer holder | 🟢 | holder class | `PROPOSER_ROLE` | Timelock self-admin | §2-D |
+ | `PRM-GOV-TIMELOCK-EXECUTOR-HOLDER` | Timelock executor holder | 🟢 | holder class | `EXECUTOR_ROLE` | Timelock self-admin | §2-D |
+diff --git a/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md b/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+index 87faca05..f35dfffd 100644
+--- a/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md
++++ b/documents/en/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+@@ -269,9 +269,9 @@ incident log; it is not a component spec requirement ID.
+ | `ALRT-ORCL-002` | branch-local feed stale / invalid / revert risk | P1 | No, unless user operation is impacted | polling + `fetchPrice` dry-run | Check the on-chain failure path |
+ | `ALRT-ORCL-003` | `ShutDownFromOracleFailure` / branch shutdown observed | P0 | Yes | TroveManager / PriceFeedProxy event, `shutdownTime` | Check the user app block and urgent redemption flow |
+ | `ALRT-ORCL-004` | JPY/USD shared feed age >= 80% of staleness threshold | P2 | No | shared JPY/USD `latestRoundData.updatedAt` | Confirm early as a dependency shared across all branches |
+-| `ALRT-ORCL-005` | `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | DF PriceFeed source state / event | Record the freeze start block and whether an alternative source is needed |
+-| `ALRT-ORCL-006` | JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | `jpyFrozenSince`, source proposal state | Escalate to the oracle owner / GOV |
+-| `ALRT-ORCL-007` | JPY/USD freeze >= 12h | P0 | Yes, if still unresolved | `jpyFrozenSince` | Prepare a public update and shutdown risk |
++| `ALRT-ORCL-005` | shared provider `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | `JpyUsdRateProvider` state / event | Record the freeze start block, confirm every active source references the same provider, and determine whether an alternative source is needed |
++| `ALRT-ORCL-006` | shared JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | provider `jpyFrozenSince`, source proposal state | Escalate to the oracle owner / GOV |
++| `ALRT-ORCL-007` | shared JPY/USD freeze >= 12h or `JpyFreezeExpired` | P0 | Yes | provider state / event | Prepare a public update; on expiry verify shutdown and user-action blocks for every active branch |
+ | `ALRT-ORCL-008` | JPY/USD freeze resolved | P3 / Resolved | No, unless public notice was posted | `JpyRateUnfrozen` / state | Incident log and lifting of the public notice |
+ | `ALRT-ORCL-009` | `SourceProposed` | P2 | No | PriceFeedProxy event/state | Notify the timelock deadline and the smoke-test owner |
+ | `ALRT-ORCL-010` | `SourceSwitchValidated.priceGuardBypassed == true` | P1 | No, unless user impact exists | PriceFeedProxy event | Audit the emergency bypass and price difference |
+@@ -533,11 +533,11 @@ comparison and does not treat exactly the threshold as fresh.
+ 
+ | Condition | Severity | Initial response |
+ | --- | --- | --- |
+-| `JpyRateFrozen` or `jpyFrozenSince > 0` | P1 | Record the freeze start block, the affected source, and the price-fetch status of all active branches |
++| provider `JpyRateFrozen` or `jpyFrozenSince > 0` | P1 | Record the provider address and freeze start block, prove all active sources reference it, and check every branch price-fetch path |
+ | 6h elapsed since freeze, with no recovery prospect or source proposal | P0 | Escalate to GOV / oracle owner. Prepare an alternative source and public comms |
+ | 12h elapsed since freeze | P0 | Raise shutdown risk to a public announcement candidate and decide the next update time |
+ | `JpyRateUnfrozen` | P3 / Resolved | Record the price during the freeze, user impact, and whether action was taken in the incident log |
+-| `MAX_JPY_FREEZE_DURATION` reached or transition to branch shutdown | P0 | Confirm the same public announcement / user app block as a branch shutdown |
++| provider `JpyFreezeExpired` / `MAX_JPY_FREEZE_DURATION` reached | P0 | Confirm alert delivery to the intended human, plus branch shutdown and user app block on every active branch |
+ 
+ A JPY/USD freeze is not an immediate branch shutdown. As long as borrowing,
+ liquidation, and redemption continue, keep the public wording to a state
+diff --git a/documents/en/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md b/documents/en/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
+index e9275171..9d99932a 100644
+--- a/documents/en/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
++++ b/documents/en/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
+@@ -98,7 +98,7 @@ Reinforcement: The Liquity v2 core adopts heartbeat × 2 (rETH/ETH = 48h) for a
+ 
+ ## 5. Relationship to soft-freeze: even adopting 72h does not lead to indefinite stale
+ 
+-After 72h, the bounded soft-freeze in `ORCL-SEC-005` prevents indefinite use of a stale JPY rate. Because `jpyFrozenSince` starts when a call first observes staleness, early incident detection must monitor the feed's `updatedAt` directly. [Oracle](../../product/spec/Oracle.md) `ORCL-SEC-005` is canonical for behavior; [Mainnet Deploy Env Freeze Runbook](../gates/Mainnet-Deploy-Env-Freeze-Runbook.md) §3.1 owns replacement timing and evidence.
++After 72h, the bounded soft-freeze in `ORCL-SEC-005` prevents indefinite use of a stale JPY rate. One deployment-wide `JpyUsdRateProvider` stores the cached rate and its `updatedAt`; `jpyFrozenSince` is the earlier of first failure observation and the cached report's stale boundary. All active branches read that same rate and timer. Early incident detection must monitor the provider and underlying feed `updatedAt` directly. [Oracle](../../product/spec/Oracle.md) `ORCL-SEC-005` is canonical for behavior; [Mainnet Deploy Env Freeze Runbook](../gates/Mainnet-Deploy-Env-Freeze-Runbook.md) §3.1 owns replacement timing and evidence.
+ 
+ ---
+ 
+diff --git a/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index b9a19973..6cfcfc01 100644
+--- a/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/en/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -51,10 +51,12 @@ The strict stale condition is `age < threshold`; zero `secondsToStale` is alread
+ | Signal | Warning | Critical / incident |
+ | --- | --- | --- |
+ | branch-local collateral/USD | `secondsToStale <= min(21600, threshold / 4)` | stale/invalid round or `ShutDownFromOracleFailure` |
+-| JPY/USD | watch after age 25h; warning when no more than 24h remains | `JpyRateFrozen`, `jpyFrozenSince > 0`, or persistent invalid/stale data |
++| JPY/USD | watch after age 25h; warning when no more than 24h remains | shared provider `JpyRateFrozen`, `jpyFrozenSince > 0`, `JpyFreezeExpired`, provider-address mismatch, or persistent invalid/stale data |
+ | JPY soft-freeze | 12h after freeze: prepare confirmation and check recovery | if no replacement was proposed before freeze, accept shutdown near age 96h and switch to post-shutdown recovery |
+ 
+-`jpyFrozenSince` starts when a transaction first observes stale data, not at `updatedAt + threshold`. Monitoring must poll `updatedAt`. A JPY/USD source change always waits for the 24-hour `proposeSource` timelock; emergency confirmation bypasses only the price-difference guard. Start a replacement proposal during watch/warning and no later than the expected freeze boundary.
++`JpyUsdRateProvider.jpyFrozenSince` is the earlier of first failure observation and the shared cached report's `updatedAt + threshold`. Monitoring must poll the provider and underlying `updatedAt`, and must verify that every active source's `jpyUsdRateProvider()` equals the single manifest address. A JPY/USD replacement deploys one new provider and all replacement sources against it; propose every source together and confirm them in one governance batch after the 24-hour timelock. Emergency confirmation bypasses only the price-difference guard. A provider-address mismatch is a deployment blocker/P0, not an accepted rolling state.
++
++Production activation is blocked until an external monitor watches provider-address equality, `jpyFrozenSince`, and `jpyFreezeExpired`; routes P0/P1 to the recorded escalation target; and a labeled test incident proves delivery to the intended human recipient and is then resolved. A dashboard, structured log, or successful sink response alone is not delivery evidence.
+ 
+ ### 3.2 Underlying tokens
+ 
+diff --git a/documents/en/protocol/product/spec/Oracle.md b/documents/en/protocol/product/spec/Oracle.md
+index debe654e..11147f68 100644
+--- a/documents/en/protocol/product/spec/Oracle.md
++++ b/documents/en/protocol/product/spec/Oracle.md
+@@ -112,7 +112,7 @@ Collateral/JPY       = (Collateral/USD) ÷ (JPY/USD)          // market price (p
+ dToken/JPY collateral value = (Collateral/JPY) × backingRatio / 1e18 // shared final layer (ORCL-FR-014)
+ ```
+ 
+-The Chainlink JPY/USD feed (`0xBcE206caE7f0ec07b545EddE332A47C2F75bbeb3`) returns **USD per JPY** (≈ 0.006667), so the division above converts to JPY. This JPY/USD read and division are handled by DF base `DFPriceFeedBase` (§5), while collateral/USD is calculated by the upstream-derived base.
++The Chainlink JPY/USD feed (`0xBcE206caE7f0ec07b545EddE332A47C2F75bbeb3`) returns **USD per JPY** (≈ 0.006667), so the division above converts to JPY. One deployment-wide `JpyUsdRateProvider` reads Chainlink and owns the cache/freeze state; every active feed asks that provider for the conversion rate. `DFPriceFeedBase` and `sUSDSPriceFeed` perform only the final division.
+ 
+ **FX weekend close handling**: `JPY/USD` is an FX-market price and normally has no new market price during weekends. The `MainnetPriceFeedBase` staleness check is the simple elapsed-time condition `block.timestamp - updatedAt < stalenessThreshold`; it has no weekend/holiday calendar. Therefore JPY/USD staleness must not use normal crypto feed values such as 24h/48h; it adopts normal weekend close (about 48h) plus heartbeat/on-chain update-delay margin. The value is **72h (259,200 seconds)** (canonical = [Parameters](../../../Parameters.md) §2-C, decision record = Issue #312; 48h is not acceptable because one missed heartbeat reaches the boundary). During weekends, JPY conversion continues with the last healthy Chainlink FX rate. If the threshold is exceeded, because JPY is a shared dependency across all branches, **immediate branch shutdown is not triggered**; operations continue using `lastGoodJpyRate` (soft-freeze, bounded by `MAX_JPY_FREEZE_DURATION` 24h, then standard shutdown fallback; [ORCL-SEC-005](#orcl-sec-005)). Only when a collateral/USD leg exceeds threshold does the system fall back to standard shutdown / `lastGoodPrice`.
+ 
+@@ -126,7 +126,8 @@ In the final step, multiply by **dToken backing ratio (`A / L_effective`, `<= 1e
+ | --- | --- |
+ | source | Actual PriceFeed implementation delegated to by `PriceFeedProxy`. Replaceable (24h timelock) |
+ | collateral/USD oracle | Chainlink aggregator for the collateral asset denominated in USD. Upstream storage name is `ethUsdOracle` (same name even for non-ETH collateral; this document uses `collUsdOracle` in pseudocode for readability) |
+-| `jpyUsdOracle` | Chainlink aggregator for JPY/USD (**returns USD per JPY**). Shared by all branches. Held by DF base |
++| `jpyUsdOracle` | Chainlink aggregator for JPY/USD (**returns USD per JPY**). Held once by `JpyUsdRateProvider` |
++| `jpyUsdRateProvider` | Single deployed JPY rate/cache/freeze state machine injected into every active feed. Its address must be identical across branches |
+ | canonical rate | Underlying conversion rate for yield-bearing tokens (USDS per sUSDS for sUSDS). Retrieved from a rate-provider contract, not Chainlink |
+ | `PriceSource` | Price source state (`primary` / `ETHUSDxCanonical` / `lastGoodPrice`). Upstream `MainnetPriceFeedBase` definition is retained, but current production feeds use only `primary` / `lastGoodPrice` |
+ | `lastGoodPrice` | Last healthy price returned during failures. Two layers: upstream base (per feed) and Proxy (normal path `_lastGoodPrice` / redemption path `_lastGoodRedemptionPrice`) |
+@@ -146,7 +147,7 @@ In the final step, multiply by **dToken backing ratio (`A / L_effective`, `<= 1e
+ ### 3.5 Assumptions
+ 
+ - The Liquity v2 core fixes oracle reference addresses at deployment and cannot change them from the core side.
+-- Chainlink collateral/USD and JPY/USD feeds both use 8 decimals (`decimals == 8` asserted by upstream / DF base constructors). `_getOracleAnswer` handles only values normalized to 18 decimals.
++- Chainlink collateral/USD and JPY/USD feeds both use 8 decimals (`decimals == 8` enforced by the upstream feed base and shared-provider constructors). Oracle values are normalized to 18 decimals before composition.
+ - JPY/USD feed returns **USD per JPY** (≈ 0.006667). JPY-denominated price is obtained by division `collUsd × 1e18 / jpyUsdRate`.
+ - JPY/USD staleness value includes weekends. No weekday/holiday calendar is kept on-chain; if `updatedAt` is inside the threshold, the last Chainlink FX rate is used, and if the threshold is exceeded, `lastGoodJpyRate` soft-freeze is used. Failures of collateral/USD, peg monitoring, or canonical rate follow standard branch shutdown.
+ - Branch number ↔ collateral (Underlying) assignment and finalized/unfinalized status are canonical in [Parameters](../../../Parameters.md) (this document does not assign numbers).
+@@ -172,7 +173,7 @@ In the final step, multiply by **dToken backing ratio (`A / L_effective`, `<= 1e
+ 
+ Major functions of `PriceFeedProxy` (outer fixed-reference layer) and DF PriceFeed implementations (inner source). Behavior is defined in §6 Functional Requirements; only visibility is summarized below (non-normative).
+ 
+-Each DF PriceFeed is implemented as a two-layer composition: (1) **inherit the upstream-derived price acquisition base**, and (2) **add JPY conversion and dToken backing multiplication in DeltaForesight-specific files**. Standard and peg feeds share logic in `DFPriceFeedBase`. The sUSDS composite feed preserves the sUSDS-pruned `CompositePriceFeed` inheritance, so `sUSDSPriceFeed` (a DF new file) minimally duplicates the same JPY conversion / backing multiplication pattern. `MainnetPriceFeedBase` only carries the explicit Chainlink response-validation hardening; JPY-denominated dToken collateral prices after backing adjustment are composed in the DF layer.
++Each DF PriceFeed inherits its upstream-derived price acquisition base, obtains the deployment-wide JPY rate from `JpyUsdRateProvider`, and applies its branch-local dToken backing ratio. Standard and peg feeds share conversion/backing plumbing in `DFPriceFeedBase`. The sUSDS composite feed preserves the sUSDS-pruned `CompositePriceFeed` inheritance and duplicates only the small provider-call conversion and backing layer; JPY cache/freeze state is never duplicated. `MainnetPriceFeedBase` only carries the explicit Chainlink response-validation hardening.
+ 
+ **PriceFeedProxy (`Ownable2Step`, non-upgradeable)**
+ 
+@@ -194,7 +195,8 @@ Each DF PriceFeed is implemented as a two-layer composition: (1) **inherit the u
+ | Function | Visibility | Summary | Requirement |
+ | --- | --- | --- | --- |
+ | `_fetchPricePrimary()` | internal | collateral/USD -> JPY conversion -> record `lastGoodPrice` | ORCL-FR-010-013 |
+-| `_convertUsdPriceToJpyWithFreeze(uint256 usdPrice)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | Convert USD->JPY using `jpyUsdOracle`. A healthy read stores `lastGoodJpyRate` with its `updatedAt`; a failure uses the cached rate and starts the freeze at the earlier of first observation and that cached rate's stale boundary. The soft-freeze is bounded by `MAX_JPY_FREEZE_DURATION` 24h and then uses standard shutdown | ORCL-FR-010 / ORCL-SEC-005 |
++| `JpyUsdRateProvider.fetchJpyUsdRate()` | external, permissionless | Read JPY/USD and return the one shared live/frozen rate and expiry decision. The provider alone stores `lastGoodJpyRate`, its `updatedAt`, and `jpyFrozenSince`; 24h expiry is latched across all consumers | ORCL-FR-010 / ORCL-SEC-005 |
++| `_convertUsdPriceToJpyWithFreeze(uint256 usdPrice)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | Fetch the shared provider result and convert USD->JPY. An expired shared freeze uses standard branch shutdown | ORCL-FR-010 / ORCL-SEC-005 |
+ | `_getCanonicalRate()` | internal (composite) | sUSDS canonical rate (`convertToAssets(1e18)`) | ORCL-FR-012 |
+ | `_applyBackingRatio(uint256 collJpy)` | internal (`DFPriceFeedBase` / `sUSDSPriceFeed`) | Multiply by `collateralVault.backingRatio()` and return actual dToken collateral value. A normal read failure is an oracle failure; a gas guard revert is re-reverted | ORCL-FR-014 |
+ | `fetchPrice()` / `fetchRedemptionPrice()` / `lastGoodPrice()` | external | IPriceFeed standard from upstream base | [Liquity-v2-Core-Spec](Liquity-v2-Core-Spec.md) |
+@@ -584,7 +586,7 @@ Oracle patterns and PriceFeed implementations specified in this document:
+ - **Type**: Functional | **Source**: formalization of old CollateralVault TODO "oracle reflection of dToken collateral value during Strategy impairment" / CollateralVault accounting (`A` vs `L_effective`, [CollateralVault Requirements Specification](CollateralVault.md) `VAULT-INV-001`)
+ - **Signature**: call `_applyBackingRatio(uint256 collJpy)` as the **final step** of each collateral `_fetchPricePrimary()`. Standard and peg feeds implement it in `DFPriceFeedBase`; composite-rate feed (sUSDS) implements equivalent logic in `sUSDSPriceFeed` (DF new file). Backing ratio is `CollateralVault.backingRatio() -> uint256` (1e18 scale, **downward-only** `<= 1e18`, defined in [CollateralVault Requirements Specification](CollateralVault.md) `VAULT-FR-016`).
+ - **Purpose**: dToken is a 1:1 claim on Underlying principal, but if Strategy hacking, bad debt, or slashing causes **actual Underlying holdings to fall below principal**, dToken depegs against Underlying. Returning only market price (collateral/JPY) would not reflect backing impairment and would cause **collateral overvaluation -> over-borrowing -> JPYdf bad debt**. Therefore multiply market price by **backing ratio** and return actual dToken collateral value.
+-- **Why placed at the final step of each inheritance path**: sUSDS uses the `CompositePriceFeed` inheritance path separate from `DFPriceFeedBase` ([ORCL-FR-012](#orcl-fr-012)). If backing multiplication were only in `DFPriceFeedBase`, composite-rate collateral would be missed. But multiple inheritance between `DFPriceFeedBase` and `CompositePriceFeed` would complicate upstream `MainnetPriceFeedBase` diamond/storage. Therefore sUSDS minimally duplicates `_convertUsdPriceToJpyWithFreeze` / `_applyBackingRatio` inside the DF new file. Proxy responsibility (source replacement and failure defense) is unchanged.
++- **Why placed at the final step of each inheritance path**: sUSDS uses the `CompositePriceFeed` inheritance path separate from `DFPriceFeedBase` ([ORCL-FR-012](#orcl-fr-012)). If backing multiplication were only in `DFPriceFeedBase`, composite-rate collateral would be missed. sUSDS therefore keeps a small local provider-call conversion and `_applyBackingRatio`; the actual JPY cache/freeze state remains exclusively in `JpyUsdRateProvider`. Proxy responsibility is unchanged.
+ - **Authorization**: none (internal, read through Proxy).
+ - **Preconditions (Checks)**: source (actual PriceFeed) references the corresponding `CollateralVault` (constructor-set, one feed per Vault; [§5](#5-interface-specification)). Collateral-specific `_fetchPricePrimary()` has already calculated market price `collJpy` (JPY-denominated, 18dec).
+ - **Behavior (Effects)** (final step of `_fetchPricePrimary()`, immediately before recording `lastGoodPrice`):
+@@ -701,7 +703,8 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | Variable | Type | Ownership | Description |
+ | --- | --- | --- | --- |
+ | `ethUsdOracle` (= collateral/USD; pseudocode `collUsdOracle`) | `Oracle{aggregator, stalenessThreshold, decimals}` | 🔵 upstream | Chainlink aggregator for collateral/USD. Upstream constructor asserts `decimals == 8`. Storage name remains upstream name (renaming would also be an edit) |
+-| `jpyUsdOracle` | `Oracle{...}` | 🟢 DF (`DFPriceFeedBase`) | Chainlink aggregator for JPY/USD (shared by all branches). DF base constructor asserts `decimals == 8`. Directly constructor-bound inside source; no setter. Replacement uses new source deployment + `PriceFeedProxy` source swap |
++| `jpyUsdRateProvider` | `address immutable` | 🟢 DF (every active feed source) | Same `JpyUsdRateProvider` address in every branch. Feed sources do not duplicate JPY cache or freeze state |
++| `jpyUsdOracle` / `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` / `jpyFreezeExpired` | provider state | 🟢 DF (`JpyUsdRateProvider`) | One shared Chainlink binding, cache provenance, freeze onset, and latched terminal-expiry decision for all branches. Provider constructor requires a fresh 8-decimal response |
+ | `wbtcBtcOracle` | `Oracle{...}` | 🟢 DF (`DFWBTCPriceFeed`) | WBTC/BTC peg monitor (additional storage specific to Peg-monitored) |
+ | `xautXauOracle` | `Oracle{...}` | 🟢 DF (future `DFXAUTPriceFeed`) | XAUT/XAU peg monitor (added on Composite peg upgrade) |
+ | `rateProviderAddress` | `address immutable` | 🔵 upstream-derived (pruned `CompositePriceFeed`) | canonical rate source (for sUSDS: `0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD`) |
+@@ -761,7 +764,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ ### <a id="orcl-sec-005"></a>ORCL-SEC-005: JPY/USD shared dependency failsafe
+ 
+ - Type: Security
+-- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Each healthy read stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`; the staleness threshold is `PRM-ORACLE-001`, and this soft-freeze is bounded by `PRM-ORACLE-006`. On the first failure, DF feeds set `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)` and continue with the cached rate. Thus a dormant branch cannot restart the 24h allowance for an already-stale cache even when the current call reverts or returns malformed data, while a failure before the cache becomes stale starts at first observation. Recovery resumes live rates automatically. When the bounded freeze expires, including on the first post-dormancy call, the feed transitions to the standard `lastGoodPrice` shutdown path. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback, so soft-freeze cannot mask them. `jpyFrozenSince`, `JpyRateFrozen`, and `JpyRateUnfrozen` provide the required observability.
++- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Exactly one `JpyUsdRateProvider` is deployed and injected into every active source; inherited or duplicated per-feed state is prohibited because it cannot provide shared storage. The provider stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`, and on first failure sets `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)`. Every branch therefore receives the same frozen rate, onset, recovery, and expiry decision. Recovery inside `PRM-ORACLE-006` resumes live rates automatically. Expiry is latched before returning it to consumers, so later Chainlink recovery cannot leave already-observing and dormant branches in different states; each active branch transitions through its standard `lastGoodPrice` shutdown path on its next fetch. When a source is behind `PriceFeedProxy`, it catches the expected source-level BorrowerOperations caller-mismatch on this path and returns `failure=true`; the registered Proxy performs shutdown in the same transaction. This preserves the provider latch instead of reverting all state changes. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback. Monitor the provider address/state/events (`JpyRateFrozen`, `JpyRateUnfrozen`, `JpyFreezeExpired`) externally and fail deployment/preflight if active sources reference different providers.
+ - Verification: unit (cached-rate timestamp provenance, immediate shutdown for stale and invalid responses on the first dormant-branch call after the freeze limit, first-observation anchoring while the cached rate is fresh, recovery within 24h, standard and sUSDS implementations), integration (Proxy path), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
+ 
+ ### <a id="orcl-sec-006"></a>ORCL-SEC-006: Peg monitoring for centralized wrapper collateral
+@@ -800,7 +803,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ ### <a id="orcl-gov-004"></a>ORCL-GOV-004: Source replacement operations (feed-level replacement)
+ 
+ - Statement: Logic changes are performed by deploying a new PriceFeed and replacing the feed-level source through `proposeSource()` -> 24h timelock -> `confirmSource()`, not by `upgradeTo` (`PriceFeedProxy` is non-upgradeable). Chainlink deprecation, collateral token changes, and Day-2 placeholder activation are handled without protocol redeployment.
+-- JPY/USD replacement follows the same procedure. Each source's `jpyUsdOracle` is constructor-bound and has no in-place setter. To change JPY/USD feed / staleness in the future, deploy a source for each target branch with the same collateral/USD, CollateralVault, and BorrowerOperations but the new JPY/USD oracle in constructor, then switch each branch through `PriceFeedProxy.proposeSource(newSource)` -> 24h -> `confirmSource()` / `confirmSourceEmergency()`. Because JPY/USD is shared by all branches, the runbook manages proposals, confirmations, and price-difference checks across all active branches together. If old/new price difference is within 1%, use normal `confirmSource()`; for larger differences, old-source failure, or soft-freeze recovery, use `confirmSourceEmergency()` privately ([ORCL-SEC-003](#orcl-sec-003)).
++- JPY/USD replacement is coordinated globally. Deploy one healthy replacement `JpyUsdRateProvider`, then deploy every replacement feed source against that exact provider address and verify the manifest/preflight provider-equality invariant before proposing any source. Manage all branch proposals, confirmations, and price-difference checks as one change set. Never deploy one provider per branch. If old/new price difference is within 1%, use normal `confirmSource()`; for larger differences, old-source failure, or soft-freeze recovery, use `confirmSourceEmergency()` privately ([ORCL-SEC-003](#orcl-sec-003)).
+ - Verification: manual (replacement runbook), integration (replacement flow and JPY/USD source swap)
+ 
+ ### <a id="orcl-gov-005"></a>ORCL-GOV-005: GOV procedure for Day-2 activation
+@@ -822,6 +825,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | ORCL-EVT-006 | `SourceSwitchValidated` (old/reference and new prices, oldSourceHealthy, priceGuardBypassed) | Distinguish normal replacement / cached-reference recovery / explicit emergency bypass; audit price jumps |
+ | ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` | Detect JPY soft-freeze. `timestamp` is the earlier of first observation and the cached JPY rate's stale boundary, so it may predate the emission block |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | Detect return to the live JPY/USD rate |
++| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` | Earliest stable P0 signal that the shared provider has latched terminal expiry; confirm every active branch shutdown path and user-action block |
+ 
+ - Price itself and fallback to `lastGoodPrice` are observed through upstream-base events/state (this document does not define those event bodies).
+ - Shutdown body is upstream `borrowerOperations.shutdownFromOracleFailure()`. Proxy side makes it observable through ORCL-EVT-004.
+@@ -987,11 +991,12 @@ Resolved: incorporated into `ORCL-FR-014` and `VAULT-INV-012`.
+ - [Parameters.md](../../../Parameters.md) — canonical source for branch↔collateral allocation, finalized status, staleness values, MCR/LLTV/CCR, depeg haircut values
+ - 🔵 `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol` — **upstream-derived with a hardening diff**. Chainlink acquisition, 18-decimal normalization, `PriceSource`, shutdown (does not include JPY conversion). Treats `roundId == 0`, `answeredInRound < roundId`, `updatedAt == 0`, and future `updatedAt` as invalid, and can return the response `updatedAt` alongside the existing internal result as provenance.
+ - 🔵 `contracts/src/PriceFeeds/CompositePriceFeed.sol` — **upstream-derived with sUSDS pruning**. Composite base for `USDS/USD × canonical rate` (`sUSDSPriceFeed` parent). WSTETH/RETH LST secondary fallback is removed from production `src`
+-- 🟢 `contracts/src/PriceFeeds/DFPriceFeedBase.sol` — **DF new**. `is MainnetPriceFeedBase`. Adds `jpyUsdOracle` + `_convertUsdPriceToJpyWithFreeze()` (soft-freeze of shared JPY leg) + `collateralVault.backingRatio()` multiplication (parent of standard/peg DF feeds)
++- 🟢 `contracts/src/PriceFeeds/JpyUsdRateProvider.sol` — **DF new**. Single deployment-wide JPY/USD Chainlink cache, freeze timer, recovery, and latched expiry state machine
++- 🟢 `contracts/src/PriceFeeds/DFPriceFeedBase.sol` — **DF new**. `is MainnetPriceFeedBase`. Consumes `JpyUsdRateProvider` for USD->JPY conversion and adds `collateralVault.backingRatio()` multiplication (parent of standard/peg DF feeds)
+ - 🟢 `contracts/src/PriceFeeds/PriceFeedProxy.sol` — **DF new**. Source replacement (24h timelock), try/catch shutdown, `Ownable2Step`
+ - 🟢 `contracts/src/PriceFeeds/DFWETHPriceFeed.sol` / `contracts/src/PriceFeeds/DFUSDCPriceFeed.sol` / `contracts/src/PriceFeeds/DFUSDTPriceFeed.sol` / `contracts/src/PriceFeeds/DFXAUTPriceFeed.sol` / `contracts/src/PriceFeeds/DFWBTCPriceFeed.sol` — **DF new**. Collateral-specific PriceFeeds (inherit `DFPriceFeedBase`, return JPY-denominated prices)
+ - 🟢 `contracts/src/PriceFeeds/DFWstETHPriceFeed.sol` — **DF new**. dwstETH market/canonical composite in `ORCL-FR-015`, including the ETH/USD cap, redemption-boundary handling, canonical rate, JPY conversion, and backing multiplication
+-- 🟢 `contracts/src/PriceFeeds/sUSDSPriceFeed.sol` — **DF new**. Composite rate (sUSDS-pruned `CompositePriceFeed` + DF JPY conversion / backing multiplication; minimal duplication with `DFPriceFeedBase` to avoid multiple inheritance)
++- 🟢 `contracts/src/PriceFeeds/sUSDSPriceFeed.sol` — **DF new**. Composite rate (sUSDS-pruned `CompositePriceFeed` + shared-provider JPY conversion + local backing multiplication)
+ - 🟢 `contracts/src/PriceFeeds/PriceFeedPlaceholder.sol` — **DF new**. Initial source for placeholder branches
+ - `contracts/script/DeployLiquity2.s.sol` — feed, staleness, and address wiring
+ - Chainlink Data Feeds: [https://data.chain.link/](https://data.chain.link/)
+diff --git a/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md b/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+index a9c92f3c..aa761163 100644
+--- a/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
++++ b/documents/jp/contributors/deltaforesight/operations/Incident-Notification-Policy.md
+@@ -268,9 +268,9 @@ incident log で使う運用識別子であり、component spec の requirement
+ | `ALRT-ORCL-002` | branch-local feed stale / invalid / revert risk | P1 | No, unless user operation is impacted | polling + `fetchPrice` dry-run | on-chain failure path を確認 |
+ | `ALRT-ORCL-003` | `ShutDownFromOracleFailure` / branch shutdown observed | P0 | Yes | TroveManager / PriceFeedProxy event, `shutdownTime` | user app block と urgent redemption 導線を確認 |
+ | `ALRT-ORCL-004` | JPY/USD shared feed age >= 80% of staleness threshold | P2 | No | shared JPY/USD `latestRoundData.updatedAt` | 全 branch 共通依存として早期確認 |
+-| `ALRT-ORCL-005` | `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | DF PriceFeed source state / event | freeze 起点 timestamp と検知 block、代替 source 要否を記録 |
+-| `ALRT-ORCL-006` | JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | `jpyFrozenSince`, source proposal state | oracle owner / GOV に escalation |
+-| `ALRT-ORCL-007` | JPY/USD freeze >= 12h | P0 | Yes, if still unresolved | `jpyFrozenSince` | public update と shutdown risk を準備 |
++| `ALRT-ORCL-005` | shared provider `JpyRateFrozen` / `jpyFrozenSince > 0` | P1 | No initially | `JpyUsdRateProvider` state / event | freeze 起点と検知 block、全 active source の provider address 一致、代替 source 要否を記録 |
++| `ALRT-ORCL-006` | shared JPY/USD freeze >= 6h and no recovery path | P0 | Prepare | provider `jpyFrozenSince`, source proposal state | oracle owner / GOV に escalation |
++| `ALRT-ORCL-007` | shared JPY/USD freeze >= 12h または `JpyFreezeExpired` | P0 | Yes | provider state / event | public update を準備し、expiry 時は全 active branch の shutdown / user action block を確認 |
+ | `ALRT-ORCL-008` | JPY/USD freeze resolved | P3 / Resolved | No, unless public notice was posted | `JpyRateUnfrozen` / state | incident log と public notice 解除 |
+ | `ALRT-ORCL-009` | `SourceProposed` | P2 | No | PriceFeedProxy event/state | timelock 期限と smoke-test owner を通知 |
+ | `ALRT-ORCL-010` | `SourceSwitchValidated.priceGuardBypassed == true` | P1 | No, unless user impact exists | PriceFeedProxy event | emergency bypass と価格差を監査 |
+@@ -565,11 +565,11 @@ monitor は strict `<` 判定を前提に、閾値ちょうどを fresh と扱
+ 
+ | 条件 | Severity | 初動 |
+ | --- | --- | --- |
+-| `JpyRateFrozen` または `jpyFrozenSince > 0` | P1 | 凍結起点 timestamp（初回観測と保存済み JPY rate の stale 境界の早い方）と検知 block、対象 source、全 active branch の価格取得状況を記録 |
++| provider `JpyRateFrozen` または `jpyFrozenSince > 0` | P1 | provider address と凍結起点 timestamp を記録し、全 active source が同じ provider を参照する証跡と全 branch の価格取得状況を確認 |
+ | freeze から 6h 経過、かつ復旧見込みまたは source proposal がない | P0 | GOV / oracle owner へ escalation。代替 source と public comms を準備 |
+ | freeze から 12h 経過 | P0 | shutdown リスクを public 告知候補に上げ、次回更新時刻を決める |
+ | `JpyRateUnfrozen` | P3 / Resolved | freeze 中の価格・user impact・対応有無を incident log に残す |
+-| `MAX_JPY_FREEZE_DURATION` 到達または branch shutdown へ遷移 | P0 | branch shutdown と同じ public 告知・user app block を確認 |
++| provider `JpyFreezeExpired` / `MAX_JPY_FREEZE_DURATION` 到達 | P0 | 意図した human recipient への alert delivery、全 active branch の shutdown、public 告知・user app block を確認 |
+ 
+ JPY/USD freeze は即時 branch shutdown ではない。借入、清算、redemption が継続する
+ 限り、public 文言は「価格換算の共通 FX レッグが last-good rate で一時継続中」
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Low-04-Shared-Jpy-Freeze-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Low-04-Shared-Jpy-Freeze-Differential-Review.md
+new file mode 100644
+index 00000000..c9192e81
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Low-04-Shared-Jpy-Freeze-Differential-Review.md
+@@ -0,0 +1,161 @@
++# External Audit Low 04: Shared JPY Freeze 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-03)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Oracle.md` の `ORCL-SEC-005` を参照する。
++
++## Executive Summary
++
++外部監査 Low 04「Independent JPY Freeze Timers Create Cross-Branch Price Divergence」の主要指摘は再現した。
++修正前は各 feed source が `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` を別 storage に持つため、同じ
++JPY/USD aggregator を参照していても、最後に呼ばれた時刻と report が異なる branch は outage 中の換算 rate と24時間の
++freeze 起点が分岐した。
++
++判定は **Low accepted with recommendation correction** とする。監査推奨の「共通 `JPYFreezeBase` を継承する」は Solidity
++では shared storage を作らない。継承 state は各 deploy 済み instance に別々に配置されるため、問題を解消できない。
++実際の修正は deployment-wide に1つの `JpyUsdRateProvider` を deploy し、全 active feed source がその同一 contract の
++rate/cache/freeze state を読む構成とした。
++
++| Severity | New finding count |
++| -------- | ----------------: |
++| Critical |                 0 |
++| High     |                 0 |
++| Medium   |                 0 |
++| Low      |                 0 |
++
++**Recommendation**: 修正と回帰試験を merge 可。production activation は shared provider の外部監視、escalation target、
++human recipient、test incident の end-to-end delivery 証跡が揃うまで block する。
++
++## Scope And Baseline
++
++- 外部指摘: Low 04 — Independent JPY Freeze Timers Create Cross-Branch Price Divergence
++- review baseline: `origin/develop` at `8bf86300bde763c3c680c763052300293b3e2542`
++- production contracts:
++  - `contracts/src/PriceFeeds/JpyUsdRateProvider.sol`
++  - `contracts/src/PriceFeeds/DFPriceFeedBase.sol`
++  - `contracts/src/PriceFeeds/sUSDSPriceFeed.sol`
++  - concrete Standard / WBTC feed constructors
++- deployment / preflight: `contracts/script/DeployLiquity2.s.sol`, `contracts/utils/mainnet-preflight.ts`
++- monitoring consumers: `frontend/app/src/services/Prices.tsx`, `frontend/ops/src/lib/{bindings,snapshot,alerts}.ts`
++- normative sources: JP / EN `Oracle.md`, mainnet env-freeze runbook、JPY staleness decision、incident policy
++
++## Git History Context
++
++- `3c9418e4` が shared JPY/USD leg の terminal shutdown を避ける soft-freeze を導入した。
++- `f99fe397` が cached report の age に freeze clock を anchor したが、state 自体は各 feed instance に残った。
++- `DFPriceFeedBase` を継承する各 Standard / WBTC source と、別継承系の `sUSDSPriceFeed` は、同じ raw oracle address を持つだけで
++  cache / timer を共有していなかった。
++- source contracts は `delegatecall` upgrade 対象ではなく `PriceFeedProxy` の後段に独立 deploy されるため、共通基底の storage
++  宣言は branch 間共有にならない。
++
++## A/B Reproduction
++
++修正前 baseline に一時 PoC を追加し、次を実行した。
++
++1. `t0`、JPY/USD = 0.006667 で古い WETH feed を deploy。
++2. `t0 + 1h`、JPY/USD = 0.005 に更新して新しい WETH feed を deploy。
++3. そこから72h+1秒進め、collateral/USD だけ fresh にする。
++4. 両 feed を順に fetch する。
++
++baseline は両 call が `failure=false` のまま、古い feed は0.006667、新しい feed は0.005を freeze し、
++`jpyFrozenSince` も1時間ずれた。修正後の同じ test は両 feed の `jpyUsdRateProvider()` が一致し、price、
++`lastGoodJpyRate`、`jpyFrozenSince` がすべて一致する。
++
++## Claim-By-Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| raw JPY oracle は共通だが freeze state は instance ごと | True | baseline PoC で rate / timer の双方が分岐 |
++| branch 間で異なる JPY 換算になり得る | True | 同一 collateral/USD でも outage 中の返却 price が不一致 |
++| shutdown 時刻も branch ごとにずれ得る | True | `jpyFrozenSince` が instance ごとの cached report に依存 |
++| shared inheritance base で単一 state になる | False | Solidity inheritance は deploy instance ごとの storage |
++| single shared state machine が必要 | True | external provider / coordinator の1 instance が必要 |
++
++## What Changed
++
++- `JpyUsdRateProvider` を追加し、raw Chainlink aggregator、staleness、18-decimal cache、cache provenance、freeze onset、
++  terminal expiry を1箇所へ集約した。
++- provider constructor は code presence、非ゼロ staleness、8 decimals、fresh / structurally valid initial response を要求する。
++- `fetchJpyUsdRate()` は permissionless。fresh response は shared cache を更新し、invalid / stale / revert は同じ cached rate を返す。
++- freeze 起点は Mid 03 の修正どおり `min(observation, cached updatedAt + staleness)`。continuous failure 中は動かさない。
++- 24時間到達時は `jpyFreezeExpired=true` を state に先に latch する。最初に expiry を観測した branch の後で raw oracle が
++  回復しても、未観測 branch だけが live に戻る split-brain を作らない。
++- production の `PriceFeedProxy` 配下では source 自身は `BorrowerOperations` の登録 caller ではない。shared expiry を latch した
++  provider call の後でその認可 revert を伝播すると latch まで rollback されるため、JPY expiry path に限り source は認可失敗を
++  catch して `lastGoodPrice` / `failure=true` を返す。登録済み Proxy が同一 transaction 内で branch shutdown を実行する。
++- `DFPriceFeedBase` と `sUSDSPriceFeed` から JPY state / event / raw-oracle read の重複を削除し、provider result の換算だけ残した。
++- deploy script は provider を1回だけ作り全 active sources に注入する。manifest は provider address を env-freeze と各
++  `dfYield` entry に記録し、mainnet preflight は全 active entry の一致を必須とする。
++- app / Ops は source から provider address を解決して状態を読む。Ops snapshot は複数 provider を検出すると fail-closed し、
++  alert source key は provider、`JpyFreezeExpired` は public message 必須の P0 とする。
++
++## Differential Side-Effect Review
++
++| Surface | Assessment | Result |
++| --- | --- | --- |
++| Healthy price math | 8→18 decimal scalingと `Math.mulDiv(usd, 1e18, rate)` は維持 | Unchanged |
++| Shared outage | 全 feed が同じ contract state を読む | Divergence eliminated |
++| Recovery <24h | どの consumer の call でも provider を unfreeze できる | Liveness preserved |
++| Expiry >=24h | expiry を global latch 後、source は失敗を返し登録済み Proxy が shutdown | Latch survives; split recovery prevented |
++| Collateral / canonical / backing order | branch-local failure は provider call 前後の既存優先順位を維持 | Unchanged |
++| Gas griefing | provider は同じ `InsufficientGasForExternalCall()` selector を bubble | Proxy guard preserved |
++| ABI | feed-local JPY gettersを削除し `jpyUsdRateProvider()` を追加 | Consumers migrated intentionally |
++| Storage | source-local JPY slotsを削除。source は delegatecall proxy implementation ではない | No live storage migration |
++| Deployment | 1 provider deploy、全 active constructor に同 address | Manifest / preflight enforced |
++| Monitoring | provider state、address equality、latched expiry を process 外から監視 | Code/runbook updated |
++
++## Adversarial Safety And Liveness Review
++
++- **Different deployment times**: feed constructor は provider の同一 cache を読むだけで、instance 固有 cache を seed しない。
++- **Dormant consumer**: active consumer が開始した freeze / expiry は provider state に残り、後から来た branch も同じ判定を受ける。
++- **Recovery race**: expiry 前は最初の healthy call が global unfreeze、expiry 後は latch が raw-oracle recovery より優先する。
++- **Proxy rollback**: source からの未認可 shutdown revert を JPY expiry path で catch し、provider の state mutation を保持する。
++  Proxy integration test は provider latch、source terminal state、registered Proxy による BO shutdown を同時に検証する。
++- **Malformed / revert**: raw response が timestamp を提供できなくても shared cached provenance から起点を決める。
++- **Repeated callers**: permissionless call で freeze 起点を進めたり terminal cache を変更したりできない。
++- **Provider miswiring**: manifest/preflightとOps snapshotが active source 間の address 不一致を拒否する。JPY source replacement は
++  provider を1つだけ deploy し、全 source confirmation を1 governance batchで行う。
++- **Terminal semantics**: branch shutdown の不可逆性は変更しない。source swap を shutdown 済み branch の稼働再開とは扱わない。
++
++## Verification
++
++実行済み:
++
++```text
++PASS baseline PoC on 8bf86300
++     independent feeds returned different frozen prices and freeze timestamps
++PASS full Foundry suite
++     1444 passed; 0 failed; 1 skipped
++PASS frontend app typecheck + test:ci
++     594 tests passed
++PASS frontend ops typecheck + test:ci
++     70 scripts passed
++PASS contracts TypeScript typecheck
++PASS forge fmt --check (new/modified production source + provider test)
++PASS git diff --check
++PASS production bytecode size inspection
++     JpyUsdRateProvider 1,577 B; standard feeds 3,008 B;
++     DFWBTCPriceFeed 3,457 B; sUSDSPriceFeed 3,428 B
++PASS method-selector inspection
++     feed-local JPY getters removed; jpyUsdRateProvider() added; fetch selectors unchanged
++```
++
++remote CI の最終結果は PR status に追記する。
++
++## Residual Risk And Production Gate
++
++- provider は shared dependency の意図を明示する一方、blast radius 自体を消さない。provider contract / raw JPY feed の障害は
++  全 active branch に影響するため、外部 monitor と synthetic price-path probe が必要である。
++- source code と alert rule の存在だけでは production alert delivery の証跡にならない。enabled external monitor、escalation target、
++  intended human recipient、label 付き test incident の create→delivery確認→resolve が activation gate である。
++- JPY provider replacement は複数 branch に跨る governance operation である。rolling confirmation は一時的な provider 分岐を
++  作るため禁止し、同一 governance transaction の batch とする。
++- `JpyRateFrozen` は最初の failing call まで emit されない。raw `latestRoundData.updatedAt` の外部 polling を継続する。
++
++## Methodology
++
++- baseline に最小 PoC を置き、修正前後で rate / timer / returned price の A/B を取った。
++- git history で soft-freeze 導入と Mid 03 clock fix を追跡し、今回が別の state-ownership 問題であることを確認した。
++- 推奨された inheritance の EVM storage semantics を反証し、single deployed provider を最小の正しい境界とした。
++- healthy / stale / invalid / recovery / expiry、standard / WBTC / sUSDS、direct / Proxy、deployment / frontend monitoring を横断した。
++- ABI、storage、constructor wiring、manifest、preflight、alert source / severity、JP canonical spec / EN translation / runbook を
++  side-effect surface として確認した。
+diff --git a/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md b/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
+index c5db702a..676f5f82 100644
+--- a/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
++++ b/documents/jp/protocol/launch/decisions/jpyusd-staleness-threshold-determination.md
+@@ -98,7 +98,7 @@ FX が 3 連休（土日月）でクローズする最悪条件を含め、過
+ 
+ ## 5. soft-freeze との関係：72h を採っても無期限 stale にはならない
+ 
+-72h 到達後は `ORCL-SEC-005` の有界 soft-freeze が働くため、本パラメータは stale レートの無期限利用を許可しない。健全時に `lastGoodJpyRate` と同じ response の `updatedAt` を保存し、障害時の `jpyFrozenSince` は初回観測と `lastGoodJpyUpdatedAt + stalenessThreshold` の早い方とする。これにより無通信 branch や invalid / revert 応答でも、保存済み rate が既に stale なら24h窓を再開始しない。保存済み rate がまだ fresh な間の障害は初回観測から計時する。障害の早期検知は引き続き feed の `updatedAt` を直接監視する。規範動作は [Oracle](../../product/spec/Oracle.md) `ORCL-SEC-005`、source 差替の起動時刻と証跡は [Mainnet Deploy Env Freeze Runbook](../gates/Mainnet-Deploy-Env-Freeze-Runbook.md) §3.1.1 を正本とする。
++72h 到達後は `ORCL-SEC-005` の有界 soft-freeze が働くため、本パラメータは stale レートの無期限利用を許可しない。deployment-wide に1つの `JpyUsdRateProvider` が `lastGoodJpyRate` と同じ response の `updatedAt` を保存し、障害時の `jpyFrozenSince` は初回観測と `lastGoodJpyUpdatedAt + stalenessThreshold` の早い方とする。全 active branch はこの同一 rate / timer を読むため、無通信 branch ごとに24h窓を再開始しない。障害の早期検知は provider と underlying feed の `updatedAt` を直接監視する。規範動作は [Oracle](../../product/spec/Oracle.md) `ORCL-SEC-005`、source 差替の起動時刻と証跡は [Mainnet Deploy Env Freeze Runbook](../gates/Mainnet-Deploy-Env-Freeze-Runbook.md) §3.1.1 を正本とする。
+ 
+ ---
+ 
+diff --git a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index 7f409877..a8e6fe7b 100644
+--- a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -63,12 +63,14 @@ Broadcast / activation evidence には、各 feed について次の列を残す
+ | Signal                           | Warning                                                                                                                                                          | Critical / incident                                                                                                                                                                                                                                      |
+ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+ | branch-local collateral/USD feed | `secondsToStale <= min(21600, stalenessThreshold / 4)`                                                                                                           | stale 到達、invalid round、または branch `ShutDownFromOracleFailure`                                                                                                                                                                                     |
+-| JPY/USD feed                     | WATCH: `age > 25h`（heartbeat 1 回欠落＝実測上限 24.02h・25h 超 0 件、監視強化）。Warning: `secondsToStale <= 86400`（= `age >= 48h`、proposeSource 起動の目安） | `JpyRateFrozen` 発火、`jpyFrozenSince > 0`、または stale/invalid が継続                                                                                                                                                                                  |
++| JPY/USD feed                     | WATCH: `age > 25h`（heartbeat 1 回欠落＝実測上限 24.02h・25h 超 0 件、監視強化）。Warning: `secondsToStale <= 86400`（= `age >= 48h`、proposeSource 起動の目安） | shared provider の `JpyRateFrozen` / `jpyFrozenSince > 0` / `JpyFreezeExpired`、active source 間 provider address 不一致、または stale/invalid が継続 |
+ | JPY soft-freeze age              | `jpyFrozenSince > 0` から 12h（提案済み source の confirm 準備 / feed 自己回復の確認）                                                                           | freeze 開始（age≈72h）までに `proposeSource` 未起動なら 24h timelock が freeze 窓（24h）に収まらず pre-shutdown swap 不可 → shutdown（age≈96h）受容＋事後差替へ切替（incident）。提案済みなら timelock 明けに `confirmSource` / `confirmSourceEmergency` |
+ 
+-`jpyFrozenSince` と `JpyRateFrozen.timestamp` は、初回障害観測と `lastGoodJpyRate` に対で保存した `lastGoodJpyUpdatedAt + stalenessThreshold` の早い方で、event emission block より古い場合がある。したがって alert age は event block ではなくこの timestamp から計算し、`JpyRateFrozen` を待たず off-chain / RPC でも `latestRoundData.updatedAt` の残時間を常時見る。保存済み rate の stale 境界から24hを既に超えた無通信 branch は、stale・invalid・revert の別を問わず次の `fetchPrice()` と同じ call で shutdown へ進む。保存済み rate がまだ fresh な間の障害だけ初回観測から計時する。stale 直前の warning は go/no-go 判断ではなく incident 予防のための運用 signal として扱う。
++`JpyUsdRateProvider.jpyFrozenSince` と `JpyRateFrozen.timestamp` は、初回障害観測と単一 cache の `lastGoodJpyUpdatedAt + stalenessThreshold` の早い方で、event emission block より古い場合がある。alert age は event block ではなくこの timestamp から計算し、provider と underlying `latestRoundData.updatedAt` を常時見る。全 active source の `jpyUsdRateProvider()` が manifest の単一 address と一致することも外部監視する。期限到達時は provider が `jpyFreezeExpired` を latch するため、後から JPY/USD が fresh に戻っても未観測 branch だけを回復扱いにしない。`JpyFreezeExpired` は全 active branch の shutdown path と user action block を確認する P0 signal とする。
+ 
+-**source 差替のタイミング（shutdown 前に間に合わせる）**: JPY/USD の差替は `proposeSource → 24h timelock → confirmSource` / `confirmSourceEmergency` で、**24h timelock は emergency でも不可避**（emergency が bypass するのは価格差 guard のみ）。soft-freeze 窓も 24h（shutdown ≒ `jpyFrozenSince + 24h` ≒ age 96h）なので、**freeze 開始（age≈72h）までに `proposeSource` を起動していないと confirm が shutdown に間に合わない**。したがって deprecation / 永続障害が疑われたら WATCH（`age > 25h`）/ Warning（`age >= 48h`）段階で即 `proposeSource` を起動し、**遅くとも age 72h を絶対デッドライン**とする。`confirmSource` は timelock 明けに実行する（旧 feed が fresh なら live 価格、stale/freeze 中なら Proxy の path 別 last-good cache に対する新旧価格差 ≤1% guard）。1%を超える明示的な incident 復旧だけ `confirmSourceEmergency` を private 送信し、通常経路の暗黙 bypass に依存しない。これで新 fresh feed へ切替 → `JpyRateUnfrozen` → shutdown 回避。期限内に提案できなければ age≈96h で `lastGoodPrice` shutdown し、事後差替で復旧する（有界フェイルセーフの想定動作）。
++production activation は、provider address 一致・`jpyFrozenSince`・`jpyFreezeExpired` を process 外から監視する external monitor、P0/P1 escalation target、明記した human recipient を用意し、label 付き test incident の作成→想定 policy / recipient への到達確認→resolve まで完了するまで block する。dashboard、structured log、sink の HTTP 2xx だけを delivery evidence としない。
++
++**source 差替のタイミング（shutdown 前に間に合わせる）**: 新しい JPY/USD feed / staleness で健全な `JpyUsdRateProvider` を**1つだけ** deploy し、全 replacement source をその同一 address に向ける。全 branch の `proposeSource` を同じ change set で開始し、24h timelock 後の confirm は governance batch で同一 transaction にまとめる。rolling confirm で一時的に provider を分岐させてはならない。emergency が bypass するのは価格差 guard のみで timelock は不可避。freeze 開始（age≈72h）までに proposal を開始できない場合は pre-shutdown switch に間に合わないため、WATCH / Warning 段階で起動する。`JpyFreezeExpired` 後は branch shutdown が終局であり、source 差替を稼働再開と表現してはならない。
+ 
+ ### 3.2 Underlying tokens
+ 
+diff --git a/documents/jp/protocol/product/parameters/Parameter-Catalog.md b/documents/jp/protocol/product/parameters/Parameter-Catalog.md
+index 7ad89ebb..1e3681e5 100644
+--- a/documents/jp/protocol/product/parameters/Parameter-Catalog.md
++++ b/documents/jp/protocol/product/parameters/Parameter-Catalog.md
+@@ -85,7 +85,7 @@ componentの挙動は各component specを正とする。本書の「意味」は
+ | `PRM-ORACLE-003` | stETH/USD sourceのstaleness threshold | oracle source | seconds | stETH/USD `Oracle.stalenessThreshold` | source deploy immutable / Protocol Governance | `Oracle.md` |
+ | `PRM-ORACLE-004` | USDC/USD sourceのstaleness threshold | oracle source | seconds | USDC/USD `Oracle.stalenessThreshold` | source deploy immutable / Protocol Governance | `Oracle.md` |
+ | `PRM-ORACLE-005` | WBTC/BTC sourceのstaleness threshold | oracle source | seconds | WBTC/BTC `Oracle.stalenessThreshold` | source deploy immutable / Protocol Governance | `Oracle.md` |
+-| `PRM-ORACLE-006` | JPY rate soft-freezeの最大継続時間 | global | seconds | `DFPriceFeedBase.MAX_JPY_FREEZE_DURATION` / `sUSDSPriceFeed.MAX_JPY_FREEZE_DURATION` | contract constant / Protocol Governance | `Oracle.md` |
++| `PRM-ORACLE-006` | JPY rate soft-freezeの最大継続時間 | global | seconds | `JpyUsdRateProvider.MAX_JPY_FREEZE_DURATION` | contract constant / Protocol Governance | `Oracle.md` |
+ 
+ ### 3.4 Governance delay parameters
+ 
+diff --git a/documents/jp/protocol/product/spec/Oracle.md b/documents/jp/protocol/product/spec/Oracle.md
+index 01654d93..71997c6a 100644
+--- a/documents/jp/protocol/product/spec/Oracle.md
++++ b/documents/jp/protocol/product/spec/Oracle.md
+@@ -112,7 +112,7 @@ Collateral/JPY        = (Collateral/USD) ÷ (JPY/USD)        // market price（
+ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 全担保共通の後段層（ORCL-FR-014, floor）
+ ```
+ 
+-※ Chainlink の JPY/USD フィード（`0xBcE206caE7f0ec07b545EddE332A47C2F75bbeb3`）は **USD per JPY**（≈ 0.006667）を返すため、上記の除算式で JPY 換算する。この JPY/USD 取得と除算は DF 基底 `DFPriceFeedBase`（§5）が担い、担保/USD までは upstream 由来基底が算出する。
++※ Chainlink の JPY/USD フィード（`0xBcE206caE7f0ec07b545EddE332A47C2F75bbeb3`）は **USD per JPY**（≈ 0.006667）を返す。JPY/USD の取得・cache・freeze 状態は deployment-wide に1つだけ配置する `JpyUsdRateProvider` が担い、全 active feed が同じ provider を参照する。`DFPriceFeedBase` / `sUSDSPriceFeed` は provider の返す rate で除算する。
+ 
+ ※ JPY/USD の値は [Parameters](../../../Parameters.md) `PRM-ORACLE-001`、障害時挙動は `ORCL-SEC-005`、FX 休場を含む根拠は [設計メモ](../../launch/decisions/jpyusd-staleness-threshold-determination.md) を正本とする。
+ 
+@@ -124,7 +124,8 @@ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 
+ | --- | --- |
+ | source | `PriceFeedProxy` が委譲する実 PriceFeed 実装。差替可能（24h timelock） |
+ | 担保/USD オラクル | 担保資産の USD 建て Chainlink アグリゲータ。upstream ストレージ名は `ethUsdOracle`（担保が ETH 以外でも同名・本書擬似コードでは可読性のため `collUsdOracle` と表記） |
+-| `jpyUsdOracle` | JPY/USD の Chainlink アグリゲータ（**USD per JPY** を返す）。全ブランチ共通。DF 基底が保持 |
++| `jpyUsdOracle` | JPY/USD の Chainlink アグリゲータ（**USD per JPY** を返す）。`JpyUsdRateProvider` が1箇所で保持 |
++| `jpyUsdRateProvider` | 全 active feed に同じ address を注入する JPY rate/cache/freeze の単一 state machine |
+ | canonical rate | yield-bearing トークンの原資産換算レート（sUSDS なら USDS per sUSDS）。Chainlink ではなく rate provider コントラクトから取得 |
+ | `PriceSource` | 価格ソース状態（`primary` / `ETHUSDxCanonical` / `lastGoodPrice`）。upstream `MainnetPriceFeedBase` 定義を保持するが、現行 production feed は `primary` / `lastGoodPrice` のみを使う |
+ | `lastGoodPrice` | 障害時に返し続ける最後の健全価格。upstream 基底（feed 単位）と Proxy（通常経路 `_lastGoodPrice` / redemption 経路 `_lastGoodRedemptionPrice`）の二層 |
+@@ -170,7 +171,7 @@ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 
+ 
+ `PriceFeedProxy`（外側固定参照）と DF PriceFeed 実装（内側 source）の主要関数。挙動は §6 機能要件、可視性のみ以下に要約（非規範）。
+ 
+-各 DF PriceFeed は、(1) **upstream 由来の価格取得基底を継承**し、(2) **JPY 換算と dToken backing 乗算を DeltaForesight 独自ファイルで足す**、二層構成で実装する。標準・peg 型 feed は `DFPriceFeedBase` に共通処理を持つ。sUSDS composite 型は sUSDS 用に pruning した `CompositePriceFeed` 継承を保つため、`sUSDSPriceFeed`（DF 新規ファイル）内に同じ JPY 換算 / backing 乗算パターンを最小重複して持つ。`MainnetPriceFeedBase` は Chainlink 応答検証のみを明示硬化し、JPY 建てかつ backing 反映後の dToken 担保価格は DF 層で構成する。
++各 DF PriceFeed は upstream 由来の価格取得基底を継承し、deployment-wide の `JpyUsdRateProvider` から同じ JPY rate を取得して branch-local backing 比を適用する。標準・peg 型は `DFPriceFeedBase` に共通 plumbing を持つ。sUSDS は pruned `CompositePriceFeed` 継承を保つため provider call と backing 層だけを小さく重複するが、JPY cache / freeze state は重複しない。
+ 
+ **PriceFeedProxy（`Ownable2Step`、非アップグレード）**
+ 
+@@ -450,7 +451,7 @@ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 
+ - **Type**: Functional ｜ **Source**: 旧 CollateralVault「dToken 担保価値のオラクル反映（Strategy 毀損時）」TODO の正式化 / CollateralVault 会計（`A` vs `L_effective`、[CollateralVault 要件定義](./CollateralVault.md) `VAULT-INV-001`）
+ - **シグネチャ**: 各担保 `_fetchPricePrimary()` の**最終段**で `_applyBackingRatio(uint256 collJpy)` を呼ぶ。標準・peg 型は `DFPriceFeedBase`、composite rate 型（sUSDS）は `sUSDSPriceFeed`（DF 新規ファイル）内の同名処理で実装する。backing 比は `CollateralVault.backingRatio() → uint256`（1e18 基準・**下方専用** `<= 1e18`、定義は [CollateralVault 要件定義](./CollateralVault.md) `VAULT-FR-016`）。
+ - **目的**: dToken は Underlying 元本の 1:1 請求権だが、運用先 Strategy のハッキング・bad debt・slashing で **Underlying 実保有が元本を下回る**と dToken は Underlying に対してデペグする。market price（担保/JPY）だけを返すと backing 毀損が担保評価に反映されず、**担保過大評価 → 過剰借入 → JPYdf の Bad Debt** を招く。これを防ぐため market price に **backing 比（裏付け率）** を乗じ、dToken の実質担保価値を返す。
+-- **なぜ各継承系の最終段に置くか**: sUSDS は `CompositePriceFeed` 継承系で `DFPriceFeedBase` と別経路（[ORCL-FR-012](#orcl-fr-012-composite-rate-パターンsusdsyield-bearing)）。`DFPriceFeedBase` だけに乗算層を置くと composite rate 担保に backing が掛からず漏れる。一方で `DFPriceFeedBase` と `CompositePriceFeed` の多重継承は upstream `MainnetPriceFeedBase` 周りの diamond / storage を複雑にするため、sUSDS は DF 新規ファイル内で `_convertUsdPriceToJpyWithFreeze` / `_applyBackingRatio` を最小重複する。Proxy は責務（source 差替・障害防御）を変えない。
++- **なぜ各継承系の最終段に置くか**: sUSDS は `CompositePriceFeed` 継承系で `DFPriceFeedBase` と別経路（[ORCL-FR-012](#orcl-fr-012-composite-rate-パターンsusdsyield-bearing)）。sUSDS は provider-call conversion と `_applyBackingRatio` だけを小さく重複し、実際の JPY cache / freeze state は `JpyUsdRateProvider` だけに置く。Proxy の責務は変えない。
+ - **権限**: なし（internal、Proxy 経由で読まれる）。
+ - **事前条件（Checks）**: source（実 PriceFeed）が対応 `CollateralVault` を参照（constructor で設定、feed↔Vault 1対1。[§5](#5-インターフェース仕様)）。担保別 `_fetchPricePrimary()` が market price `collJpy`（JPY 建て・18dec）を算出済み。
+ - **動作（Effects）**（`_fetchPricePrimary()` の最終段、`lastGoodPrice` 記録の直前）:
+@@ -567,7 +568,8 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ | 変数 | 型 | 帰属 | 説明 |
+ | --- | --- | --- | --- |
+ | `ethUsdOracle`（= 担保/USD。本書擬似コード `collUsdOracle`） | `Oracle{aggregator, stalenessThreshold, decimals}` | 🔵 upstream | 担保/USD の Chainlink アグリゲータ。`decimals == 8` を upstream constructor で `assert`。ストレージ名は upstream のまま（rename も「編集」になるため） |
+-| `jpyUsdOracle` | `Oracle{...}` | 🟢 DF（`DFPriceFeedBase`） | JPY/USD の Chainlink アグリゲータ（全ブランチ共通）。`decimals == 8` を DF 基底 constructor で `assert`。source 内では constructor-bound で直接 setter は持たず、差替は新 source デプロイ＋`PriceFeedProxy` source swap で行う |
++| `jpyUsdRateProvider` | `address immutable` | 🟢 DF（全 active feed source） | 全 branch で同一の provider address。feed source は JPY cache / freeze state を重複保持しない |
++| `jpyUsdOracle` / `lastGoodJpyRate` / `lastGoodJpyUpdatedAt` / `jpyFrozenSince` / `jpyFreezeExpired` | provider state | 🟢 DF（`JpyUsdRateProvider`） | JPY/USD binding、cache provenance、freeze 起点、終局 expiry 判定を全 branch で共有。constructor は fresh な8桁 response を要求 |
+ | `wbtcBtcOracle` | `Oracle{...}` | 🟢 DF（`DFWBTCPriceFeed`） | WBTC/BTC ペグ監視（Peg-monitored 固有の追加ストレージ） |
+ | `xautXauOracle` | `Oracle{...}` | 🟢 DF（将来 `DFXAUTPriceFeed`） | XAUT/XAU ペグ監視（Composite peg 昇格時に追加） |
+ | `rateProviderAddress` | `address immutable` | 🔵 upstream 由来（pruned `CompositePriceFeed`） | canonical rate 取得先（sUSDS は `0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD`） |
+@@ -628,12 +630,13 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ 
+ - Type: Security
+ - Statement:
+-  1. 健全な JPY/USD は `lastGoodJpyRate` と同じ response の `updatedAt` を `lastGoodJpyUpdatedAt` に対で保存し、JPY 換算へ使う。
+-  2. stale・無効値・取得失敗では即時 shutdown せず、`lastGoodJpyRate` を代用する。初回障害観測時に `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)` とし、障害応答の型によらず保存済み rate の stale 境界より freeze 起点を後ろへ動かさない。これにより無通信 branch や timestamp を返さない revert でも24h窓を再開始しない一方、保存済み rate がまだ fresh な間の障害は初回観測から計時する。`JpyRateFrozen(timestamp, frozenRate)` の `timestamp` はこの起点を記録する。
+-  3. `jpyFrozenSince` から `PRM-ORACLE-006` 未満は通常処理を継続する。回復時は live rate へ戻し、時刻をゼロクリアして `JpyRateUnfrozen` を発火する。
+-  4. `PRM-ORACLE-006` 以上継続した場合は `lastGoodPrice` を使う標準 branch shutdown へ移行する。
+-  5. 担保・peg・canonical・backing レッグの障害は JPY soft-freeze より優先して標準 shutdown とする。
+-  6. `InsufficientGasForExternalCall` は障害へ変換せず再 revert する。
++  1. deployment-wide に `JpyUsdRateProvider` を1つだけ配置し、全 active feed source へ同じ address を注入する。継承基底や feed ごとの state copy は shared storage にならないため禁止する。
++  2. provider は健全な JPY/USD の `lastGoodJpyRate` と同じ response の `updatedAt` を `lastGoodJpyUpdatedAt` に対で保存する。
++  3. stale・無効値・取得失敗では即時 shutdown せず、provider の単一 cache を代用する。初回障害観測時に `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)` とし、全 branch が同じ rate / 起点 / 回復判定を受け取る。
++  4. `PRM-ORACLE-006` 未満で回復した場合は live rate へ戻し `JpyRateUnfrozen` を発火する。期限到達時は `jpyFreezeExpired` を先に latch し、後続の Chainlink 回復で未観測 branch だけが回復扱いにならないようにする。各 active branch は次回 fetch で標準 shutdown へ移行する。
++  5. `PriceFeedProxy` 配下の source は、この expiry path で想定される BorrowerOperations caller 不一致を catch して `failure=true` を返し、登録済み Proxy が同一 transaction で shutdown する。provider latch を含む全 state change を revert してはならない。
++  6. 担保・peg・canonical・backing レッグの障害は JPY soft-freeze より優先して標準 shutdown とする。
++  7. `InsufficientGasForExternalCall` は障害へ変換せず再 revert する。
+ - Parameters: `PRM-ORACLE-001`、`PRM-ORACLE-006`
+ - Verification: unit（保存済み rate の timestamp provenance、stale / invalid 応答で無通信の freeze 上限超過後の初回 call が即 shutdown、保存済み rate が fresh な間の invalid response は初回観測 anchor、24h 内回復、標準 / sUSDS 両実装）, integration（Proxy 経路）, fork
+ 
+@@ -695,6 +698,7 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ | ORCL-EVT-006 | `SourceSwitchValidated`（old/reference・new 価格、oldSourceHealthy、priceGuardBypassed） | 通常差替 / cache 基準復旧 / 明示 emergency bypass の識別、価格ジャンプ監査 |
+ | ORCL-EVT-007 | `JpyRateFrozen(timestamp, frozenRate)` | JPY soft-freeze の検知。`timestamp` は初回観測と保存済み JPY rate の stale 境界の早い方で、event emission block より古い場合がある |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | live JPY/USD への復帰検知 |
++| ORCL-EVT-009 | `JpyFreezeExpired(timestamp, frozenRate)` | shared provider の終局 expiry を示す最速の P0 signal。全 active branch の shutdown と user action block を確認 |
+ 
+ - 価格そのもの・`lastGoodPrice` への退避は upstream 基底由来のイベント／状態で観測する（本書は発火本体を持たない）。
+ - shutdown の発火本体は upstream `borrowerOperations.shutdownFromOracleFailure()`。Proxy 側は ORCL-EVT-004 で可観測化する。
+@@ -836,10 +840,11 @@ Resolved: `ORCL-FR-014`、`VAULT-INV-012` に反映済み。
+ - [Parameters.md](../../../Parameters.md) — ブランチ↔担保割当・確定状況・staleness 確定値・MCR/LLTV/CCR・デペグ織込み値の正本
+ - 🔵 `contracts/src/PriceFeeds/MainnetPriceFeedBase.sol` — **upstream 由来・硬化差分あり**。Chainlink 取得・18 桁正規化・`PriceSource`・shutdown（JPY 換算は含まない）。`roundId == 0` / `answeredInRound < roundId` / `updatedAt == 0` / 未来時刻を無効応答として扱い、response の `updatedAt` を既存結果とともに internal provenance として返せる。
+ - 🔵 `contracts/src/PriceFeeds/CompositePriceFeed.sol` — **upstream 由来・sUSDS 用 pruning あり**。`USDS/USD × canonical rate` の合成基底（`sUSDSPriceFeed` の親）。WSTETH/RETH 用 LST secondary fallback は production `src` から削除済み
+-- 🟢 `contracts/src/PriceFeeds/DFPriceFeedBase.sol` — **DF 新規**。`is MainnetPriceFeedBase`。`jpyUsdOracle` ＋ `_convertUsdPriceToJpyWithFreeze()`（JPY 共通レッグの soft-freeze）＋ `collateralVault.backingRatio()` 乗算を追加（標準・peg 型 DF feed の親）
++- 🟢 `contracts/src/PriceFeeds/JpyUsdRateProvider.sol` — **DF 新規**。deployment-wide に1つの JPY/USD cache・freeze timer・回復・latched expiry state machine
++- 🟢 `contracts/src/PriceFeeds/DFPriceFeedBase.sol` — **DF 新規**。`is MainnetPriceFeedBase`。`JpyUsdRateProvider` を使う JPY 換算＋`collateralVault.backingRatio()` 乗算（標準・peg 型 DF feed の親）
+ - 🟢 `contracts/src/PriceFeeds/PriceFeedProxy.sol` — **DF 新規**。source 差替（24h timelock）・try/catch shutdown・`Ownable2Step`
+ - 🟢 `contracts/src/PriceFeeds/DFWETHPriceFeed.sol` / `contracts/src/PriceFeeds/DFUSDCPriceFeed.sol` / `contracts/src/PriceFeeds/DFUSDTPriceFeed.sol` / `contracts/src/PriceFeeds/DFXAUTPriceFeed.sol` / `contracts/src/PriceFeeds/DFWBTCPriceFeed.sol` — **DF 新規**。担保別 PriceFeed（`DFPriceFeedBase` 継承、JPY 建てを返す）
+-- 🟢 `contracts/src/PriceFeeds/sUSDSPriceFeed.sol` — **DF 新規**。Composite rate（sUSDS 用に pruning した `CompositePriceFeed` ＋ DF JPY 換算 / backing 乗算。多重継承回避のため `DFPriceFeedBase` と最小重複）
++- 🟢 `contracts/src/PriceFeeds/sUSDSPriceFeed.sol` — **DF 新規**。Composite rate（sUSDS 用に pruning した `CompositePriceFeed` ＋ shared-provider JPY 換算 / local backing 乗算）
+ - 🟢 `contracts/src/PriceFeeds/PriceFeedPlaceholder.sol` — **DF 新規**。placeholder ブランチの初期 source
+ - `contracts/script/DeployLiquity2.s.sol` — フィード・staleness・アドレス配線
+ - Chainlink Data Feeds: [https://data.chain.link/](https://data.chain.link/)
+diff --git a/frontend/app/src/services/Prices.tsx b/frontend/app/src/services/Prices.tsx
+index 709a1f2c..0ddbcb41 100644
+--- a/frontend/app/src/services/Prices.tsx
++++ b/frontend/app/src/services/Prices.tsx
+@@ -29,6 +29,14 @@ const dfPriceFeedSourceStatusAbi = [{
+   outputs: [{ name: "", type: "uint8" }],
+   stateMutability: "view",
+ }, {
++  type: "function",
++  name: "jpyUsdRateProvider",
++  inputs: [],
++  outputs: [{ name: "", type: "address" }],
++  stateMutability: "view",
++}] as const;
++
++const jpyUsdRateProviderStatusAbi = [{
+   type: "function",
+   name: "jpyFrozenSince",
+   inputs: [],
+@@ -38,11 +46,13 @@ const dfPriceFeedSourceStatusAbi = [{
+   type: "function",
+   name: "jpyUsdOracle",
+   inputs: [],
+-  outputs: [
+-    { name: "aggregator", type: "address" },
+-    { name: "stalenessThreshold", type: "uint256" },
+-    { name: "decimals", type: "uint8" },
+-  ],
++  outputs: [{ name: "", type: "address" }],
++  stateMutability: "view",
++}, {
++  type: "function",
++  name: "stalenessThreshold",
++  inputs: [],
++  outputs: [{ name: "", type: "uint256" }],
+   stateMutability: "view",
+ }, {
+   type: "function",
+@@ -124,7 +134,7 @@ export async function fetchOracleFreshness(
+     }),
+     getBlock(config, { blockTag: "latest" }),
+   ]);
+-  const [priceSource, jpyFrozenSince, maxJpyFreezeDuration, jpyOracle] = await Promise.all([
++  const [priceSource, jpyRateProvider] = await Promise.all([
+     readContract(config, {
+       address: source,
+       abi: dfPriceFeedSourceStatusAbi,
+@@ -133,21 +143,33 @@ export async function fetchOracleFreshness(
+     readContract(config, {
+       address: source,
+       abi: dfPriceFeedSourceStatusAbi,
++      functionName: "jpyUsdRateProvider",
++    }),
++  ]);
++  const [jpyFrozenSince, maxJpyFreezeDuration, jpyOracle, jpyStalenessThreshold] = await Promise.all([
++    readContract(config, {
++      address: jpyRateProvider,
++      abi: jpyUsdRateProviderStatusAbi,
+       functionName: "jpyFrozenSince",
+     }),
+     readContract(config, {
+-      address: source,
+-      abi: dfPriceFeedSourceStatusAbi,
++      address: jpyRateProvider,
++      abi: jpyUsdRateProviderStatusAbi,
+       functionName: "MAX_JPY_FREEZE_DURATION",
+     }),
+     readContract(config, {
+-      address: source,
+-      abi: dfPriceFeedSourceStatusAbi,
++      address: jpyRateProvider,
++      abi: jpyUsdRateProviderStatusAbi,
+       functionName: "jpyUsdOracle",
+     }),
++    readContract(config, {
++      address: jpyRateProvider,
++      abi: jpyUsdRateProviderStatusAbi,
++      functionName: "stalenessThreshold",
++    }),
+   ]);
+   const jpyRound = await readContract(config, {
+-    address: jpyOracle[0],
++    address: jpyOracle,
+     abi: aggregatorLatestRoundAbi,
+     functionName: "latestRoundData",
+   });
+@@ -156,7 +178,7 @@ export async function fetchOracleFreshness(
+     jpyFrozenSince,
+     jpySourceAnswer: jpyRound[1],
+     jpySourceUpdatedAt: jpyRound[3],
+-    jpyStalenessThreshold: jpyOracle[1],
++    jpyStalenessThreshold,
+     maxJpyFreezeDuration,
+     observedAt: block.timestamp,
+   };
+diff --git a/frontend/ops/scripts/alert-test-fixtures.ts b/frontend/ops/scripts/alert-test-fixtures.ts
+index 5fc9acf5..181dc4a6 100644
+--- a/frontend/ops/scripts/alert-test-fixtures.ts
++++ b/frontend/ops/scripts/alert-test-fixtures.ts
+@@ -41,10 +41,12 @@ export function branchOracle(overrides: Partial<BranchOracle> = {}): BranchOracl
+     priceDown: false,
+     lastGoodPrice: WAD,
+     collUsd: null,
++    jpyUsdRateProvider: null,
+     jpyUsd: null,
+     lastGoodBacking: null,
+     lastGoodJpyRate: null,
+     jpyFrozenSince: null,
++    jpyFreezeExpired: null,
+     maxJpyFreezeDuration: null,
+     ...overrides,
+   };
+diff --git a/frontend/ops/scripts/alerts.test.ts b/frontend/ops/scripts/alerts.test.ts
+index 53e47202..e5716575 100644
+--- a/frontend/ops/scripts/alerts.test.ts
++++ b/frontend/ops/scripts/alerts.test.ts
+@@ -42,10 +42,12 @@ const proposalBranch: BranchSnapshot = {
+     priceDown: false,
+     lastGoodPrice: 0n,
+     collUsd: null,
++    jpyUsdRateProvider: null,
+     jpyUsd: null,
+     lastGoodBacking: null,
+     lastGoodJpyRate: null,
+     jpyFrozenSince: 0n,
++    jpyFreezeExpired: false,
+     maxJpyFreezeDuration: 86_400n,
+   },
+   vault: null,
+@@ -176,6 +178,26 @@ const noProposalAlerts = deriveAlerts({
+ });
+ assert.equal(noProposalAlerts.some((alert) => alert.alertId === "ALRT-ORCL-009"), false);
+ 
++const expiredJpyFreezeAlerts = deriveAlerts({
++  ...snapshot,
++  branches: [{
++    ...proposalBranch,
++    oracle: {
++      ...proposalBranch.oracle,
++      sourceProposedAt: 0n,
++      jpyUsdRateProvider: PROPOSED_SOURCE,
++      jpyFrozenSince: snapshot.blockTimestamp - 86_400n,
++      jpyFreezeExpired: true,
++    },
++  }],
++});
++const expiredJpyFreezeAlert = expiredJpyFreezeAlerts.find((alert) => alert.alertId === "ALRT-ORCL-007");
++assert(expiredJpyFreezeAlert);
++assert.equal(expiredJpyFreezeAlert.policySeverity, "P0");
++assert.equal(expiredJpyFreezeAlert.publicMessageRequired, true);
++assert.equal(expiredJpyFreezeAlert.sourceKey, PROPOSED_SOURCE);
++assert.match(expiredJpyFreezeAlert.text, /共有JPYレート凍結が期限切れ/);
++
+ const pausedVault: VaultInfo = {
+   address: ADDRESS,
+   bufferBalance: 100n * WAD,
+diff --git a/frontend/ops/scripts/collect-market-liquidity-state.test.ts b/frontend/ops/scripts/collect-market-liquidity-state.test.ts
+index 1bc8c485..8cf1ef4d 100644
+--- a/frontend/ops/scripts/collect-market-liquidity-state.test.ts
++++ b/frontend/ops/scripts/collect-market-liquidity-state.test.ts
+@@ -43,10 +43,12 @@ function branch(overrides: Partial<BranchSnapshot> = {}): BranchSnapshot {
+       priceDown: false,
+       lastGoodPrice: 130n * WAD,
+       collUsd: null,
++      jpyUsdRateProvider: null,
+       jpyUsd: null,
+       lastGoodBacking: null,
+       lastGoodJpyRate: null,
+       jpyFrozenSince: null,
++      jpyFreezeExpired: null,
+       maxJpyFreezeDuration: null,
+     },
+     vault: null,
+diff --git a/frontend/ops/scripts/public-stats.test.ts b/frontend/ops/scripts/public-stats.test.ts
+index 96699e06..342e47f2 100644
+--- a/frontend/ops/scripts/public-stats.test.ts
++++ b/frontend/ops/scripts/public-stats.test.ts
+@@ -95,10 +95,12 @@ const activeBranch: BranchSnapshot = {
+     priceDown: false,
+     lastGoodPrice: 500_000n * WAD,
+     collUsd: oracleLeg,
++    jpyUsdRateProvider: ADDRESS,
+     jpyUsd: oracleLeg,
+     lastGoodBacking: WAD,
+     lastGoodJpyRate: 6666666666666667n,
+     jpyFrozenSince: 0n,
++    jpyFreezeExpired: false,
+     maxJpyFreezeDuration: 86_400n,
+   },
+   vault,
+@@ -154,9 +156,11 @@ const snapshot: SystemSnapshot = {
+   totalCollValueJpy: 2_000n * WAD,
+   overallCR: 2n * WAD,
+   jpyShared: {
++    provider: ADDRESS,
+     leg: oracleLeg,
+     frozenBranchIds: [],
+     lastGoodJpyRate: 6666666666666667n,
++    freezeExpired: false,
+     maxJpyFreezeDuration: 86_400n,
+   },
+ };
+diff --git a/frontend/ops/scripts/refresh-hosted-anvil-oracles.ts b/frontend/ops/scripts/refresh-hosted-anvil-oracles.ts
+index b786c802..ca5f1c03 100644
+--- a/frontend/ops/scripts/refresh-hosted-anvil-oracles.ts
++++ b/frontend/ops/scripts/refresh-hosted-anvil-oracles.ts
+@@ -11,6 +11,7 @@ import {
+   AggregatorV3LatestRoundAbi,
+   DEPLOYMENT,
+   DfPriceFeedSourceAbi,
++  JpyUsdRateProviderAbi,
+   PriceFeedProxyAbi,
+ } from "../src/lib/bindings";
+ import { DEFAULT_STAGING_FRONTEND_TARGETS } from "../src/lib/stagingFrontendLive";
+@@ -118,12 +119,25 @@ async function readOracleTarget(
+   }) as Address;
+   if (source === zeroAddress) return null;
+ 
+-  const functionName = kind === "collateralUsd" ? "ethUsdOracle" : "jpyUsdOracle";
+-  const [aggregator] = await client.readContract({
+-    abi: DfPriceFeedSourceAbi,
+-    address: source,
+-    functionName,
+-  }) as readonly [Address, bigint, number];
++  let aggregator: Address;
++  if (kind === "collateralUsd") {
++    [aggregator] = await client.readContract({
++      abi: DfPriceFeedSourceAbi,
++      address: source,
++      functionName: "ethUsdOracle",
++    }) as readonly [Address, bigint, number];
++  } else {
++    const provider = await client.readContract({
++      abi: DfPriceFeedSourceAbi,
++      address: source,
++      functionName: "jpyUsdRateProvider",
++    }) as Address;
++    aggregator = await client.readContract({
++      abi: JpyUsdRateProviderAbi,
++      address: provider,
++      functionName: "jpyUsdOracle",
++    }) as Address;
++  }
+   if (aggregator === zeroAddress) return null;
+ 
+   return {
+diff --git a/frontend/ops/src/lib/alerts.ts b/frontend/ops/src/lib/alerts.ts
+index bed82097..ab5bc792 100644
+--- a/frontend/ops/src/lib/alerts.ts
++++ b/frontend/ops/src/lib/alerts.ts
+@@ -351,7 +351,8 @@ function branchAlerts(br: BranchSnapshot, blockTimestamp: bigint, options: Alert
+   if (frozenSince > 0n) {
+     const elapsed = blockTimestamp > frozenSince ? blockTimestamp - frozenSince : 0n;
+     const maxFreeze = br.oracle.maxJpyFreezeDuration ?? 86_400n;
+-    const freezeAlert = elapsed >= 43_200n
++    const freezeExpired = br.oracle.jpyFreezeExpired === true;
++    const freezeAlert = freezeExpired || elapsed >= 43_200n
+       ? { alertId: "ALRT-ORCL-007" as const, policySeverity: "P0" as const, publicMessageRequired: true }
+       : elapsed >= 21_600n
+       ? { alertId: "ALRT-ORCL-006" as const, policySeverity: "P0" as const, publicMessageRequired: false }
+@@ -364,12 +365,14 @@ function branchAlerts(br: BranchSnapshot, blockTimestamp: bigint, options: Alert
+       }),
+       severity: "critical",
+       scope,
+-      sourceKey: br.oracle.source,
++      sourceKey: br.oracle.jpyUsdRateProvider ?? br.oracle.source,
+       currentValue: `${elapsed.toString()} sec`,
+       threshold: `${maxFreeze.toString()} sec max freeze`,
+-      text: `JPYレート凍結中 — lastGoodJpyRate で稼働 (経過 ${fmtDuration(elapsed)} / 許容 ${
+-        fmtDuration(maxFreeze)
+-      })`,
++      text: freezeExpired
++        ? `共有JPYレート凍結が期限切れ — 全branch shutdown遷移を確認 (経過 ${fmtDuration(elapsed)})`
++        : `JPYレート凍結中 — lastGoodJpyRate で稼働 (経過 ${fmtDuration(elapsed)} / 許容 ${
++          fmtDuration(maxFreeze)
++        })`,
+     });
+   }
+ 
+diff --git a/frontend/ops/src/lib/bindings.ts b/frontend/ops/src/lib/bindings.ts
+index bb9470a0..b00b3341 100644
+--- a/frontend/ops/src/lib/bindings.ts
++++ b/frontend/ops/src/lib/bindings.ts
+@@ -40,9 +40,9 @@ export const AggregatorV3LatestRoundAbi = [
+  * All reads against this ABI must be defensive (try/catch): the inert
+  * branches (5-7) have placeholder sources that do not implement them.
+  *
+- * `ethUsdOracle` is the inherited core slot used as the
+- * per-branch "collateral/USD" oracle; `jpyUsdOracle` is the shared
+- * JPY/USD leg. Both are `struct Oracle { aggregator, stalenessThreshold, decimals }`.
++ * `ethUsdOracle` is the inherited core slot used as the per-branch
++ * collateral/USD oracle. `jpyUsdRateProvider` points every active branch at the
++ * single shared JPY/USD cache and freeze state machine.
+  */
+ export const DfPriceFeedSourceAbi = [
+   {
+@@ -58,13 +58,9 @@ export const DfPriceFeedSourceAbi = [
+   },
+   {
+     type: "function",
+-    name: "jpyUsdOracle",
++    name: "jpyUsdRateProvider",
+     inputs: [],
+-    outputs: [
+-      { name: "aggregator", type: "address" },
+-      { name: "stalenessThreshold", type: "uint256" },
+-      { name: "decimals", type: "uint8" },
+-    ],
++    outputs: [{ name: "", type: "address" }],
+     stateMutability: "view",
+   },
+   {
+@@ -74,6 +70,37 @@ export const DfPriceFeedSourceAbi = [
+     outputs: [{ name: "", type: "uint256" }],
+     stateMutability: "view",
+   },
++  {
++    type: "function",
++    name: "collateralVault",
++    inputs: [],
++    outputs: [{ name: "", type: "address" }],
++    stateMutability: "view",
++  },
++] as const;
++
++export const JpyUsdRateProviderAbi = [
++  {
++    type: "function",
++    name: "jpyUsdOracle",
++    inputs: [],
++    outputs: [{ name: "", type: "address" }],
++    stateMutability: "view",
++  },
++  {
++    type: "function",
++    name: "stalenessThreshold",
++    inputs: [],
++    outputs: [{ name: "", type: "uint256" }],
++    stateMutability: "view",
++  },
++  {
++    type: "function",
++    name: "oracleDecimals",
++    inputs: [],
++    outputs: [{ name: "", type: "uint8" }],
++    stateMutability: "view",
++  },
+   {
+     type: "function",
+     name: "lastGoodJpyRate",
+@@ -90,9 +117,9 @@ export const DfPriceFeedSourceAbi = [
+   },
+   {
+     type: "function",
+-    name: "collateralVault",
++    name: "jpyFreezeExpired",
+     inputs: [],
+-    outputs: [{ name: "", type: "address" }],
++    outputs: [{ name: "", type: "bool" }],
+     stateMutability: "view",
+   },
+   {
+diff --git a/frontend/ops/src/lib/snapshot.ts b/frontend/ops/src/lib/snapshot.ts
+index 26e67d5e..f03e04f6 100644
+--- a/frontend/ops/src/lib/snapshot.ts
++++ b/frontend/ops/src/lib/snapshot.ts
+@@ -8,6 +8,7 @@ import {
+   DEPLOYMENT,
+   DfPriceFeedSourceAbi,
+   DTokenAbi,
++  JpyUsdRateProviderAbi,
+   JpydfTokenAbi,
+   PriceFeedProxyAbi,
+   StabilityPoolAbi,
+@@ -332,7 +333,7 @@ async function callFetchPrice(
+ async function readOracleLeg(
+   client: OpsClient,
+   source: Address,
+-  fn: "ethUsdOracle" | "jpyUsdOracle",
++  fn: "ethUsdOracle",
+   blockTimestamp: bigint,
+ ): Promise<OracleLeg | null> {
+   const leg = await tryOrNull(
+@@ -360,6 +361,63 @@ async function readOracleLeg(
+   };
+ }
+ 
++type JpyProviderState = {
++  address: Address;
++  leg: OracleLeg;
++  lastGoodJpyRate: bigint;
++  jpyFrozenSince: bigint;
++  jpyFreezeExpired: boolean;
++  maxJpyFreezeDuration: bigint;
++};
++
++async function readJpyProvider(
++  client: OpsClient,
++  source: Address,
++  blockTimestamp: bigint,
++): Promise<JpyProviderState | null> {
++  const providerAddress = await tryOrNull(
++    client.readContract({ address: source, abi: DfPriceFeedSourceAbi, functionName: "jpyUsdRateProvider" }),
++  );
++  if (!providerAddress || providerAddress === zeroAddress) return null;
++
++  const provider = { address: providerAddress, abi: JpyUsdRateProviderAbi } as const;
++  const [aggregator, stalenessThreshold, decimals, lastGoodJpyRate, jpyFrozenSince, jpyFreezeExpired, maxDuration] =
++    await Promise.all([
++      tryOrNull(client.readContract({ ...provider, functionName: "jpyUsdOracle" })),
++      tryOrNull(client.readContract({ ...provider, functionName: "stalenessThreshold" })),
++      tryOrNull(client.readContract({ ...provider, functionName: "oracleDecimals" })),
++      tryOrNull(client.readContract({ ...provider, functionName: "lastGoodJpyRate" })),
++      tryOrNull(client.readContract({ ...provider, functionName: "jpyFrozenSince" })),
++      tryOrNull(client.readContract({ ...provider, functionName: "jpyFreezeExpired" })),
++      tryOrNull(client.readContract({ ...provider, functionName: "MAX_JPY_FREEZE_DURATION" })),
++    ]);
++  if (
++    !aggregator || aggregator === zeroAddress || stalenessThreshold === null || decimals === null
++    || lastGoodJpyRate === null || jpyFrozenSince === null || jpyFreezeExpired === null || maxDuration === null
++  ) return null;
++
++  const round = await tryOrNull(
++    client.readContract({ address: aggregator, abi: AggregatorV3LatestRoundAbi, functionName: "latestRoundData" }),
++  );
++  const updatedAt = round ? round[3] : null;
++  return {
++    address: providerAddress,
++    leg: {
++      aggregator,
++      stalenessThreshold,
++      decimals,
++      answer: round ? round[1] : null,
++      updatedAt,
++      roundId: round ? round[0] : null,
++      ageSec: updatedAt === null ? null : blockTimestamp > updatedAt ? blockTimestamp - updatedAt : 0n,
++    },
++    lastGoodJpyRate,
++    jpyFrozenSince,
++    jpyFreezeExpired,
++    maxJpyFreezeDuration: maxDuration,
++  };
++}
++
+ async function readBranchOracle(
+   client: OpsClient,
+   b: BranchBinding,
+@@ -379,18 +437,22 @@ async function readBranchOracle(
+   // DF source extras — placeholder sources on inert branches don't implement
+   // these, so every read is defensive.
+   const src = { address: source, abi: DfPriceFeedSourceAbi } as const;
+-  const [collUsd, jpyUsd, lastGoodBacking, lastGoodJpyRate, jpyFrozenSince, maxJpyFreezeDuration] = await Promise.all([
++  const [collUsd, jpyProvider, lastGoodBacking] = await Promise.all([
+     readOracleLeg(client, source, "ethUsdOracle", blockTimestamp),
+-    readOracleLeg(client, source, "jpyUsdOracle", blockTimestamp),
++    readJpyProvider(client, source, blockTimestamp),
+     tryOrNull(client.readContract({ ...src, functionName: "lastGoodBacking" })),
+-    tryOrNull(client.readContract({ ...src, functionName: "lastGoodJpyRate" })),
+-    tryOrNull(client.readContract({ ...src, functionName: "jpyFrozenSince" })),
+-    tryOrNull(client.readContract({ ...src, functionName: "MAX_JPY_FREEZE_DURATION" })),
+   ]);
++  const jpyUsd = jpyProvider?.leg ?? null;
++  const lastGoodJpyRate = jpyProvider?.lastGoodJpyRate ?? null;
++  const jpyFrozenSince = jpyProvider?.jpyFrozenSince ?? null;
++  const jpyFreezeExpired = jpyProvider?.jpyFreezeExpired ?? null;
++  const maxJpyFreezeDuration = jpyProvider?.maxJpyFreezeDuration ?? null;
+ 
+   if (!inert) {
+     if (!collUsd) throw new Error(`branch ${b.branchId} ${b.collSymbol} active oracle source missing ethUsdOracle leg`);
+-    if (!jpyUsd) throw new Error(`branch ${b.branchId} ${b.collSymbol} active oracle source missing jpyUsdOracle leg`);
++    if (!jpyProvider) {
++      throw new Error(`branch ${b.branchId} ${b.collSymbol} active oracle source missing jpyUsdRateProvider`);
++    }
+     if (lastGoodBacking === null) {
+       throw new Error(`branch ${b.branchId} ${b.collSymbol} active oracle source missing lastGoodBacking`);
+     }
+@@ -415,10 +477,12 @@ async function readBranchOracle(
+     priceDown: fetched.down,
+     lastGoodPrice,
+     collUsd,
++    jpyUsdRateProvider: jpyProvider?.address ?? null,
+     jpyUsd,
+     lastGoodBacking,
+     lastGoodJpyRate,
+     jpyFrozenSince,
++    jpyFreezeExpired,
+     maxJpyFreezeDuration,
+   };
+ }
+@@ -697,12 +761,20 @@ function deriveJpyShared(branches: BranchSnapshot[]): JpySharedFeed | null {
+   const withJpy = branches.filter((br) => br.oracle.jpyUsd !== null);
+   if (withJpy.length === 0) return null;
+   const ref = withJpy[0];
++  const provider = ref.oracle.jpyUsdRateProvider;
++  if (!provider) throw new Error("active JPY/USD leg is missing its shared rate provider");
++  const providerAddresses = new Set(withJpy.map((br) => br.oracle.jpyUsdRateProvider));
++  if (providerAddresses.size !== 1) {
++    throw new Error(`active branches reference ${providerAddresses.size} different JPY/USD rate providers`);
++  }
+   return {
++    provider,
+     leg: ref.oracle.jpyUsd!,
+     frozenBranchIds: withJpy
+       .filter((br) => (br.oracle.jpyFrozenSince ?? 0n) > 0n)
+       .map((br) => br.branchId),
+     lastGoodJpyRate: ref.oracle.lastGoodJpyRate,
++    freezeExpired: ref.oracle.jpyFreezeExpired ?? false,
+     maxJpyFreezeDuration: ref.oracle.maxJpyFreezeDuration,
+   };
+ }
+diff --git a/frontend/ops/src/lib/types.ts b/frontend/ops/src/lib/types.ts
+index d99c7c87..2aefc6ac 100644
+--- a/frontend/ops/src/lib/types.ts
++++ b/frontend/ops/src/lib/types.ts
+@@ -26,10 +26,12 @@ export type BranchOracle = {
+   lastGoodPrice: bigint;
+   /** DF source extras — null on inert branches (placeholder source). */
+   collUsd: OracleLeg | null;
++  jpyUsdRateProvider: Address | null;
+   jpyUsd: OracleLeg | null;
+   lastGoodBacking: bigint | null; // 1e18
+   lastGoodJpyRate: bigint | null; // 1e18 USD per JPY
+   jpyFrozenSince: bigint | null; // 0 = live rate in use
++  jpyFreezeExpired: boolean | null;
+   maxJpyFreezeDuration: bigint | null; // seconds
+ };
+ 
+@@ -131,10 +133,12 @@ export type BranchSnapshot = {
+ 
+ /** The shared JPY/USD feed view (single systemic dependency — SYS-RISK-001). */
+ export type JpySharedFeed = {
++  provider: Address;
+   leg: OracleLeg;
+   /** branch ids currently operating on a frozen JPY rate */
+   frozenBranchIds: number[];
+   lastGoodJpyRate: bigint | null;
++  freezeExpired: boolean;
+   maxJpyFreezeDuration: bigint | null;
+ };
+ 

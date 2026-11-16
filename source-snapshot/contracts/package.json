@@ -1,0 +1,28 @@
+{
+  "name": "@jpydf/contracts",
+  "version": "1.0.0",
+  "description": "JPYdf protocol contracts",
+  "packageManager": "pnpm@10.4.1",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "forge test",
+    "test:production-rollback": "tsx utils/check-production-rollback.test.ts",
+    "test:manifest-policy": "tsx utils/deployment-manifest-policy.test.ts",
+    "test:day1-native-eth-route": "tsx utils/day1-native-eth-route.test.ts"
+  },
+  "repository": "github:deltaforesight/jpydf-v2",
+  "author": "DeltaForesight",
+  "license": "BUSL-1.1",
+  "bugs": "https://github.com/deltaforesight/jpydf-v2/issues",
+  "homepage": "https://github.com/deltaforesight/jpydf-v2/tree/develop/contracts",
+  "devDependencies": {
+    "@types/node": "22.15.33",
+    "tsx": "4.16.5",
+    "typescript": "5.5.4",
+    "viem": "2.31.4",
+    "zx": "8.1.9"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "project_name": "jpydf-v2-speca-pilot-2026-06",
+  "target_repo": "https://github.com/deltaforesight/jpydf-v2",
+  "target_commit": "REPLACE_WITH_AUDIT_FREEZE_COMMIT",
+  "target_language": "Solidity",
+  "target_layer": "defi-application",
+  "description": "JPY DeFi protocol SPECA pilot focused on DeltaForesight-owned Solidity layers: dToken, CollateralVault, Strategy, Oracle, Zapper, InterestRouter, and JPY DeFi-specific boundary code."
+}

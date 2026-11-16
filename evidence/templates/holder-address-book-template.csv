@@ -1,0 +1,14 @@
+holderId,envName,holderType,checksumAddress,chainId,safeThreshold,signerCount,signerListHash,opsOwner,financeOwner,riskOwner,evidenceRef,status
+DF_TIMELOCK,DF_TIMELOCK,timelock,<checksum>,1,,,,governance,,security,<evidence>,draft
+DF_GUARDIAN,DF_GUARDIAN,safe,<checksum>,1,2,5,<hash>,ops,,security,<evidence>,draft
+DF_WRITEOFF,DF_WRITEOFF,safe,<admin-multisig-checksum>,1,3,5,<admin-multisig-signer-hash>,governance,,security,<evidence>,draft
+DF_PRICE_FEED_OWNER,DF_PRICE_FEED_OWNER,safe,<admin-multisig-checksum>,1,3,5,<admin-multisig-signer-hash>,governance,,security,<evidence>,draft
+DF_BRIDGE_ADMIN,DF_BRIDGE_ADMIN,safe,<admin-multisig-checksum>,1,3,5,<admin-multisig-signer-hash>,governance,,security,<evidence>,draft
+DF_ALLOCATOR,DF_ALLOCATOR,bot-wallet-or-safe,<checksum>,1,,,,ops,,risk,<evidence>,draft
+DF_TREASURY,DF_TREASURY,safe,<checksum>,1,3,5,<hash>,finance,finance,security,<evidence>,draft
+DF_INTEREST_ROUTER_RECIPIENT,DF_INTEREST_ROUTER_RECIPIENT,safe-or-accounting-contract,<checksum>,1,<threshold-if-safe>,<count-if-safe>,<hash-if-safe>,finance,finance,security,<evidence>,draft
+BOOTSTRAP_BORROWER_OWNER,,safe,<checksum>,1,2,3,<hash>,ops,finance,risk,<evidence>,draft
+LP_OWNER,,safe,<checksum>,1,2,3,<hash>,ops,finance,risk,<evidence>,draft
+SP_SEED_SOURCE_OWNER,,safe,<checksum>,1,2,3,<hash>,ops,finance,risk,<evidence>,draft
+LIQUIDATOR_GAS_WALLET,,bot-wallet,<checksum>,1,,,,ops,finance,risk,<evidence>,draft
+KEEPER_OPS_WALLET,,bot-wallet,<checksum>,1,,,,ops,finance,risk,<evidence>,draft

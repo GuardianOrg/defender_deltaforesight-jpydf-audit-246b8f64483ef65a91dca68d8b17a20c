@@ -1,0 +1,174 @@
+[
+  {
+    "number": 115,
+    "findings": [
+      "I-02",
+      "I-03",
+      "I-04",
+      "I-05"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/115",
+    "title": "docs(Guardian I-02, I-03, I-04, I-05): correct oracle, redemption and incident guidance",
+    "state": "MERGED",
+    "headRefOid": "e50a51bbc19cd08ce3263a6d4e100c055e995e7c",
+    "mergeCommit": {
+      "oid": "211f193900e90287b95965d7e69767a37be614e4"
+    }
+  },
+  {
+    "number": 116,
+    "findings": [
+      "L-08"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/116",
+    "title": "fix(Guardian L-08): keep pricing available when known assets cover liabilities",
+    "state": "MERGED",
+    "headRefOid": "2869cad5eb375987241f6f69313c5387e169e6c8",
+    "mergeCommit": {
+      "oid": "f51b1f66d0cb1d453798f085d863271859774f71"
+    }
+  },
+  {
+    "number": 117,
+    "findings": [
+      "L-10"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/117",
+    "title": "fix(Guardian L-10): invalidate exhausted Strategy valuation caches",
+    "state": "MERGED",
+    "headRefOid": "f071fc043432c91be6b9300e2940995716b41bea",
+    "mergeCommit": {
+      "oid": "b2ac5a1c21bf2f12bf26aae53cac293fc6a079af"
+    }
+  },
+  {
+    "number": 118,
+    "findings": [
+      "I-01"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/118",
+    "title": "fix(Guardian I-01): allow management fee reductions during oracle pauses",
+    "state": "MERGED",
+    "headRefOid": "521f5e39672527a968a90f4956cc48c2e2b2359d",
+    "mergeCommit": {
+      "oid": "c03daf5abe972fed77fd4c4cf592ca73a3fcbec7"
+    }
+  },
+  {
+    "number": 119,
+    "findings": [
+      "L-07"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/119",
+    "title": "fix(Guardian L-07): account excess Sky harvest output as principal",
+    "state": "MERGED",
+    "headRefOid": "215c904e3a63e909e3f8252f348a21164d5d8daa",
+    "mergeCommit": {
+      "oid": "8af016ca0dd026104949c111d6504b8692b4936e"
+    }
+  },
+  {
+    "number": 120,
+    "findings": [
+      "L-09"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/120",
+    "title": "fix(Guardian L-09): close managed Troves directly to dToken",
+    "state": "MERGED",
+    "headRefOid": "4c1de486c92f664c2f12c12566df2ef383be34e8",
+    "mergeCommit": {
+      "oid": "06edb56419866827b4079a2391e42b2d0b675639"
+    }
+  },
+  {
+    "number": 121,
+    "findings": [
+      "L-03"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/121",
+    "title": "fix(Guardian L-03): cap liquidation rewards at 2 dwstETH / 1,000 dUSDC",
+    "state": "MERGED",
+    "headRefOid": "eb855bf36af16b6ebaa250c2c003067fdc832969",
+    "mergeCommit": {
+      "oid": "c9a0c76ee5bfca189f85b26bc2b6559119fb220e"
+    }
+  },
+  {
+    "number": 122,
+    "findings": [
+      "L-04"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/122",
+    "title": "fix(Guardian L-04): include gas compensation in SP coverage checks",
+    "state": "MERGED",
+    "headRefOid": "4d27865b8eed55e5cddb42793df8d843b1b07a2c",
+    "mergeCommit": {
+      "oid": "338615c343decb0d8b10e3e959361f1790afc68e"
+    }
+  },
+  {
+    "number": 123,
+    "findings": [
+      "I-09"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/123",
+    "title": "fix(Guardian I-09): enforce redistribution penalty coverage at MCR",
+    "state": "MERGED",
+    "headRefOid": "4276f0ce190fe3225421e44e57c155a768e83242",
+    "mergeCommit": {
+      "oid": "7b1caad375e67603d0e1d0d38650b8b9f6a3d52b"
+    }
+  },
+  {
+    "number": 124,
+    "findings": [
+      "I-06"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/124",
+    "title": "fix(Guardian I-06): use consistent registry authorization errors",
+    "state": "MERGED",
+    "headRefOid": "1ec27c421e7d297cb403c4aa1a3a9bca3acdc8dc",
+    "mergeCommit": {
+      "oid": "5fd0b7f8f5849711d869363b1aa766cda59221c2"
+    }
+  },
+  {
+    "number": 125,
+    "findings": [
+      "L-01"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/125",
+    "title": "fix(Guardian L-01): prevent deposits from blocking branch risk finalization",
+    "state": "MERGED",
+    "headRefOid": "3e9a625f4fbd4b1c9c31fce7f90dc4010e243b01",
+    "mergeCommit": {
+      "oid": "f7409c5d505468934a6f468524814646c82598d8"
+    }
+  },
+  {
+    "number": 126,
+    "findings": [
+      "L-05"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/126",
+    "title": "fix(Guardian L-05): recover Morpho funds atomically with penalty deallocation",
+    "state": "MERGED",
+    "headRefOid": "34cf7b784efd5bd5a6a8bac6b97721785d3961a2",
+    "mergeCommit": {
+      "oid": "51b452c45d3c5137f895e205a4d60036832c6943"
+    }
+  },
+  {
+    "number": 127,
+    "findings": [
+      "Oracle correspondence (no numbered finding)"
+    ],
+    "url": "https://github.com/deltaforesight/jpydf-audit/pull/127",
+    "title": "fix(oracle): Guardian follow-up \u2014 30h JPY risk cutoff and price-free repayments",
+    "state": "MERGED",
+    "headRefOid": "c985f4ddda22820ef5417e5c17a7fcab53acd607",
+    "mergeCommit": {
+      "oid": "9ff9cb16d5e6ffb06457e1ded831d89db7385623"
+    }
+  }
+]

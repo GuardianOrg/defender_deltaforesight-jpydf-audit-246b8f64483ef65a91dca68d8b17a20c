@@ -1,0 +1,362 @@
+diff --git a/contracts/script/DeployLiquity2.s.sol b/contracts/script/DeployLiquity2.s.sol
+index 78cfa9b0..5513458c 100644
+--- a/contracts/script/DeployLiquity2.s.sol
++++ b/contracts/script/DeployLiquity2.s.sol
+@@ -707,6 +707,22 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+         assert(address(contracts.collSurplusPool) == addresses.collSurplusPool);
+         assert(address(contracts.sortedTroves) == addresses.sortedTroves);
+ 
++        // setAddresses must run before these CREATE2 contracts exist because their
++        // constructors read this registry. Replace every predicted branch-local
++        // value with the deployed instance, then verify all 18 frozen fields and
++        // their runtime code before continuing the deployment ceremony.
++        addressVars.borrowerOperations = contracts.borrowerOperations;
++        addressVars.troveManager = contracts.troveManager;
++        addressVars.troveNFT = contracts.troveNFT;
++        addressVars.metadataNFT = contracts.metadataNFT;
++        addressVars.stabilityPool = contracts.stabilityPool;
++        addressVars.activePool = contracts.activePool;
++        addressVars.defaultPool = contracts.defaultPool;
++        addressVars.gasPoolAddress = address(contracts.gasPool);
++        addressVars.collSurplusPool = contracts.collSurplusPool;
++        addressVars.sortedTroves = contracts.sortedTroves;
++        _verifyAddressesRegistryWiring(contracts.addressesRegistry, addressVars);
++
+         // Connect contracts
+         _jpydfToken.setBranchAddresses(
+             address(contracts.troveManager),
+@@ -1512,6 +1528,49 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+         require(_target.code.length != 0, string.concat("DF: codeless ", _label));
+     }
+ 
++    /// @dev Exhaustive post-deployment check for the one-shot AddressesRegistry.
++    ///      This intentionally runs after the CREATE2 targets have been deployed:
++    ///      enforcing code existence inside setAddresses would reject the valid
++    ///      counterfactual addresses required by the constructor dependency cycle.
++    function _verifyAddressesRegistryWiring(
++        IAddressesRegistry _registry,
++        IAddressesRegistry.AddressVars memory _expected
++    ) internal {
++        _verifyRegisteredContract(address(_registry.collToken()), address(_expected.collToken), "collToken");
++        _verifyRegisteredContract(
++            address(_registry.borrowerOperations()), address(_expected.borrowerOperations), "borrowerOperations"
++        );
++        _verifyRegisteredContract(address(_registry.troveManager()), address(_expected.troveManager), "troveManager");
++        _verifyRegisteredContract(address(_registry.troveNFT()), address(_expected.troveNFT), "troveNFT");
++        _verifyRegisteredContract(address(_registry.metadataNFT()), address(_expected.metadataNFT), "metadataNFT");
++        _verifyRegisteredContract(address(_registry.stabilityPool()), address(_expected.stabilityPool), "stabilityPool");
++        _verifyRegisteredContract(address(_registry.priceFeed()), address(_expected.priceFeed), "priceFeed");
++        _verifyRegisteredContract(address(_registry.activePool()), address(_expected.activePool), "activePool");
++        _verifyRegisteredContract(address(_registry.defaultPool()), address(_expected.defaultPool), "defaultPool");
++        _verifyRegisteredContract(_registry.gasPoolAddress(), _expected.gasPoolAddress, "gasPoolAddress");
++        _verifyRegisteredContract(
++            address(_registry.collSurplusPool()), address(_expected.collSurplusPool), "collSurplusPool"
++        );
++        _verifyRegisteredContract(address(_registry.sortedTroves()), address(_expected.sortedTroves), "sortedTroves");
++        _verifyRegisteredContract(
++            address(_registry.interestRouter()), address(_expected.interestRouter), "interestRouter"
++        );
++        _verifyRegisteredContract(address(_registry.hintHelpers()), address(_expected.hintHelpers), "hintHelpers");
++        _verifyRegisteredContract(
++            address(_registry.multiTroveGetter()), address(_expected.multiTroveGetter), "multiTroveGetter"
++        );
++        _verifyRegisteredContract(
++            address(_registry.collateralRegistry()), address(_expected.collateralRegistry), "collateralRegistry"
++        );
++        _verifyRegisteredContract(address(_registry.jpydfToken()), address(_expected.jpydfToken), "jpydfToken");
++        _verifyRegisteredContract(address(_registry.WETH()), address(_expected.WETH), "WETH");
++    }
++
++    function _verifyRegisteredContract(address _registered, address _expected, string memory _label) internal view {
++        require(_registered == _expected, string.concat("DF: addressesRegistry ", _label, " mismatch"));
++        _requireContract(_registered, string.concat("addressesRegistry ", _label));
++    }
++
+     function _dfEnvKey(string memory _prefix, uint256 _branchIndex) internal pure returns (string memory) {
+         return string.concat(_prefix, "_", vm.toString(_branchIndex));
+     }
+diff --git a/contracts/test/ExternalAuditInfo06AddressesRegistryWiring.t.sol b/contracts/test/ExternalAuditInfo06AddressesRegistryWiring.t.sol
+new file mode 100644
+index 00000000..fe7c41bc
+--- /dev/null
++++ b/contracts/test/ExternalAuditInfo06AddressesRegistryWiring.t.sol
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.24;
++
++import "forge-std/Test.sol";
++
++import "../script/DeployLiquity2.s.sol";
++import "../src/AddressesRegistry.sol";
++
++contract ExternalAuditInfo06DeployHarness is DeployLiquity2Script {
++    function verifyAddressesRegistryWiring(IAddressesRegistry registry, IAddressesRegistry.AddressVars memory expected)
++        external
++    {
++        _verifyAddressesRegistryWiring(registry, expected);
++    }
++}
++
++contract ExternalAuditInfo06CodeStub {}
++
++contract ExternalAuditInfo06AddressesRegistryWiringTest is Test {
++    ExternalAuditInfo06DeployHarness internal harness;
++
++    function setUp() public {
++        harness = new ExternalAuditInfo06DeployHarness();
++    }
++
++    function test_PostDeployVerifierAcceptsAll18DistinctCodeBackedAddresses() public {
++        IAddressesRegistry.AddressVars memory vars = _completeCodeBackedVars();
++        AddressesRegistry registry = _configuredRegistry(vars);
++
++        harness.verifyAddressesRegistryWiring(registry, vars);
++    }
++
++    function test_PostDeployVerifierRejectsFieldMismatch() public {
++        IAddressesRegistry.AddressVars memory registered = _completeCodeBackedVars();
++        AddressesRegistry registry = _configuredRegistry(registered);
++        IAddressesRegistry.AddressVars memory expected = registered;
++        expected.borrowerOperations = IBorrowerOperations(address(new ExternalAuditInfo06CodeStub()));
++
++        vm.expectRevert(bytes("DF: addressesRegistry borrowerOperations mismatch"));
++        harness.verifyAddressesRegistryWiring(registry, expected);
++    }
++
++    function test_PostDeployVerifierRejectsZeroAddress() public {
++        IAddressesRegistry.AddressVars memory vars = _completeCodeBackedVars();
++        vars.collToken = IERC20Metadata(address(0));
++        AddressesRegistry registry = _configuredRegistry(vars);
++
++        vm.expectRevert(bytes("DF: zero addressesRegistry collToken"));
++        harness.verifyAddressesRegistryWiring(registry, vars);
++    }
++
++    function test_PostDeployVerifierRejectsCodelessAddress() public {
++        IAddressesRegistry.AddressVars memory vars = _completeCodeBackedVars();
++        vars.collToken = IERC20Metadata(makeAddr("codelessCollToken"));
++        AddressesRegistry registry = _configuredRegistry(vars);
++
++        vm.expectRevert(bytes("DF: codeless addressesRegistry collToken"));
++        harness.verifyAddressesRegistryWiring(registry, vars);
++    }
++
++    function _configuredRegistry(IAddressesRegistry.AddressVars memory vars)
++        internal
++        returns (AddressesRegistry registry)
++    {
++        registry = new AddressesRegistry(
++            address(this),
++            1.5e18, // CCR
++            1.1e18, // MCR
++            0.05e18, // BCR
++            1.2e18, // SCR
++            0.05e18, // liquidation penalty SP
++            0.1e18 // liquidation penalty redistribution
++        );
++        registry.setAddresses(vars);
++    }
++
++    function _completeCodeBackedVars() internal returns (IAddressesRegistry.AddressVars memory vars) {
++        address[18] memory target;
++        for (uint256 i; i < target.length; ++i) {
++            target[i] = address(new ExternalAuditInfo06CodeStub());
++        }
++
++        vars = IAddressesRegistry.AddressVars({
++            collToken: IERC20Metadata(target[0]),
++            borrowerOperations: IBorrowerOperations(target[1]),
++            troveManager: ITroveManager(target[2]),
++            troveNFT: ITroveNFT(target[3]),
++            metadataNFT: IMetadataNFT(target[4]),
++            stabilityPool: IStabilityPool(target[5]),
++            priceFeed: IPriceFeed(target[6]),
++            activePool: IActivePool(target[7]),
++            defaultPool: IDefaultPool(target[8]),
++            gasPoolAddress: target[9],
++            collSurplusPool: ICollSurplusPool(target[10]),
++            sortedTroves: ISortedTroves(target[11]),
++            interestRouter: IInterestRouter(target[12]),
++            hintHelpers: IHintHelpers(target[13]),
++            multiTroveGetter: IMultiTroveGetter(target[14]),
++            collateralRegistry: ICollateralRegistry(target[15]),
++            jpydfToken: IJpydfToken(target[16]),
++            WETH: IWETH(target[17])
++        });
++    }
++}
+diff --git a/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md b/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md
+index 546ce282..bd91741b 100644
+--- a/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md
++++ b/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md
+@@ -3076,7 +3076,7 @@ Minimal reprint of the Chainlink AggregatorV3 interface (only `decimals()` / `la
+   3. `_renounceOwnership()`: emit `OwnershipTransferred(old owner, address(0))` and clear Owner.
+ - **Revert / early return**: non-Owner → `"Ownable: caller is not the owner"`.
+ - **Emitted events**: all CORE-AR-EVT-001-018 plus CORE-AR-EVT-019.
+-- **Design notes**: "One-shot" is enforced by ownership renounce (second call permanently impossible). In deployment procedure, this must be called **before** each core contract constructor reads this registry to fix its own immutables (typical order: deploy AR → `setAddresses` with precomputed addresses → deploy each contract). The contract does not validate configured values, so wiring verification is deployment-script and post-deployment verification responsibility (CORE-AR-SEC-001).
++- **Design notes**: "One-shot" is enforced by ownership renounce (second call permanently impossible). In deployment procedure, this must be called **before** each core contract constructor reads this registry to fix its own immutables (typical order: deploy AR → `setAddresses` with precomputed addresses → deploy each contract). The counterfactual CREATE2 targets do not have runtime code at this point, so a `code.length` check inside `setAddresses` is incompatible with the canonical procedure. The contract does not validate configured values, so wiring verification is deployment-script and post-deployment verification responsibility (CORE-AR-SEC-001).
+ - **Verification**: parity / unit (onlyOwner, 18 values reflected, 18+1 events, second call reverts after renounce).
+ 
+ #### CORE-AR-FR-003: Branch Risk Parameter Getter Group (CCR / SCR / MCR / BCR / Liquidation Penalties) 🔵
+@@ -4645,7 +4645,7 @@ Allocation weights (unbacked portion), applied prices, and redeemable determinat
+ ### AddressesRegistry Security Requirements (CORE-AR-SEC-*)
+ 
+ #### CORE-AR-SEC-001: Unvalidated Wiring Values (Deployment-Procedure Dependent) 🔵
+-`setAddresses` does not validate zero addresses, contract existence, or mutual consistency (e.g., whether troveManager belongs to the relevant branch) at all. Incorrect wiring propagates directly into each core contract's immutable values and becomes permanent, so precomputation in deployment scripts (CREATE address prediction) and post-deployment reconciliation checks are mandatory. The same applies to the fact that the mutual ordering of CCR/MCR/SCR is not validated (CORE-AR-FR-001).
++`setAddresses` does not validate zero addresses, contract existence, or mutual consistency (e.g., whether troveManager belongs to the relevant branch) at all. Incorrect wiring propagates directly into each core contract's immutable values and becomes permanent, so precomputation in deployment scripts (CREATE2 address prediction) and post-deployment reconciliation checks are mandatory. After deploying each CREATE2 target, the canonical `DeployLiquity2` procedure replaces branch-local expected values with the actual deployed instances, reads back all 18 `AddressesRegistry` getters, and verifies exact expected identity, nonzero addresses, and runtime code before proceeding to the next registration. Field-specific identity checks detect swaps, zero addresses, and EOAs without breaking the constructor dependency cycle; a generic uniqueness rule is not used. The same applies to the fact that the mutual ordering of CCR/MCR/SCR is not validated (CORE-AR-FR-001).
+ 
+ 
+ ### HintHelpers Security Requirements (CORE-HH-SEC-*)
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-06-Addresses-Registry-Wiring-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-06-Addresses-Registry-Wiring-Differential-Review.md
+new file mode 100644
+index 00000000..4bab70fc
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-06-Addresses-Registry-Wiring-Differential-Review.md
+@@ -0,0 +1,125 @@
++# External Audit Info 06: AddressesRegistry 配線検証 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md` の CORE-AR-FR-002 / CORE-AR-SEC-001 を参照する。
++
++## Executive Summary
++
++外部監査 Info 06「`setAddresses` Does Not Validate 18 Core Contract Addresses」の one-shot 誤配線リスクは正しい。
++ただし、提案された `AddressesRegistry.setAddresses` 内の `code.length` 検査は正規デプロイを不可能にする。
++
++各 core contract の constructor は `AddressesRegistry` を読み、その一方で registry には各 core contract の address が必要なため、
++正規手順は CREATE2 予定アドレスを登録してから実体を deploy する。この登録時点で borrowerOperations、troveManager、
++stabilityPool、各 Pool 等に runtime code はまだ存在しない。
++
++**判定**: risk accepted / remediation adapted。core production code と upstream parity は維持し、正規 `DeployLiquity2` の
++各 branch 配備末尾で全 18 getter を読み戻して、実際に配備された期待 identity との一致・非ゼロ・runtime code の存在を
++強制する。mismatch / zero / EOA の失敗証拠と 18 個の distinct code-backed address の正常証拠を追加する。
++
++## Scope And Baseline
++
++- 外部指摘: Info 06 — one-shot `setAddresses` の 18 address validation 不在
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/AddressesRegistry.sol`
++- remediation: `contracts/script/DeployLiquity2.s.sol`
++- 回帰証拠: `contracts/test/ExternalAuditInfo06AddressesRegistryWiring.t.sol`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| `setAddresses` は zero / code / uniqueness を検証しない | True | 18 storage write 後に ownership を renounce する |
++| 誤配線は恒久化する | True | second call は ownership renounce により不能 |
++| contract 内で全 field の `code.length` を検査すべき | Incompatible | 正規 CREATE2 target は登録時点で counterfactual address |
++| `gasPoolAddress` だけ nonzero で十分 | Unnecessary exception at deploy tail | 実配備後の `GasPool` にも runtime code があるため同じ検査を適用可能 |
++| generic duplicate rejection が必要 | Too broad | field ごとの exact expected identity の方が強く、意図的共有も誤拒否しない |
++| ceremony review だけで十分 | No | script 内の exhaustive machine check を追加する |
++
++## Constructor Dependency Cycle
++
++正規順序は次のとおりである。
++
++1. branch の `AddressesRegistry` を deploy
++2. CREATE2 で core contract address を事前計算
++3. 予定値を `setAddresses` へ渡し、registry ownership を renounce
++4. core contracts を予定 CREATE2 address へ deploy。各 constructor は step 3 の registry を読む
++5. 予定値と実 deploy address の既存 assert を実行
++6. 全 18 registry getter の deploy-tail verifier を実行
++7. `JpydfToken.setBranchAddresses` と後続 registration へ進む
++
++step 3 で code existence を要求すると step 4 へ到達できない。検査を step 6 に置けば dependency cycle を変えず、
++実体が揃った最初の時点で異常を停止できる。forge script の simulation がここで revert すれば broadcast 前に失敗し、
++broadcast 中の同じ呼出が revert すればその transaction は完了しない。
++
++## Exhaustive Deploy-Tail Guard
++
++`_verifyAddressesRegistryWiring` は次の 18 field を個別に読む。
++
++| Branch-local | Shared / external |
++| --- | --- |
++| collToken, borrowerOperations, troveManager, troveNFT, metadataNFT | interestRouter, hintHelpers, multiTroveGetter |
++| stabilityPool, priceFeed, activePool, defaultPool, gasPoolAddress | collateralRegistry, jpydfToken, WETH |
++| collSurplusPool, sortedTroves | |
++
++予定 CREATE2 値を同じ calldata struct と比較するだけでは、calldata 構築時に同じ誤 field を入れた場合を検出できない。
++そのため branch-local の予定値は deploy 後の `LiquityContracts` instance で上書きし、registry storage と実体を比較する。
++各 field は exact match 後に `address != 0` と `address.code.length != 0` を検査する。
++
++generic uniqueness は protocol identity を表現しないため採用しない。たとえば「重複していない誤 address」は uniqueness を通るが
++exact identity は通らない。一方、将来 shared endpoint が意図的に同じ address を使っても exact identity なら許容できる。
++
++## Regression Evidence
++
++専用 harness は次を固定する。
++
++| Scenario | Expected result |
++| --- | --- |
++| 18 distinct addresses、全て runtime code あり | pass |
++| borrowerOperations の expected identity だけ差し替え | `addressesRegistry borrowerOperations mismatch` |
++| collToken が zero | `zero addressesRegistry collToken` |
++| collToken が nonzero EOA / codeless address | `codeless addressesRegistry collToken` |
++
++正常系で 18 target を distinct にすることで、verifier の getter / expected field 対応も同時に検査する。
++
++## Verification
++
++```text
++forge test --match-contract ExternalAuditInfo06AddressesRegistryWiringTest -vv
++forge test --match-contract DeployLiquity2StrategySelectorTest
++forge test -q --summary --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++forge fmt --check test/ExternalAuditInfo06AddressesRegistryWiring.t.sol
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- dedicated 4 tests pass
++- deploy / strategy selector regression pass
++- forkless broad gate 1,416 tests pass / 0 fail
++- production source diff は 0
++- 追加 test の format と全差分の whitespace は clean
++
++`forge fmt --check script/DeployLiquity2.s.sol` は `origin/develop` 既存の import、return expression、proxy cast 等を
++現行 formatter へ合わせる多数の差分を報告する。監査差分外の baseline formatting は本 PR に混ぜず、今回追加した
++deploy-tail hunk に formatter 差分がないことを個別比較した。
++
++## Residual Risk
++
++- `AddressesRegistry` 単体は upstream と同じく invalid value を受理する。正規 `DeployLiquity2` を迂回する独自 deployer は
++  同等の post-deploy check を実装しなければならない。
++- ownership renounce 後の in-place correction は不可能である。guard の目的は upgrade path の追加ではなく、canonical ceremony を
++  誤配線のまま完了させないことである。
++- code existence は interface conformance を完全には証明しない。exact deployed identity と各 core constructor / deploy-tail の
++  既存 bidirectional wiring、price fetch、registry registration checks を組み合わせて担保する。
++- verifier 以後の reorg、metamorphic code、外部 shared dependency の後日 upgrade は別 threat model であり、本 finding の
++  calldata construction error 対策には含めない。
++
++## Methodology
++
++- freeze finding の claim / recommendation を現行 source と比較した。
++- `DeployLiquity2` の CREATE2 address precomputation、`setAddresses`、各 constructor、address assert の順序を追跡した。
++- 全 18 getter と `AddressVars` field を照合し、field-specific identity と code existence を deploy-tail へ実装した。
++- distinct address 正常系と mismatch / zero / codeless 異常系を実行した。
++- core source / ABI / storage が無変更であることを差分確認した。
+diff --git a/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md b/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md
+index ee82f7fa..1da65fa2 100644
+--- a/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md
++++ b/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md
+@@ -2821,7 +2821,7 @@ Chainlink AggregatorV3 の最小インターフェース転載（`decimals()` /
+   3. `_renounceOwnership()`: `OwnershipTransferred(旧 owner, address(0))` を発火し Owner を消去
+ - **revert / 早期 return**: 非 Owner → `"Ownable: caller is not the owner"`。
+ - **発火イベント**: CORE-AR-EVT-001〜018 の全件＋CORE-AR-EVT-019。
+-- **設計上のポイント**: 「1 度限り」は ownership renounce により強制される（再呼出は恒久に不能）。デプロイ手順上は、各 core コントラクトが constructor で本レジストリを参照して自身の immutable を確定するより**前に**呼ばれている必要がある（典型的には AR デプロイ → `setAddresses`（事前計算したアドレスで） → 各コントラクトデプロイ、の順）。設定値の正しさを検証する機構はコントラクト内にないため、配線検証はデプロイスクリプト・デプロイ後検証の責務（CORE-AR-SEC-001）。
++- **設計上のポイント**: 「1 度限り」は ownership renounce により強制される（再呼出は恒久に不能）。デプロイ手順上は、各 core コントラクトが constructor で本レジストリを参照して自身の immutable を確定するより**前に**呼ばれている必要がある（典型的には AR デプロイ → `setAddresses`（事前計算したアドレスで） → 各コントラクトデプロイ、の順）。この時点の CREATE2 予定アドレスにはまだ runtime code がないため、`setAddresses` 内での `code.length` 検査は正規手順と両立しない。設定値の正しさを検証する機構はコントラクト内にないため、配線検証はデプロイスクリプト・デプロイ後検証の責務（CORE-AR-SEC-001）。
+ - **Verification**: parity / unit（onlyOwner・18 値反映・18+1 イベント・renounce 後の再呼出 revert）。
+ 
+ #### CORE-AR-FR-003: branch リスクパラメータ getter 群（CCR / SCR / MCR / BCR / 清算ペナルティ）🔵
+@@ -4348,7 +4348,7 @@ burn 総額と債務減少総額のコントラクト横断整合は CORE-SYS-IN
+ ### AddressesRegistry のセキュリティ要件（CORE-AR-SEC-*）
+ 
+ #### CORE-AR-SEC-001: 配線値の無検証（デプロイ手順依存）🔵
+-`setAddresses` はゼロアドレス・コントラクト実在性・相互整合性（例: troveManager が当該 branch のものか）を一切検証しない。誤配線はそのまま各 core コントラクトの immutable に伝播し恒久化するため、デプロイスクリプトでの事前計算（CREATE アドレス予測）と、デプロイ後の突合検証が必須。CCR/MCR/SCR の相互順序が無検証である点も同様（CORE-AR-FR-001）。
++`setAddresses` はゼロアドレス・コントラクト実在性・相互整合性（例: troveManager が当該 branch のものか）を一切検証しない。誤配線はそのまま各 core コントラクトの immutable に伝播し恒久化するため、デプロイスクリプトでの事前計算（CREATE2 アドレス予測）と、デプロイ後の突合検証が必須。正規 `DeployLiquity2` 手順は各 CREATE2 target の配備後、branch-local の期待値を実際に配備された instance へ置き換え、`AddressesRegistry` の全 18 getter を読み戻して期待アドレスとの一致・非ゼロ・runtime code の存在を確認してから次の registration へ進む。generic な重複禁止ではなく field ごとの期待 identity を照合するため、取り違え・ゼロ・EOA を検出しつつ constructor dependency cycle を維持する。CCR/MCR/SCR の相互順序が無検証である点も同様（CORE-AR-FR-001）。
+ 
+ 
+ ### HintHelpers のセキュリティ要件（CORE-HH-SEC-*）

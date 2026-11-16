@@ -1,0 +1,497 @@
+diff --git a/contracts/src/CollateralVault.sol b/contracts/src/CollateralVault.sol
+index 77eb5de82..9e46fcf2b 100644
+--- a/contracts/src/CollateralVault.sol
++++ b/contracts/src/CollateralVault.sol
+@@ -80,6 +80,11 @@ contract CollateralVault is
+ 
+     uint256 internal constant BPS_DENOMINATOR = 10000;
+     uint256 internal constant DEFAULT_STRATEGY_VALUATION_MAX_AGE = 1 days;
++    /// @dev Fixed gas budget handed to each Strategy valuation probe. A registered Strategy must
++    ///      value itself within this budget; a probe that exceeds it is a genuine valuation failure.
++    uint256 internal constant STRATEGY_VALUATION_GAS = 500_000;
++    /// @dev Headroom the Vault keeps for the probe call frames and the catch paths.
++    uint256 internal constant STRATEGY_VALUATION_GAS_MARGIN = 20_000;
+     uint256 public constant MAX_STRATEGIES = 32;
+ 
+     // =============================================================
+@@ -128,6 +133,9 @@ contract CollateralVault is
+     error Paused();
+     error ZeroAddress();
+     error ZeroAmount();
++    /// @dev Caller cannot fund the fixed Strategy valuation probe budget. Same signature as the
++    ///      price-feed gas guard so JpyFreezeLib and PriceFeedProxy bubble it instead of shutting down.
++    error InsufficientGasForExternalCall();
+     error InvalidBufferConfig();
+     error RequestNotReady();
+     error RequestNotFound();
+@@ -1196,7 +1204,12 @@ contract CollateralVault is
+         view
+         returns (uint256 estimated, bool available)
+     {
+-        try _strategy.estimatedTotalUnderlying() returns (uint256 value) {
++        // Check each probe at its call boundary: the previous probe may have spent its budget.
++        // Bubble caller underfunding instead of treating a clipped stipend as valuation failure.
++        if (gasleft() < STRATEGY_VALUATION_GAS * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++            revert InsufficientGasForExternalCall();
++        }
++        try _strategy.estimatedTotalUnderlying{gas: STRATEGY_VALUATION_GAS}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+@@ -1204,7 +1217,10 @@ contract CollateralVault is
+     }
+ 
+     function _tryPrincipal(IStrategy _strategy) internal view returns (uint256 principal_, bool available) {
+-        try _strategy.principal() returns (uint256 value) {
++        if (gasleft() < STRATEGY_VALUATION_GAS * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++            revert InsufficientGasForExternalCall();
++        }
++        try _strategy.principal{gas: STRATEGY_VALUATION_GAS}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+diff --git a/contracts/src/PriceFeeds/JpyFreezeLib.sol b/contracts/src/PriceFeeds/JpyFreezeLib.sol
+index 9573e0ae6..baccc6ca2 100644
+--- a/contracts/src/PriceFeeds/JpyFreezeLib.sol
++++ b/contracts/src/PriceFeeds/JpyFreezeLib.sol
+@@ -129,7 +129,13 @@ library JpyFreezeLib {
+ 
+             self.lastGoodBacking = liveBacking;
+             return (Math.mulDiv(_jpyPrice, liveBacking, 1e18), false);
+-        } catch {
++        } catch (bytes memory err) {
++            // The Vault reverts with the same gas-guard error when the caller cannot fund the
++            // fixed Strategy probe budget (Guardian Remediation L-01). Bubble it unchanged so a
++            // gas-starved call is never classified as an oracle failure.
++            if (err.length == 4 && bytes4(err) == InsufficientGasForExternalCall.selector) {
++                revert InsufficientGasForExternalCall();
++            }
+             if (gasleft() <= gasBefore / 64) revert InsufficientGasForExternalCall();
+             return (0, true);
+         }
+diff --git a/contracts/test/DFPriceFeed.t.sol b/contracts/test/DFPriceFeed.t.sol
+index 5e7ececce..546690235 100644
+--- a/contracts/test/DFPriceFeed.t.sol
++++ b/contracts/test/DFPriceFeed.t.sol
+@@ -28,6 +28,8 @@ contract MockBackingVault {
+     bool public shouldRevert;
+     bool public shouldConsumeAllGas;
+     bool public backingUnavailable;
++    bool public revertWithGasGuardSelector;
++    bool public revertWithGasGuardSelectorAndData;
+ 
+     function setBackingRatio(uint256 _ratio) external {
+         ratio = _ratio;
+@@ -45,6 +47,14 @@ contract MockBackingVault {
+         backingUnavailable = _backingUnavailable;
+     }
+ 
++    function setRevertWithGasGuardSelector(bool _value) external {
++        revertWithGasGuardSelector = _value;
++    }
++
++    function setRevertWithGasGuardSelectorAndData(bool _value) external {
++        revertWithGasGuardSelectorAndData = _value;
++    }
++
+     function backingRatio() external view returns (uint256) {
+         if (shouldConsumeAllGas) {
+             assembly {
+@@ -61,6 +71,15 @@ contract MockBackingVault {
+                 invalid()
+             }
+         }
++        // The Vault's own probe-budget guard: a normal revert with the shared gas-guard selector.
++        if (revertWithGasGuardSelector) revert MainnetPriceFeedBase.InsufficientGasForExternalCall();
++        if (revertWithGasGuardSelectorAndData) {
++            bytes memory err =
++                abi.encodeWithSelector(MainnetPriceFeedBase.InsufficientGasForExternalCall.selector, uint256(1));
++            assembly {
++                revert(add(err, 0x20), mload(err))
++            }
++        }
+         if (shouldRevert) revert("backing unavailable");
+         if (backingUnavailable) return (0, false);
+         return (ratio, true);
+@@ -309,6 +328,29 @@ contract DFPriceFeedTest is Test {
+         assertFalse(bo.shutDownCalled(), "gas-starved backing read must not shut down branch");
+     }
+ 
++    function test_vaultGasGuardRevertIsBubbled_notShutdown() public {
++        collUsd.setPrice(3000e8);
++        DFUSDCPriceFeed feed = _deployStandardFeed();
++        backingVault.setRevertWithGasGuardSelector(true);
++
++        // Ample gas: the Vault reverted because the *caller* under-funded the Strategy probe
++        // budget, not because valuation is unavailable. Must bubble, never shut down.
++        vm.expectRevert(MainnetPriceFeedBase.InsufficientGasForExternalCall.selector);
++        feed.fetchPrice();
++        assertFalse(bo.shutDownCalled(), "vault gas guard must not shut down branch");
++        assertEq(uint256(feed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
++    }
++
++    function test_vaultGasGuardSelectorWithExtraData_isGenuineFailure() public {
++        collUsd.setPrice(3000e8);
++        DFUSDCPriceFeed feed = _deployStandardFeed();
++        backingVault.setRevertWithGasGuardSelectorAndData(true);
++
++        (, bool failure) = feed.fetchPrice();
++        assertTrue(failure, "selector prefix with extra data is not the gas guard");
++        assertTrue(bo.shutDownCalled());
++    }
++
+     function test_backingRatioAboveOneIsCapped() public {
+         collUsd.setPrice(3000e8);
+         DFUSDCPriceFeed feed = _deployStandardFeed();
+diff --git a/contracts/test/GuardianR2L01StrategyGasBudget.t.sol b/contracts/test/GuardianR2L01StrategyGasBudget.t.sol
+new file mode 100644
+index 000000000..fa0dadd1d
+--- /dev/null
++++ b/contracts/test/GuardianR2L01StrategyGasBudget.t.sol
+@@ -0,0 +1,315 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.24;
++
++// Guardian remediation review L-01: a nested out-of-gas inside a Strategy valuation
++// probe must not be classified as an oracle failure. The Vault hands each probe a fixed
++// gas budget and reverts with the shared gas-guard error when the caller cannot fund it;
++// JpyFreezeLib and PriceFeedProxy bubble that error instead of pausing the branch.
++
++import "forge-std/Test.sol";
++import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
++import {IERC4626} from "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
++import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
++import {ERC4626} from "openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
++import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
++import {
++    IERC20MetadataUpgradeable
++} from "openzeppelin-contracts-upgradeable/token/ERC20/extensions/IERC20MetadataUpgradeable.sol";
++
++import {DToken} from "src/DToken.sol";
++import {CollateralVault} from "src/CollateralVault.sol";
++import {ERC4626Strategy} from "src/Strategies/ERC4626Strategy.sol";
++import {ICollateralVault} from "src/Interfaces/ICollateralVault.sol";
++import {IDToken} from "src/Interfaces/IDToken.sol";
++import {IStrategy} from "src/Interfaces/IStrategy.sol";
++import {IPriceFeed} from "src/Interfaces/IPriceFeed.sol";
++import {DFUSDCPriceFeed} from "src/PriceFeeds/DFUSDCPriceFeed.sol";
++import {JpyUsdRateProvider} from "src/PriceFeeds/JpyUsdRateProvider.sol";
++import {PriceFeedProxy} from "src/PriceFeeds/PriceFeedProxy.sol";
++import {MainnetPriceFeedBase} from "src/PriceFeeds/MainnetPriceFeedBase.sol";
++import {MockERC20} from "test/mocks/MockERC20.sol";
++import {activateDTokenForTest} from "test/mocks/MockDTokenRegistry.sol";
++import {ChainlinkOracleMock} from "test/TestContracts/ChainlinkOracleMock.sol";
++
++/// @dev Yield vault whose share->asset conversion burns a configurable, deterministic
++///      amount of gas, standing in for venues that walk several markets per valuation.
++contract GasHeavyERC4626Vault is ERC4626 {
++    uint256 public burnGas = 80_000;
++
++    constructor(IERC20 asset_) ERC20("Heavy Vault", "hv") ERC4626(asset_) {}
++
++    function setBurnGas(uint256 g) external {
++        burnGas = g;
++    }
++
++    function convertToAssets(uint256 shares) public view override returns (uint256) {
++        uint256 start = gasleft();
++        uint256 sink;
++        while (start - gasleft() < burnGas) sink += 1;
++        return super.convertToAssets(shares) + (sink == 0 ? 1 : 0);
++    }
++}
++
++/// @dev Both probes fit the budget independently; principal also crosses nested call frames.
++contract GasHeavyStrategyProbe {
++    function burn(uint256 depth) external view returns (uint256) {
++        if (depth != 0) return this.burn(depth - 1);
++        uint256 start = gasleft();
++        uint256 sink;
++        while (start - gasleft() < 300_000) sink++;
++        return 100e18 + (sink == 0 ? 1 : 0);
++    }
++}
++
++contract GasHeavyPrincipalStrategy {
++    GasHeavyStrategyProbe internal immutable probe = new GasHeavyStrategyProbe();
++
++    function estimatedTotalUnderlying() external view returns (uint256) {
++        return probe.burn(0);
++    }
++
++    function principal() external view returns (uint256) {
++        return probe.burn(8);
++    }
++}
++
++contract MockBO {
++    bool public shutDownCalled;
++
++    function shutdownFromOracleFailure() external {
++        shutDownCalled = true;
++    }
++
++    function isOracleFailureShutdown() external view returns (bool) {
++        return shutDownCalled;
++    }
++
++    function ownerResume() external {
++        shutDownCalled = false;
++    }
++}
++
++contract GuardianR2L01StrategyGasBudgetTest is Test {
++    uint256 internal constant PROBE_BUDGET = 500_000; // CollateralVault.STRATEGY_VALUATION_GAS
++
++    MockERC20 internal underlying;
++    GasHeavyERC4626Vault internal yieldVault;
++    DToken internal dToken;
++    CollateralVault internal vault;
++    ERC4626Strategy internal strategy;
++    ChainlinkOracleMock internal collUsd;
++    ChainlinkOracleMock internal jpyUsd;
++    JpyUsdRateProvider internal jpyProvider;
++    MockBO internal bo;
++    DFUSDCPriceFeed internal feed;
++    PriceFeedProxy internal proxy;
++    address internal alice = makeAddr("alice");
++    address internal attacker = makeAddr("attacker");
++
++    function setUp() public {
++        vm.warp(1_700_000_000);
++        underlying = new MockERC20("Mock USDC", "mUSDC", 18);
++        yieldVault = new GasHeavyERC4626Vault(IERC20(address(underlying)));
++
++        DToken dTokenImpl = new DToken();
++        CollateralVault vaultImpl = new CollateralVault();
++        address predictedVault = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
++        dToken = DToken(
++            address(
++                new ERC1967Proxy(
++                    address(dTokenImpl),
++                    abi.encodeWithSelector(DToken.initialize.selector, predictedVault, address(this))
++                )
++            )
++        );
++        dToken.setAllowedUnderlying(address(underlying), true);
++        vault = CollateralVault(
++            address(
++                new ERC1967Proxy(
++                    address(vaultImpl),
++                    abi.encodeWithSelector(
++                        CollateralVault.initialize.selector,
++                        IERC20(address(underlying)),
++                        IDToken(address(dToken)),
++                        makeAddr("treasury"),
++                        address(this)
++                    )
++                )
++            )
++        );
++        dToken.setTokenInfo("dmUSDC", "dmUSDC", IERC20MetadataUpgradeable(address(underlying)));
++        activateDTokenForTest(dToken);
++
++        ERC4626Strategy stratImpl = new ERC4626Strategy();
++        strategy = ERC4626Strategy(
++            address(
++                new ERC1967Proxy(
++                    address(stratImpl),
++                    abi.encodeWithSelector(
++                        ERC4626Strategy.initialize.selector,
++                        address(vault),
++                        IERC20(address(underlying)),
++                        address(this),
++                        address(this),
++                        IERC4626(address(yieldVault))
++                    )
++                )
++            )
++        );
++        vault.addToWhitelist(address(strategy));
++        vault.addStrategy(IStrategy(address(strategy)), 10_000, type(uint256).max);
++
++        // Raw Vault assets do not cover liabilities: everything sits in the Strategy.
++        underlying.mint(alice, 100e18);
++        vm.startPrank(alice);
++        underlying.approve(address(vault), type(uint256).max);
++        vault.deposit(100e18);
++        vm.stopPrank();
++        vault.setBufferConfig(0, 0);
++        vault.allocate();
++        assertEq(underlying.balanceOf(address(vault)), 0);
++
++        collUsd = new ChainlinkOracleMock();
++        collUsd.setDecimals(8);
++        collUsd.setPrice(1e8);
++        collUsd.setUpdatedAt(block.timestamp);
++        jpyUsd = new ChainlinkOracleMock();
++        jpyUsd.setDecimals(8);
++        jpyUsd.setPrice(666_700);
++        jpyUsd.setUpdatedAt(block.timestamp);
++        jpyProvider = new JpyUsdRateProvider(address(jpyUsd), 72 hours);
++        bo = new MockBO();
++        feed = new DFUSDCPriceFeed(address(collUsd), 24 hours, address(jpyProvider), address(vault), address(bo));
++        proxy = new PriceFeedProxy(address(feed), address(this), address(bo));
++    }
++
++    function _expireValuationCache() internal {
++        vm.warp(block.timestamp + vault.strategyValuationMaxAge() + 1);
++        collUsd.setUpdatedAt(block.timestamp);
++        jpyUsd.setUpdatedAt(block.timestamp);
++        (, uint256 updatedAt, bool initialized) = vault.strategyValuationCaches(IStrategy(address(strategy)));
++        assertTrue(initialized && block.timestamp - updatedAt > vault.strategyValuationMaxAge(), "cache is stale");
++    }
++
++    /// @dev For a healthy Strategy within budget, no caller-chosen gas amount may leave a
++    ///      new oracle-failure pause behind: every attempt either reverts (no state) or
++    ///      returns a healthy price.
++    function _assertNoGasLatch(uint256 hi, uint256 lo, uint256 step) internal {
++        uint256 reverted;
++        uint256 healthy;
++        for (uint256 g = hi; g > lo; g -= step) {
++            (bool ok, bytes memory ret) = address(proxy).call{gas: g}(abi.encodeCall(IPriceFeed.fetchPrice, ()));
++            if (ok) {
++                (uint256 price, bool failure) = abi.decode(ret, (uint256, bool));
++                assertFalse(failure, "healthy strategy reported as oracle failure");
++                assertGt(price, 0);
++                healthy++;
++            } else {
++                reverted++;
++            }
++            assertFalse(bo.shutDownCalled(), "gas-calibrated call latched a pause");
++        }
++        assertGt(reverted, 0, "sweep never reached the starved region");
++        assertGt(healthy, 0, "sweep never reached the healthy region");
++    }
++
++    function test_calibratedGasCannotLatchOracleShutdown() public {
++        yieldVault.setBurnGas(450_000); // inside the budget; a nested OOG window existed here before the fix
++        _expireValuationCache();
++        vm.startPrank(attacker);
++        _assertNoGasLatch(4_000_000, 100_000, 5_000);
++        vm.stopPrank();
++    }
++
++    function test_fineSweepAroundBudgetBoundary() public {
++        yieldVault.setBurnGas(300_000);
++        _expireValuationCache();
++        vm.startPrank(attacker);
++        _assertNoGasLatch(1_000_000, 750_000, 100);
++        vm.stopPrank();
++    }
++
++    function test_eachProbeGetsFullBudget_afterExpensiveEstimate() public {
++        GasHeavyPrincipalStrategy replacement = new GasHeavyPrincipalStrategy();
++        assertEq(replacement.estimatedTotalUnderlying{gas: PROBE_BUDGET}(), 100e18);
++        assertEq(replacement.principal{gas: PROBE_BUDGET}(), 100e18);
++        vm.etch(address(strategy), address(replacement).code);
++        _expireValuationCache();
++
++        vm.startPrank(attacker);
++        _assertNoGasLatch(1_100_000, 500_000, 1_000);
++        vm.stopPrank();
++    }
++
++    function test_vaultPreCheckRevertsWithGasGuardSelector() public {
++        _expireValuationCache();
++        (bool ok, bytes memory ret) =
++            address(vault).call{gas: 300_000}(abi.encodeCall(ICollateralVault.backingRatioForPricing, ()));
++        assertFalse(ok);
++        assertEq(ret.length, 4);
++        assertEq(bytes4(ret), CollateralVault.InsufficientGasForExternalCall.selector);
++        assertEq(
++            CollateralVault.InsufficientGasForExternalCall.selector,
++            MainnetPriceFeedBase.InsufficientGasForExternalCall.selector
++        );
++    }
++
++    function test_starvedCallBubblesGasGuardErrorThroughFeedAndProxy() public {
++        _expireValuationCache();
++        (bool ok, bytes memory ret) = address(proxy).call{gas: 400_000}(abi.encodeCall(IPriceFeed.fetchPrice, ()));
++        assertFalse(ok);
++        assertEq(ret.length, 4);
++        assertEq(bytes4(ret), MainnetPriceFeedBase.InsufficientGasForExternalCall.selector);
++        assertFalse(bo.shutDownCalled());
++    }
++
++    function test_ampleGasPricesNormallyAndRefreshes() public {
++        yieldVault.setBurnGas(300_000);
++        _expireValuationCache();
++        (uint256 price, bool failure) = proxy.fetchPrice();
++        assertFalse(failure);
++        assertGt(price, 0);
++        assertFalse(bo.shutDownCalled());
++        assertTrue(vault.refreshStrategyValuation(IStrategy(address(strategy))));
++        (uint256 ratio, bool available) = vault.backingRatioForPricing();
++        assertEq(ratio, 1e18);
++        assertTrue(available);
++    }
++
++    /// @dev A Strategy that cannot value itself within the budget is a genuine valuation
++    ///      failure with the existing semantics: fresh cache absorbs it, stale cache reports
++    ///      unavailable and the feed enters oracle-failure shutdown.
++    function test_overBudgetStrategyIsGenuineValuationFailure() public {
++        yieldVault.setBurnGas(PROBE_BUDGET * 2);
++        (uint256 price, bool failure) = proxy.fetchPrice();
++        assertFalse(failure);
++        assertGt(price, 0);
++        assertFalse(bo.shutDownCalled());
++        assertFalse(vault.refreshStrategyValuation(IStrategy(address(strategy))), "refresh fails deterministically");
++
++        _expireValuationCache();
++        (price, failure) = proxy.fetchPrice();
++        assertTrue(failure);
++        assertTrue(bo.shutDownCalled());
++    }
++
++    /// @dev Documents the side effect: the smallest successful gas limit rises to roughly
++    ///      "actual usage + budget", while actual usage is unchanged.
++    function test_minimumGasLimitStaysNearBudget() public {
++        _expireValuationCache();
++        uint256 lo = 21_000;
++        uint256 hi = 2_000_000;
++        while (hi - lo > 1_000) {
++            uint256 mid = (lo + hi) / 2;
++            uint256 snap = vm.snapshotState();
++            (bool ok,) = address(proxy).call{gas: mid}(abi.encodeCall(IPriceFeed.fetchPrice, ()));
++            vm.revertToState(snap);
++            if (ok) hi = mid;
++            else lo = mid;
++        }
++        assertLt(hi, PROBE_BUDGET + 250_000, "minimum gas limit drifted far above the probe budget");
++        uint256 before = gasleft();
++        proxy.fetchPrice();
++        assertLt(before - gasleft(), 300_000, "actual gas usage must stay unchanged");
++    }
++}
+diff --git a/contracts/utils/local-stack.sh b/contracts/utils/local-stack.sh
+index db3444b10..fee70c889 100755
+--- a/contracts/utils/local-stack.sh
++++ b/contracts/utils/local-stack.sh
+@@ -77,6 +77,8 @@ done
+ 
+ if [ "$SKIP_DEPLOY" = false ]; then
+   echo "==> 1/5 Deploying JPYdf contracts (slow broadcast)..."
++  # RPC-estimate each transaction after its predecessor lands. Forge's on-chain simulation
++  # estimates consumption, which omits the unused gas required by the Strategy probe guards.
+   DEPLOYER="$DEPLOYER_ADDRESS" SALT="$SALT" DF_TREASURY="$DF_TREASURY" \
+     DF_INTEREST_ROUTER_RECIPIENT="$DF_INTEREST_ROUTER_RECIPIENT" \
+     DF_INTEREST_ROUTER_OWNER="$DF_INTEREST_ROUTER_OWNER" \
+@@ -87,7 +89,7 @@ if [ "$SKIP_DEPLOY" = false ]; then
+     DF_STRATEGY_WEIGHT_BPS_1="$DF_STRATEGY_WEIGHT_BPS_1" \
+     DF_STRATEGY_CAP_1="$DF_STRATEGY_CAP_1" \
+     DF_ENABLE_LOCAL_NATIVE_ETH_ROUTE="$DF_ENABLE_LOCAL_NATIVE_ETH_ROUTE" forge script DeployLiquity2Script \
+-    --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --broadcast --slow --unlocked
++    --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --broadcast --slow --unlocked --skip-simulation
+ fi
+ 
+ echo "==> 2/5 Injecting Multicall3 at ${MULTICALL3}..."
+@@ -101,7 +103,7 @@ cast rpc anvil_setCode "$MULTICALL3" "$(cat utils/multicall3-runtime.hex)" -r "$
+ if [ "$SKIP_SEED" = false ]; then
+   echo "==> 3/5 Seeding ${SEED_PROFILE} state with ${SEED_SCRIPT}..."
+   DEPLOYER="$DEPLOYER_KEY" forge script "$SEED_SCRIPT" \
+-    --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --broadcast --slow
++    --chain-id "$CHAIN_ID" --rpc-url "$RPC_URL" --broadcast --slow --skip-simulation
+ fi
+ 
+ echo "==> 4/5 Generating frontend env from manifest..."

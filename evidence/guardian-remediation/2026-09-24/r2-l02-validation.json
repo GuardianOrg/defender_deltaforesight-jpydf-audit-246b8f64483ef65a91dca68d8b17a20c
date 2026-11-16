@@ -1,0 +1,126 @@
+{
+  "recordedDate": "2026-09-24",
+  "candidateCommit": "11828df54c9ab5508db2fd0500b02d6b87bbfe32",
+  "candidateParent": "09076b0c6e4b0df706b6779c54742f4e044b1860",
+  "candidateProductionTree": "3f7ab10db30e6dc237bb9f4cbf8447393a69dca6",
+  "parentProductionTree": "375f41640a8e12396d8b379ef48755cb23320714",
+  "merged": true,
+  "productionDeployment": "not performed",
+  "guardianStatus": "Pending",
+  "guardianApproval": "not claimed",
+  "reviewer": "implementing agent, not an independent reviewer",
+  "reconstruction": {
+    "auditBaseCommit": "5723a6d76279ec13c7cd57e081faf8493db34f15",
+    "patchOrder": [
+      "upstream-production-delta.patch",
+      "r2-l02-implementation.patch"
+    ],
+    "productionTreeMatches": true,
+    "allFourChangedSourceAndTestBlobsMatch": true,
+    "completeBuildEnvironmentReconstructed": false
+  },
+  "baselineReproducer": {
+    "passed": 1,
+    "strandedJPYdf": 100,
+    "baselineSourceModified": "contract identifiers only"
+  },
+  "focused": {
+    "suites": 3,
+    "passed": 48,
+    "failed": 0,
+    "skipped": 0,
+    "fuzzRuns": 256
+  },
+  "coverage": {
+    "shard": "df-ops",
+    "passed": 67,
+    "failed": 0,
+    "skipped": 0,
+    "fuzzRuns": 32,
+    "allocatorLines": [
+      142,
+      149
+    ],
+    "initiativeLines": [
+      96,
+      100
+    ]
+  },
+  "runtimeBytes": {
+    "PILAllocator": 7788,
+    "UniV4MerklInitiative": 6713
+  },
+  "productionEIP170Gate": "passed",
+  "slither": {
+    "analysisCompleted": true,
+    "contracts": 188,
+    "detectors": 93,
+    "scopedReports": 8,
+    "dispositions": "r2-l02-differential-review.md"
+  },
+  "fullCI": {
+    "testedCommit": "11828df54c9ab5508db2fd0500b02d6b87bbfe32",
+    "runId": 35935025281,
+    "attempt": 2,
+    "jobId": 107431703131,
+    "result": "success",
+    "local": {
+      "passed": 1873,
+      "failed": 0,
+      "skipped": 2
+    },
+    "mainnet": {
+      "passed": 27,
+      "failed": 0,
+      "skipped": 1
+    },
+    "separateInvocations": {
+      "canonicalTimelockPassed": 5,
+      "ccipEntrypointPassed": 1,
+      "ccipMainnetPassed": 1
+    },
+    "InvariantsTestsPassed": 11,
+    "skipReason": "Duplicates executed successfully in dedicated invocations"
+  },
+  "artifacts": {
+    "r2-l02-implementation.patch": "8a92f8c1bb70afc0a233b3570a11d0b9206a46b76cfe82e7a4eab2cc3453f55a",
+    "r2-l02-differential-review.md": "10930c39d442f07552ca44cd6e95202c628bc834112fae45393c22be246b58c9",
+    "r2-l02-local-validation.txt": "6a25049c53ed69f27930b1da85fbb14a24974355c641effaf2f50a2c17c1f28d",
+    "r2-l02-ci-summary.txt": "e68ad3ca0456bd9a81d113766685bb580c1ab6a652294f84a70d686dca7dbfa8"
+  },
+  "guardianFollowupReadback": {
+    "persistedAfterReload": true,
+    "clientStatus": "Pending",
+    "bodySha256": "6e858936fd4e798f68a8be9b0edf470115f5afc615a63f039d39b3480f01a783",
+    "auditHandoff": "https://github.com/deltaforesight/jpydf-audit/pull/129"
+  },
+  "documentationFollowupCommit": "432e7015358dc060dc7bee2c2d6664e3c3fc6fc3",
+  "documentationFollowupContractsAndWorkflowTreesUnchanged": true,
+  "deployWiring": {
+    "runId": 35935024478,
+    "jobId": 107430085269,
+    "result": "success",
+    "localParityDrillsPassed": 5
+  },
+  "documentationFollowupCI": {
+    "commit": "432e7015358dc060dc7bee2c2d6664e3c3fc6fc3",
+    "allSelectedChecks": "passed",
+    "contractsRunId": 35936824221,
+    "fast": {
+      "passed": 1802,
+      "failed": 0,
+      "skipped": 2
+    },
+    "deployWiring": "passed",
+    "botRunId": 35936824302,
+    "surfaceRunId": 35936824182,
+    "sourceTreeRunId": 35936824133,
+    "intentionalJobSkips": [
+      "contract utility: outside changed-input scope",
+      "mainnet launch operation: outside changed-input scope",
+      "coverage: not selected in CI; local df-ops shard passed"
+    ]
+  },
+  "mergeCommit": "937a43b5d5ea54dd9ab206516fa28168b4a4fa44",
+  "mergedProductionTreeMatchesCandidate": true
+}

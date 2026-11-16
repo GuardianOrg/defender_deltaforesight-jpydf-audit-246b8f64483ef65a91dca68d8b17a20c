@@ -1,0 +1,471 @@
+diff --git a/contracts/src/Interfaces/IPriceFeedProxy.sol b/contracts/src/Interfaces/IPriceFeedProxy.sol
+index a023d1c8..74e595b0 100644
+--- a/contracts/src/Interfaces/IPriceFeedProxy.sol
++++ b/contracts/src/Interfaces/IPriceFeedProxy.sol
+@@ -21,6 +21,9 @@ import "./IBorrowerOperations.sol";
+ interface IPriceFeedProxy is IPriceFeed {
+     // --- Events ---
+     event SourceUpdated(address indexed oldSource, address indexed newSource);
++    /// @dev oldPrice / oldRedemptionPrice are the healthy old source's live prices, or the
++    ///      proxy's path-specific last-good references when oldSourceHealthy is false.
++    ///      priceGuardBypassed is true only for an explicit confirmSourceEmergency call.
+     event SourceSwitchValidated(
+         address indexed oldSource,
+         address indexed newSource,
+diff --git a/contracts/src/PriceFeeds/PriceFeedProxy.sol b/contracts/src/PriceFeeds/PriceFeedProxy.sol
+index 5c45a2b6..6ef8d5c1 100644
+--- a/contracts/src/PriceFeeds/PriceFeedProxy.sol
++++ b/contracts/src/PriceFeeds/PriceFeedProxy.sol
+@@ -43,8 +43,9 @@ import {MainnetPriceFeedBase} from "./MainnetPriceFeedBase.sol";
+  *        TIMELOCK_DELAY → confirmSource(). The timelock guarantees the swap cannot
+  *        happen without TIMELOCK_DELAY of public notice (SourceProposed emits the
+  *        executable time); it does NOT by itself eliminate price-jump MEV at the
+- *        confirmSource block. The normal confirm path rejects material jumps while
+- *        the old source is healthy; incident recovery / placeholder activation can use
++ *        confirmSource block. The normal confirm path rejects material jumps against
++ *        the old source's live price, or the proxy's cached last-good prices when the
++ *        old source is unhealthy. Incident recovery / placeholder activation can use
+  *        confirmSourceEmergency() to bypass only that price-jump guard after the same
+  *        timelock and new-source smoke tests.
+  *      - confirmSource smoke-tests the new source and re-initialises the cached price,
+@@ -351,9 +352,17 @@ contract PriceFeedProxy is IPriceFeedProxy, Ownable2Step {
+         (uint256 newRedemptionPrice, bool newRedemptionFailure) = IPriceFeed(proposedSource).fetchRedemptionPrice();
+         if (_isInvalidPrice(newRedemptionPrice) || newRedemptionFailure) revert InvalidSource();
+ 
+-        if (!_bypassPriceGuard && oldRead.healthy) {
+-            _requireWithinSwitchDeviation(oldRead.price, newPrice);
+-            _requireWithinSwitchDeviation(oldRead.redemptionPrice, newRedemptionPrice);
++        uint256 referencePrice = oldRead.healthy ? oldRead.price : _lastGoodPrice;
++        uint256 referenceRedemptionPrice = oldRead.healthy ? oldRead.redemptionPrice : _lastGoodRedemptionPrice;
++
++        // Normal confirmation never becomes an implicit emergency path merely because the old
++        // source failed between proposal and execution. The proxy caches are initialized and
++        // updated only from validated prices, so they provide the continuity reference while the
++        // old source is unavailable. A deliberate jump remains possible through the explicitly
++        // named emergency entrypoint, which keeps the same timelock and new-source smoke tests.
++        if (!_bypassPriceGuard) {
++            _requireWithinSwitchDeviation(referencePrice, newPrice);
++            _requireWithinSwitchDeviation(referenceRedemptionPrice, newRedemptionPrice);
+         }
+ 
+         _lastGoodPrice = newPrice;
+@@ -369,10 +378,10 @@ contract PriceFeedProxy is IPriceFeedProxy, Ownable2Step {
+             oldSource,
+             source,
+             oldRead.healthy,
+-            _bypassPriceGuard || !oldRead.healthy,
+-            oldRead.price,
++            _bypassPriceGuard,
++            referencePrice,
+             newPrice,
+-            oldRead.redemptionPrice,
++            referenceRedemptionPrice,
+             newRedemptionPrice
+         );
+     }
+diff --git a/contracts/test/PriceFeedProxy.t.sol b/contracts/test/PriceFeedProxy.t.sol
+index 287f8649..c71442f5 100644
+--- a/contracts/test/PriceFeedProxy.t.sol
++++ b/contracts/test/PriceFeedProxy.t.sol
+@@ -618,6 +618,79 @@ contract PriceFeedProxyTest is Test {
+         assertEq(proxy.source(), address(feedA));
+     }
+ 
++    function testConfirmSourceRevertsWhenUnhealthyOldSourceCachedPriceJumpsTooFar() public {
++        MockPriceFeed jumpFeed = new MockPriceFeed(150_000e18);
++        feedA.setOracleFailure(true);
++
++        proxy.proposeSource(address(jumpFeed));
++        vm.warp(block.timestamp + proxy.TIMELOCK_DELAY());
++
++        vm.expectRevert(
++            abi.encodeWithSelector(
++                IPriceFeedProxy.SourcePriceDeviationTooLarge.selector,
++                100_000e18,
++                150_000e18,
++                proxy.MAX_SOURCE_SWITCH_DEVIATION_BPS()
++            )
++        );
++        proxy.confirmSource();
++
++        assertEq(proxy.source(), address(feedA));
++    }
++
++    function testConfirmSourceUsesSeparateCachedRedemptionPriceWhenOldSourceFails() public {
++        DivergentTogglableBrickFeed divergent = new DivergentTogglableBrickFeed(100_000e18, 90_000e18);
++        proxy.proposeSource(address(divergent));
++        vm.warp(block.timestamp + proxy.TIMELOCK_DELAY());
++        proxy.confirmSourceEmergency();
++        divergent.brick();
++
++        DivergentTogglableBrickFeed jumpFeed = new DivergentTogglableBrickFeed(100_500e18, 100_500e18);
++        proxy.proposeSource(address(jumpFeed));
++        vm.warp(block.timestamp + proxy.TIMELOCK_DELAY());
++
++        vm.expectRevert(
++            abi.encodeWithSelector(
++                IPriceFeedProxy.SourcePriceDeviationTooLarge.selector,
++                90_000e18,
++                100_500e18,
++                proxy.MAX_SOURCE_SWITCH_DEVIATION_BPS()
++            )
++        );
++        proxy.confirmSource();
++
++        assertEq(proxy.source(), address(divergent));
++    }
++
++    function testConfirmSourceUsesCachedPricesWithoutImplicitEmergencyBypass() public {
++        feedA.setOracleFailure(true);
++
++        proxy.proposeSource(address(feedB));
++        vm.warp(block.timestamp + proxy.TIMELOCK_DELAY());
++        vm.expectEmit(true, true, false, true);
++        emit IPriceFeedProxy.SourceSwitchValidated(
++            address(feedA), address(feedB), false, false, 100_000e18, 100_500e18, 100_000e18, 100_500e18
++        );
++        proxy.confirmSource();
++
++        assertEq(proxy.source(), address(feedB));
++    }
++
++    function testConfirmSourceEmergencyBypassesCachedPriceGuardWhenOldSourceFails() public {
++        MockPriceFeed jumpFeed = new MockPriceFeed(150_000e18);
++        feedA.setOracleFailure(true);
++
++        proxy.proposeSource(address(jumpFeed));
++        vm.warp(block.timestamp + proxy.TIMELOCK_DELAY());
++        vm.expectEmit(true, true, false, true);
++        emit IPriceFeedProxy.SourceSwitchValidated(
++            address(feedA), address(jumpFeed), false, true, 100_000e18, 150_000e18, 100_000e18, 150_000e18
++        );
++        proxy.confirmSourceEmergency();
++
++        assertEq(proxy.source(), address(jumpFeed));
++    }
++
+     function testConfirmSourceEmergencyBypassesPriceJumpGuard() public {
+         MockPriceFeed jumpFeed = new MockPriceFeed(150_000e18);
+ 
+@@ -923,7 +996,7 @@ contract PriceFeedProxyOracleFailureTest is Test {
+         assertEq(price, 500_000e18);
+     }
+ 
+-    function testSourceSwapViaTimelockAfterOracleFailure() public {
++    function testSourceSwapViaEmergencyAfterOracleFailure() public {
+         realisticFeed.setOracleStale(true);
+         proxy.fetchPrice();
+         assertTrue(mockBO.hasBeenShutDown());
+@@ -931,7 +1004,7 @@ contract PriceFeedProxyOracleFailureTest is Test {
+         MockPriceFeed newFeed = new MockPriceFeed(460_000e18);
+         proxy.proposeSource(address(newFeed));
+         vm.warp(block.timestamp + proxy.TIMELOCK_DELAY());
+-        proxy.confirmSource();
++        proxy.confirmSourceEmergency();
+ 
+         (uint256 price, bool failure) = proxy.fetchPrice();
+         assertEq(price, 460_000e18);
+diff --git a/contracts/test/PriceFeedProxyRealFeedIntegration.t.sol b/contracts/test/PriceFeedProxyRealFeedIntegration.t.sol
+index 11d46c09..acb2c005 100644
+--- a/contracts/test/PriceFeedProxyRealFeedIntegration.t.sol
++++ b/contracts/test/PriceFeedProxyRealFeedIntegration.t.sol
+@@ -167,10 +167,10 @@ contract PriceFeedProxyRealFeedIntegrationTest is Test {
+         assertTrue(f2);
+     }
+ 
+-    // --- source 差替（timelock）を実 feed 間で行う ---
++    // --- source 差替（timelock + 明示 emergency）を実 feed 間で行う ---
+ 
+-    /// @notice 実 feed → 別の実 feed への 24h timelock 差替が proxy 越しに成立する。
+-    function test_realFeed_sourceSwapViaTimelock_betweenRealFeeds() public {
++    /// @notice stale な実 feed から1%超で復旧する場合も、明示 emergency と24h timelock で差替できる。
++    function test_realFeed_sourceSwapViaEmergency_betweenRealFeeds() public {
+         // 新しい価格の実 feed を用意
+         ChainlinkOracleMock newOracle = new ChainlinkOracleMock();
+         newOracle.setDecimals(8);
+@@ -185,7 +185,7 @@ contract PriceFeedProxyRealFeedIntegrationTest is Test {
+         // oracle) at the moment of the switch. Refresh updatedAt before confirming — in
+         // production a real Chainlink feed updates every heartbeat, so it is fresh at confirm.
+         newOracle.setUpdatedAt(block.timestamp);
+-        proxy.confirmSource();
++        proxy.confirmSourceEmergency();
+ 
+         assertEq(proxy.source(), address(newFeed));
+ 
+diff --git a/documents/en/protocol/product/spec/Oracle.md b/documents/en/protocol/product/spec/Oracle.md
+index d4ddc8dc..66ab2ca7 100644
+--- a/documents/en/protocol/product/spec/Oracle.md
++++ b/documents/en/protocol/product/spec/Oracle.md
+@@ -240,15 +240,15 @@ Each DF PriceFeed is implemented as a two-layer composition: (1) **inherit the u
+ - **Behavior (Effects)**:
+   1. Best-effort read old source; if both `fetchPrice` and `fetchRedemptionPrice` return valid prices and `failure=false`, treat old source as healthy
+   2. Smoke-test new source `fetchPrice` / `fetchRedemptionPrice`; reject on revert / wrong ABI / invalid price / `failure=true`
+-  3. If `confirmSource()` and old source is healthy, require old/new normal price and redemption price to be within `MAX_SOURCE_SWITCH_DEVIATION_BPS` (1%)
+-  4. If old source is unhealthy, automatically skip price-difference guard to prioritize recovery. `confirmSourceEmergency()` explicitly bypasses only the price-difference guard even when old source is healthy
++  3. Use the old source's live normal/redemption prices as the continuity reference when healthy; otherwise use the Proxy's `_lastGoodPrice` / `_lastGoodRedemptionPrice` caches
++  4. `confirmSource()` requires both new-source prices to be within `MAX_SOURCE_SWITCH_DEVIATION_BPS` (1%) of those references regardless of old-source health. Only `confirmSourceEmergency()` explicitly bypasses the price-difference guard
+   5. Re-initialize Proxy caches with `_lastGoodPrice = newPrice` / `_lastGoodRedemptionPrice = newRedemptionPrice`
+   6. Set `source = proposedSource` (replacement complete), clear pending proposal
+   7. Emit `SourceUpdated` / `SourceSwitchValidated`
+-- **Revert / early return**: non-Owner -> revert; no proposal -> `NoProposalPending`; timelock not elapsed -> `TimelockNotElapsed`; invalid new source -> `InvalidSource`; `proposedSource == source` -> `SameSource`; normal confirm with healthy old source and price difference > 1% -> `SourcePriceDeviationTooLarge`.
++- **Revert / early return**: non-Owner -> revert; no proposal -> `NoProposalPending`; timelock not elapsed -> `TimelockNotElapsed`; invalid new source -> `InvalidSource`; `proposedSource == source` -> `SameSource`; normal confirm with a price difference > 1% from the live/cached reference -> `SourcePriceDeviationTooLarge`.
+ - **Emitted event**: `SourceUpdated(oldSource, newSource)` ([ORCL-EVT-002](#11-events-and-monitoring-requirements-evt)), `SourceSwitchValidated` ([ORCL-EVT-006](#11-events-and-monitoring-requirements-evt)).
+-- **Design notes**: Normal replacement suppresses sandwich opportunity with the price-difference guard. If old source has failed, guard is skipped so recovery is not blocked. Placeholder activation or incidents requiring large price correction use `confirmSourceEmergency()` sent privately (Flashbots Protect, etc.) and combined with cap stops / keeper bundles as needed ([ORCL-SEC-003](#orcl-sec-003)).
+-- **Verification**: unit (succeeds only after timelock, reverts before, replacement reflected, normal price-difference guard, emergency bypass, old-source-unhealthy bypass), manual (private-send operations).
++- **Design notes**: Normal replacement suppresses sandwich opportunity with the price-difference guard. An old-source failure does not silently turn the normal path into an emergency path; continuity is checked against validated caches. Placeholder activation or incidents requiring more than a 1% correction from cached prices use `confirmSourceEmergency()` sent privately (Flashbots Protect, etc.) and combined with cap stops / keeper bundles as needed ([ORCL-SEC-003](#orcl-sec-003)).
++- **Verification**: unit (succeeds only after timelock, reverts before, replacement reflected, live/cached price-difference guard, no implicit bypass on old-source failure, emergency bypass), manual (private-send operations).
+ 
+ #### <a id="orcl-fr-003"></a>ORCL-FR-003: Cancel source proposal (`cancelSourceProposal`)
+ 
+@@ -749,8 +749,8 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ ### <a id="orcl-sec-003"></a>ORCL-SEC-003: MEV mitigation through source replacement timelock
+ 
+ - Type: Security
+-- Statement: source replacement must be 2-step: `proposeSource` -> 24h timelock -> `confirmSource` / `confirmSourceEmergency`, publishing planned switch time and new source 24h in advance (no unannounced replacement). Timelock alone does not eliminate price-jump MEV in the `confirmSource` block, so normal `confirmSource` limits old/new price difference (normal and redemption price) to within 1% when old source is healthy. If old source is unhealthy due to revert / invalid / failure flag, guard automatically bypasses to avoid blocking recovery. If old source is healthy but placeholder activation, major price correction, or incident recovery requires exceeding the guard, GOV uses `confirmSourceEmergency` with private sending and combines it with monitoring, cap stop, keeper bundle, etc.
+-- Verification: unit (timelock enforcement, normal price-difference guard, old-source-unhealthy bypass, emergency bypass), manual (private-send operations and incident runbook)
++- Statement: source replacement must be 2-step: `proposeSource` -> 24h timelock -> `confirmSource` / `confirmSourceEmergency`, publishing planned switch time and new source 24h in advance (no unannounced replacement). Timelock alone does not eliminate price-jump MEV in the `confirmSource` block, so normal `confirmSource` limits normal/redemption price differences to within 1% of live old-source prices when healthy and the Proxy's path-specific last-good caches when unhealthy. If placeholder activation, a major price correction, or incident recovery requires exceeding the guard, GOV uses `confirmSourceEmergency` with private sending and combines it with monitoring, cap stop, keeper bundle, etc.
++- Verification: unit (timelock enforcement, live/cached price-difference guard, no implicit bypass on old-source failure, emergency bypass), manual (private-send operations and incident runbook)
+ 
+ ### <a id="orcl-sec-004"></a>ORCL-SEC-004: Symmetric defense on both consumer paths
+ 
+@@ -819,7 +819,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | ORCL-EVT-003 | `SourceProposalCancelled` | Detect cancellation of pending proposal |
+ | ORCL-EVT-004 | Proxy shutdown observation event (reason source failure caused shutdown delegation) and upstream source `ShutDownFromOracleFailure(address failedOracleAddr)` | Alert branch shutdown (incident response). DF source-level oracle / backing / rate-provider failures are identified by `failedOracleAddr` |
+ | ORCL-EVT-005 | OZ `OwnershipTransferStarted` / `OwnershipTransferred` | Monitor ownership transfer (deployer -> multisig) |
+-| ORCL-EVT-006 | `SourceSwitchValidated` (old/new prices, oldSourceHealthy, priceGuardBypassed) | Distinguish normal replacement / old-source failure recovery / emergency bypass; audit price jumps |
++| ORCL-EVT-006 | `SourceSwitchValidated` (old/reference and new prices, oldSourceHealthy, priceGuardBypassed) | Distinguish normal replacement / cached-reference recovery / explicit emergency bypass; audit price jumps |
+ | ORCL-EVT-007 | `JpyRateFrozen` | Detect the start of JPY soft-freeze |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | Detect return to the live JPY/USD rate |
+ 
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md
+new file mode 100644
+index 00000000..dbc369bb
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md
+@@ -0,0 +1,149 @@
++# External Audit Mid 02: PriceFeedProxy Continuity Guard 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-03)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Oracle.md` の `ORCL-FR-002` / `ORCL-SEC-003` を参照する。
++
++## Executive Summary
++
++外部監査 Mid 02「`PriceFeedProxy::confirmSource` Skips 1% Price Deviation Guard When Old Source Is
++Unhealthy」の control-flow 指摘は再現した。旧 source が revert、無効価格、または `oracleFailure=true` を返すと、通常の
++`confirmSource()` でも 1% continuity guard が暗黙に無効化され、任意の価格差を持つ新 source を受け入れていた。
++
++ただし「governance ではなく oracle outage が起動する」という説明は不正確である。`confirmSource()` と
++`confirmSourceEmergency()` はいずれも `onlyOwner` であり、同一の24時間 timelock と新 source の2経路 smoke test を通る。
++問題は無権限者による切替ではなく、operator が通常経路を選んだにもかかわらず、旧 source の状態変化だけで実行時の
++security semantics が emergency bypass へ変わる点にある。
++
++判定は **Medium accepted with claim correction** とする。通常 `confirmSource()` は旧 source が不健全でも Proxy の
++path 別 last-good cache を基準に通常価格と redemption 価格の双方へ1% guard を適用する。価格ジャンプが必要な incident
++だけ、operator が明示的に `confirmSourceEmergency()` を選ぶ。
++
++| Severity | New finding count |
++| -------- | ----------------: |
++| Critical |                 0 |
++| High     |                 0 |
++| Medium   |                 0 |
++| Low      |                 0 |
++
++**Recommendation**: 修正と回帰試験を merge 可。cache は価格の正しさを証明せず continuity だけを制限するため、1%超の
++正当な復旧では既存 runbook どおり private 送信、cap 停止、monitoring を併用する。
++
++## Scope And Baseline
++
++- 外部指摘: Mid 02 — `PriceFeedProxy::confirmSource` Skips 1% Price Deviation Guard When Old Source Is Unhealthy
++- review baseline: `origin/develop` at `a0a90c717d7cce8bbe66a9b28595043c9ca85de5`
++- production contract: `contracts/src/PriceFeeds/PriceFeedProxy.sol`
++- interface: `contracts/src/Interfaces/IPriceFeedProxy.sol`
++- consumer / monitoring surface: `frontend/ops/src/lib/events.ts`, `frontend/ops/src/lib/alerts.ts`
++- normative sources:
++  - `documents/jp/protocol/product/spec/Oracle.md`
++  - `documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md`
++
++## Git History Context
++
++- `fa0080d57ee6dc29fc36c89fb0676b093b4428af` (2026-06-11) で1% guard、
++  `confirmSourceEmergency()`、`SourceSwitchValidated` が同時に導入された。
++- 同 commit は `if (!_bypassPriceGuard && oldRead.healthy)` とし、旧 source 不健全時を自動 bypass と定義した。
++  したがって今回の問題は後続 refactor の regression ではなく、guard 初期設計の分岐に存在した。
++- 現行実装では通常価格用 `_lastGoodPrice` に加え、別値を取り得る redemption 経路用
++  `_lastGoodRedemptionPrice` が既に初期化・更新されている。監査推奨の単一 cache だけを用いると両経路を混同するため、
++  そのままは採用しない。
++
++## A/B Reproduction
++
++baseline に一時 PoC `testAuditMid02_CurrentNormalConfirmBypassesGuardWhenOldSourceFails` を追加し、次を確認した。
++
++1. old source と Proxy cache を `100_000e18` で初期化する。
++2. new source は `150_000e18`（50% jump）を返す。
++3. proposal 後に old source を `oracleFailure=true` とし、24時間を進める。
++4. emergency ではない `confirmSource()` が成功し、source が new source へ更新される。
++
++修正後は同条件の通常 confirm が
++`SourcePriceDeviationTooLarge(100_000e18, 150_000e18, 100)` で revert し、source は変わらない。
++
++## Claim-By-Claim Assessment
++
++| Audit claim                                                 | Assessment         | Evidence / consequence                                       |
++| ----------------------------------------------------------- | ------------------ | ------------------------------------------------------------ |
++| old source 不健全時に通常 confirm の1% guard が skip される | True               | baseline PoC で50% jump の受入れを再現                       |
++| outage だけで source が切り替わる                           | False / overstated | 実行は `onlyOwner`、proposal と24時間 timelock が必要        |
++| operator の通常操作が意図せず無制限 bypass になる           | True               | proposal 後の old-source failure で実行時 semantics が変化   |
++| 大幅 jump は liquidation / MEV risk を増やす                | True in principle  | timelock は switch block の価格 discontinuity を除去しない   |
++| `_lastGoodPrice` を fallback reference にすれば十分         | Incomplete         | redemption path は独立した `_lastGoodRedemptionPrice` を持つ |
++
++## What Changed
++
++- old source が健全なら、従来どおり live の通常価格 / redemption 価格を continuity reference にする。
++- old source が不健全なら、Proxy の `_lastGoodPrice` / `_lastGoodRedemptionPrice` をそれぞれの reference にする。
++- 通常 `confirmSource()` は old-source health に関係なく両 reference へ1% guard を適用する。
++- `confirmSourceEmergency()` だけが guard を bypass する。24時間 timelock、新 source code check、通常価格と
++  redemption 価格の smoke test は変更しない。
++- `SourceSwitchValidated.priceGuardBypassed` は明示 emergency のときだけ `true` とし、`oldPrice` /
++  `oldRedemptionPrice` には実際に比較した live または cached reference を記録する。event signature は変更しない。
++- JP canonical spec、EN support translation、mainnet runbook を新しい境界へ同期した。
++
++## Differential Side-Effect Review
++
++| Surface                           | Assessment                                                               | Result                          |
++| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------- |
++| Access control / timelock         | 両 confirm の `onlyOwner` と24時間 delay は diff なし                    | Unchanged                       |
++| New-source validation             | code、通常価格、redemption 価格、failure flag の smoke test は diff なし | Unchanged                       |
++| Normal healthy switch             | live old/new の1% guard を継続                                           | Unchanged                       |
++| Normal unhealthy switch within 1% | path 別 cache を基準に成功                                               | Liveness preserved              |
++| Unhealthy switch over 1%          | 通常 path は fail closed、明示 emergency は成功                          | Intended separation             |
++| ABI / event layout                | interface comment のみ、function selector と event fields は不変         | Unchanged                       |
++| Storage layout                    | state variable の追加・並替なし                                          | Unchanged                       |
++| Runtime bytecode                  | `PriceFeedProxy` deployed bytecode 4,110 bytes                           | EIP-170 limit 内                |
++| Ops event ingestion               | event signature 不変                                                     | Decoder compatibility preserved |
++| Ops alert semantics               | bypass flag は explicit emergency のみ表す                               | More precise; tests pass        |
++
++## Adversarial Safety And Liveness Review
++
++- **Failure during timelock**: old source が proposal 後に壊れても通常 path は cached continuity を捨てず、任意 jump を
++  暗黙受入れしない。
++- **Distinct redemption price**: 通常価格が1%以内でも redemption price が cache から逸脱すれば拒否する。単一 cache
++  fallback による経路混同を防ぐ。
++- **Healthy recovery**: old source が不健全でも new source の両価格が cache の1%以内なら通常 confirm は成功する。
++- **Legitimate repricing**: outage 中に市場価格が1%超動いた場合、通常 confirm は停止するが、同じ timelock と smoke test を
++  持つ explicit emergency path で復旧できるため永久停止にはならない。
++- **Bad new source**: emergency でも zero / max、revert、wrong ABI、`failure=true` は従来どおり拒否する。
++- **Monitoring**: `oldSourceHealthy=false && priceGuardBypassed=false` は cached-reference 通常復旧、
++  `priceGuardBypassed=true` は operator が明示 bypass した switch と判別できる。
++
++## Verification
++
++実行結果:
++
++```text
++PASS  baseline A/B reproduction
++      old source failure + 50% jump を通常 confirm が受け入れる旧挙動を再現
++PASS  forge test -vv --match-path test/PriceFeedProxy.t.sol
++      74 passed; 0 failed; 0 skipped
++PASS  forge test -vv --match-path 'test/*PriceFeed*.t.sol'
++      219 passed; 0 failed; 0 skipped
++PASS  pnpm test:alerts && pnpm test:events  (frontend/ops)
++PASS  forge fmt --check <modified Solidity files>
++PASS  PriceFeedProxy deployed bytecode size = 4,110 bytes
++PASS  forge test -vv --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++      1380 passed; 0 failed; 0 skipped
++```
++
++remote CI の最終結果は PR status に記録する。
++
++## Residual Risk And Limitations
++
++- last-good cache は直前に受け入れた値との連続性を提供するだけで、値の真実性や現在時点の市場価格を証明しない。
++- 正当な市場変動が outage 中に1%を超えると通常 confirm は意図的に停止する。operator は incident として explicit
++  emergency を選択し、private 送信、cap 停止、keeper bundle、監視を併用する必要がある。
++- 24時間 timelock は事前可視性を与えるが、公開 mempool の confirm transaction に対する switch-block MEV を単独では
++  防がない。
++- `oldSourceHealthy=false` は revert、invalid、failure flag をまとめた観測値であり、根本原因の分類は source 固有 event と
++  off-chain oracle monitoring が必要である。
++
++## Methodology
++
++- finding の control flow を baseline の一時 PoC で実行し、報告された bypass が成立することを確認した。
++- `fa0080d5` まで history を遡り、guard / emergency / event の導入意図と blast radius を確認した。
++- normal / redemption の2経路、healthy / unhealthy、within / over 1%、normal / emergency を組み合わせて safety と
++  liveness を検証した。
++- ABI、storage、bytecode size、Ops decoder / alert、JP canonical spec、EN support translation、runbook への副作用を追跡した。
+diff --git a/documents/jp/engineering/historical-reviews/README.md b/documents/jp/engineering/historical-reviews/README.md
+index f5c88a05..4f1e02af 100644
+--- a/documents/jp/engineering/historical-reviews/README.md
++++ b/documents/jp/engineering/historical-reviews/README.md
+@@ -4,8 +4,9 @@
+ 
+ この配下の文書はHistorical snapshotであり、現在の値、判断基準、採用判断または実行手順の正本として使用しない。現行の正本は各文書冒頭の`Normative Source`を参照する。
+ 
+-| 文書 | Snapshot | 内容 |
+-| --- | --- | --- |
+-| [`2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md`](./2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md) | 2026-08-03 | 外部監査 Mid 01 の Aave proxy / 複数 market 前提、動的 Pool 追従の副作用、preflight と Strategy migration 境界 |
+-| [`2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md`](./2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md) | 2026-08-03 | 外部監査 High 01 の成立時点、既存修正、3つの Sky 出金経路の返金回帰試験と副作用確認 |
+-| [`2026-07-27-Collateral-Parameter-Rationale.md`](./2026-07-27-Collateral-Parameter-Rationale.md) | 2026-07-27 | 担保parameterの生データ、過去候補、棄却案、旧Notionから移管した検討記録 |
++| 文書                                                                                                                                                                                   | Snapshot   | 内容                                                                                                            |
++| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
++| [`2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md`](./2026-08-03-External-Audit-Mid-02-PriceFeedProxy-Continuity-Guard-Differential-Review.md) | 2026-08-03 | 外部監査 Mid 02 の再現、old source 障害時の path 別 cache continuity guard、明示 emergency との境界、副作用確認 |
++| [`2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md`](./2026-08-03-External-Audit-Mid-01-Aave-Pool-Staleness-Differential-Review.md)                         | 2026-08-03 | 外部監査 Mid 01 の Aave proxy / 複数 market 前提、動的 Pool 追従の副作用、preflight と Strategy migration 境界  |
++| [`2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md`](./2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md)                                         | 2026-08-03 | 外部監査 High 01 の成立時点、既存修正、3つの Sky 出金経路の返金回帰試験と副作用確認                             |
++| [`2026-07-27-Collateral-Parameter-Rationale.md`](./2026-07-27-Collateral-Parameter-Rationale.md)                                                                                       | 2026-07-27 | 担保parameterの生データ、過去候補、棄却案、旧Notionから移管した検討記録                                         |
+diff --git a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+index a4f62a88..af49296e 100644
+--- a/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
++++ b/documents/jp/protocol/launch/gates/Mainnet-Deploy-Env-Freeze-Runbook.md
+@@ -68,7 +68,7 @@ Broadcast / activation evidence には、各 feed について次の列を残す
+ 
+ `jpyFrozenSince` は Chainlink の `updatedAt + stalenessThreshold` ではなく、オンチェーンで stale を初めて観測した block で立つ。したがって監視は `JpyRateFrozen` を待つだけでは足りず、off-chain / RPC で `latestRoundData.updatedAt` の残時間を常時見る。branch-local feed は stale 到達後の最初の `fetchPrice()` で不可逆 shutdown に入るため、stale 直前の warning は go/no-go 判断ではなく incident 予防のための運用 signal として扱う。
+ 
+-**source 差替のタイミング（shutdown 前に間に合わせる）**: JPY/USD の差替は `proposeSource → 24h timelock → confirmSource` / `confirmSourceEmergency` で、**24h timelock は emergency でも不可避**（emergency が bypass するのは価格差 guard のみ）。soft-freeze 窓も 24h（shutdown ≒ `jpyFrozenSince + 24h` ≒ age 96h）なので、**freeze 開始（age≈72h）までに `proposeSource` を起動していないと confirm が shutdown に間に合わない**。したがって deprecation / 永続障害が疑われたら WATCH（`age > 25h`）/ Warning（`age >= 48h`）段階で即 `proposeSource` を起動し、**遅くとも age 72h を絶対デッドライン**とする。`confirmSource` は timelock 明けに実行する（旧 feed が fresh なら通常 `confirmSource`〔新旧価格差 ≤1% guard〕、stale/freeze 中は guard 自動 bypass または `confirmSourceEmergency`）。これで新 fresh feed へ切替 → `JpyRateUnfrozen` → shutdown 回避。期限内に提案できなければ age≈96h で `lastGoodPrice` shutdown し、事後差替で復旧する（有界フェイルセーフの想定動作）。
++**source 差替のタイミング（shutdown 前に間に合わせる）**: JPY/USD の差替は `proposeSource → 24h timelock → confirmSource` / `confirmSourceEmergency` で、**24h timelock は emergency でも不可避**（emergency が bypass するのは価格差 guard のみ）。soft-freeze 窓も 24h（shutdown ≒ `jpyFrozenSince + 24h` ≒ age 96h）なので、**freeze 開始（age≈72h）までに `proposeSource` を起動していないと confirm が shutdown に間に合わない**。したがって deprecation / 永続障害が疑われたら WATCH（`age > 25h`）/ Warning（`age >= 48h`）段階で即 `proposeSource` を起動し、**遅くとも age 72h を絶対デッドライン**とする。`confirmSource` は timelock 明けに実行する（旧 feed が fresh なら live 価格、stale/freeze 中なら Proxy の path 別 last-good cache に対する新旧価格差 ≤1% guard）。1%を超える明示的な incident 復旧だけ `confirmSourceEmergency` を private 送信し、通常経路の暗黙 bypass に依存しない。これで新 fresh feed へ切替 → `JpyRateUnfrozen` → shutdown 回避。期限内に提案できなければ age≈96h で `lastGoodPrice` shutdown し、事後差替で復旧する（有界フェイルセーフの想定動作）。
+ 
+ ### 3.2 Underlying tokens
+ 
+diff --git a/documents/jp/protocol/product/spec/Oracle.md b/documents/jp/protocol/product/spec/Oracle.md
+index 23403add..55cd8f70 100644
+--- a/documents/jp/protocol/product/spec/Oracle.md
++++ b/documents/jp/protocol/product/spec/Oracle.md
+@@ -238,15 +238,15 @@ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 
+ - **動作（Effects）**:
+   1. 旧 source を best-effort で読み、`fetchPrice` / `fetchRedemptionPrice` が両方とも有効価格・`failure=false` なら「旧 source 健全」と判定
+   2. 新 source の `fetchPrice` / `fetchRedemptionPrice` を smoke-test し、revert / wrong ABI / 無効価格 / `failure=true` なら拒否
+-  3. `confirmSource()` かつ旧 source 健全なら、新旧の通常価格・redemption 価格が `MAX_SOURCE_SWITCH_DEVIATION_BPS`（1%）以内であることを要求
+-  4. 旧 source が不健全なら復旧優先で価格差 guard を自動スキップ。`confirmSourceEmergency()` は旧 source 健全時でも価格差 guard のみ明示 bypass
++  3. 価格差の基準値は、旧 source が健全ならその live 通常価格・redemption 価格、不健全なら Proxy の `_lastGoodPrice`・`_lastGoodRedemptionPrice` とする
++  4. `confirmSource()` は旧 source の健全性にかかわらず、新 source の両価格が基準値から `MAX_SOURCE_SWITCH_DEVIATION_BPS`（1%）以内であることを要求する。`confirmSourceEmergency()` だけが価格差 guard を明示 bypass する
+   5. `_lastGoodPrice = newPrice` / `_lastGoodRedemptionPrice = newRedemptionPrice` で Proxy cache を新 source 価格に再初期化
+   6. `source = proposedSource`（差替完了）、保留 proposal をクリア
+   7. `SourceUpdated` / `SourceSwitchValidated` を発火
+-- **revert / 早期 return**: 非 Owner → revert；proposal なし → `NoProposalPending`；timelock 未経過 → `TimelockNotElapsed`；new source 不正 → `InvalidSource`；`proposedSource == source` → `SameSource`；通常 confirm で旧 source 健全かつ価格差 > 1% → `SourcePriceDeviationTooLarge`。
++- **revert / 早期 return**: 非 Owner → revert；proposal なし → `NoProposalPending`；timelock 未経過 → `TimelockNotElapsed`；new source 不正 → `InvalidSource`；`proposedSource == source` → `SameSource`；通常 confirm で live / cached 基準から価格差 > 1% → `SourcePriceDeviationTooLarge`。
+ - **発火イベント**: `SourceUpdated(oldSource, newSource)`（[ORCL-EVT-002](#11-イベント監視要件evt)）、`SourceSwitchValidated`（[ORCL-EVT-006](#11-イベント監視要件evt)）。
+-- **設計上のポイント**: 通常差替は価格差 guard でサンドイッチ余地を抑える。旧 source 障害時は復旧を詰まらせないため guard をスキップする。placeholder 有効化や大きな価格修正を伴う incident は `confirmSourceEmergency()` を private 送信（Flashbots Protect 等）し、必要に応じて cap 停止・keeper bundle と組み合わせる（[ORCL-SEC-003](#orcl-sec-003-source-差替-timelock-による-mev-緩和)）。
+-- **Verification**: unit（timelock 経過後のみ成功・未経過 revert・差替反映・通常時価格差 guard・emergency bypass・旧 source 不健全時 bypass）, manual（private 送信運用）。
++- **設計上のポイント**: 通常差替は価格差 guard でサンドイッチ余地を抑える。旧 source 障害で通常経路が暗黙に emergency 化することはなく、validated cache との連続性を要求する。placeholder 有効化や cached 価格から1%を超える incident 復旧は `confirmSourceEmergency()` を private 送信（Flashbots Protect 等）し、必要に応じて cap 停止・keeper bundle と組み合わせる（[ORCL-SEC-003](#orcl-sec-003-source-差替-timelock-による-mev-緩和)）。
++- **Verification**: unit（timelock 経過後のみ成功・未経過 revert・差替反映・live / cached 価格差 guard・通常経路の暗黙 bypass 禁止・emergency bypass）, manual（private 送信運用）。
+ 
+ #### ORCL-FR-003: source proposal の取消（cancelSourceProposal）
+ 
+@@ -615,8 +615,8 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ ### ORCL-SEC-003: source 差替 timelock による MEV 緩和
+ 
+ - Type: Security
+-- Statement: source 差替は `proposeSource` → 24h timelock → `confirmSource` / `confirmSourceEmergency` の 2-step で、切替予定時刻と新 source を 24 時間前に公開しなければならない（予告なし差替の禁止）。timelock 単体では `confirmSource` ブロックでの価格ジャンプ MEV を排除しないため、通常 `confirmSource` は旧 source が健全な場合に新旧価格差（通常価格・redemption 価格）を 1% 以内に制限する。旧 source が revert / invalid / failure flag で不健全な場合は復旧を詰まらせないため guard を自動 bypass する。旧 source が健全でも placeholder 有効化・大幅価格修正・incident 復旧で guard を越える必要がある場合のみ、GOV は `confirmSourceEmergency` を private 送信し、監視・cap 停止・keeper bundle 等の runbook と組み合わせる。
+-- Verification: unit（timelock 強制・通常価格差 guard・旧 source 不健全時 bypass・emergency bypass）, manual（private 送信運用・incident runbook）
++- Statement: source 差替は `proposeSource` → 24h timelock → `confirmSource` / `confirmSourceEmergency` の 2-step で、切替予定時刻と新 source を 24 時間前に公開しなければならない（予告なし差替の禁止）。timelock 単体では `confirmSource` ブロックでの価格ジャンプ MEV を排除しないため、通常 `confirmSource` は旧 source が健全なら live 価格、不健全なら Proxy の path 別 last-good cache を基準に、通常価格・redemption 価格の差を 1% 以内に制限する。placeholder 有効化・大幅価格修正・incident 復旧で guard を越える必要がある場合のみ、GOV は `confirmSourceEmergency` を private 送信し、監視・cap 停止・keeper bundle 等の runbook と組み合わせる。
++- Verification: unit（timelock 強制・live / cached 価格差 guard・通常経路の暗黙 bypass 禁止・emergency bypass）, manual（private 送信運用・incident runbook）
+ 
+ ### ORCL-SEC-004: 両 consumer 経路の対称な防御
+ 
+@@ -692,7 +692,7 @@ dToken アプローチにより Day-1 時点で **8 ブランチ（dToken）す
+ | ORCL-EVT-003 | `SourceProposalCancelled` | 保留 proposal 取消の検知 |
+ | ORCL-EVT-004 | Proxy の shutdown 観測イベント（source 障害で shutdown 代行した契機）および upstream source の `ShutDownFromOracleFailure(address failedOracleAddr)` | branch shutdown 発生のアラート（incident response）。DF source 直下の oracle / backing / rate-provider 障害は `failedOracleAddr` で識別する |
+ | ORCL-EVT-005 | OZ `OwnershipTransferStarted` / `OwnershipTransferred` | 所有権移転（deployer→multisig）の監視 |
+-| ORCL-EVT-006 | `SourceSwitchValidated`（old/new 価格・oldSourceHealthy・priceGuardBypassed） | 通常差替 / 旧 source 障害復旧 / emergency bypass の識別、価格ジャンプ監査 |
++| ORCL-EVT-006 | `SourceSwitchValidated`（old/reference・new 価格、oldSourceHealthy、priceGuardBypassed） | 通常差替 / cache 基準復旧 / 明示 emergency bypass の識別、価格ジャンプ監査 |
+ | ORCL-EVT-007 | `JpyRateFrozen` | JPY soft-freeze の開始検知 |
+ | ORCL-EVT-008 | `JpyRateUnfrozen` | live JPY/USD への復帰検知 |
+ 

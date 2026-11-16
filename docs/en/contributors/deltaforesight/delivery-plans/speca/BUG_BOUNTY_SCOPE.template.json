@@ -1,0 +1,95 @@
+{
+  "program_name": "jpydf-v2-speca-pilot",
+  "scope_version": "2026-06-pilot",
+  "in_scope": [
+    "contracts/src/JpydfToken.sol",
+    "contracts/src/DToken.sol",
+    "contracts/src/CollateralVault.sol",
+    "contracts/src/Strategies/",
+    "contracts/src/PriceFeeds/",
+    "contracts/src/Zappers/",
+    "contracts/src/InterestRouterForwarder.sol",
+    "contracts/src/Dependencies/Constants.sol",
+    "contracts/src/Interfaces/"
+  ],
+  "out_of_scope": [
+    "contracts/lib/",
+    "contracts/test/",
+    "contracts/script/",
+    "contracts/cache/",
+    "contracts/out/",
+    "contracts/broadcast/",
+    "frontend/",
+    "subgraph/",
+    "bots/",
+    "documents/",
+    "node_modules/",
+    "outputs/",
+    "target_workspace/"
+  ],
+  "severity_classification": {
+    "CRITICAL": {
+      "description": "Direct or realistically exploitable loss of user or protocol funds, unbounded bad debt, unauthorized mint or upgrade authority, permanent protocol insolvency, or oracle/manipulation path that can drain collateral or JPYdf value.",
+      "cwe": [
+        "CWE-284",
+        "CWE-862",
+        "CWE-863",
+        "CWE-841",
+        "CWE-682",
+        "CWE-703"
+      ],
+      "examples": [
+        "Unauthorized minting or burning of JPYdf or dToken",
+        "CollateralVault accounting permits redeeming more underlying than backed",
+        "Oracle stale or backing-ratio bypass enables undercollateralized borrowing",
+        "Governance or UUPS control can be seized without the intended Timelock or owner path"
+      ]
+    },
+    "HIGH": {
+      "description": "Material fund loss or lockup under plausible conditions, privileged action bypass, branch-level liquidation/redemption failure, strategy loss handling failure, or persistent accounting desynchronization requiring governance rescue.",
+      "cwe": [
+        "CWE-400",
+        "CWE-665",
+        "CWE-667",
+        "CWE-693",
+        "CWE-704"
+      ],
+      "examples": [
+        "Delayed redeem or claim can be blocked for a class of users",
+        "Strategy sendToVault or writeoff flow can desynchronize principal and assets",
+        "Pause or guardian controls can freeze the wrong surface or fail to stop deposits",
+        "Zapper slippage or receiver routing can move user value to an unintended destination"
+      ]
+    },
+    "MEDIUM": {
+      "description": "Scoped denial of service, bounded accounting drift, incorrect event or monitoring state that can mislead operations, griefing with material cost asymmetry, or recoverable governance/configuration failure.",
+      "cwe": [
+        "CWE-20",
+        "CWE-200",
+        "CWE-209",
+        "CWE-345",
+        "CWE-770"
+      ],
+      "examples": [
+        "Allocator limits or cooldowns can be bypassed in a bounded way",
+        "Expected monitoring event is missing or emitted with ambiguous data",
+        "InterestRouter route can be griefed into repeated failed keeper attempts",
+        "Inactive placeholder branch can be confused with active collateral in a non-fund-loss path"
+      ]
+    },
+    "LOW": {
+      "description": "Code quality, documentation, non-critical observability, minor UX/security hardening, or low-impact edge cases with clear manual recovery.",
+      "cwe": [
+        "CWE-398",
+        "CWE-710",
+        "CWE-1164"
+      ],
+      "examples": [
+        "Ambiguous revert reason or missing event for an admin-only path",
+        "Dead code or stale interface increases audit noise",
+        "Non-critical frontend or ops mismatch with no direct on-chain safety impact"
+      ]
+    }
+  },
+  "scope_notes": "Initial SPECA pilot for JPY DeFi. Focus on DeltaForesight-owned Solidity behavior and spec-to-implementation mismatches. Liquity v2 core is only in scope where JPY DeFi-specific CORE-MOD or boundary assumptions are referenced by the in-scope layers. Do not include secrets, RPC URLs, private keys, or .env content in prompts or reports."
+}

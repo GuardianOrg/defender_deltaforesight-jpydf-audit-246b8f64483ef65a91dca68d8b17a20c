@@ -1,0 +1,26 @@
+{
+  "productionSourceTree": "4d461638a27fccd2f749f7086ec955985d04c2a0",
+  "forkBlock": 25995374,
+  "forkTests": {
+    "passed": 3,
+    "failed": 0,
+    "fuzzCases": 64,
+    "testSha256": "f8f19891b1624bea1145ea9c7b342c76a6a20a323774765f17b205c7492be909"
+  },
+  "l02Tests": {
+    "passed": 4,
+    "failed": 0
+  },
+  "limitations": [
+    "Fresh local Strategy proxy and a Vault receipt/authorization harness, not the final full-protocol deployment",
+    "No production transactions, deployments or alert sends",
+    "No full bridge security audit",
+    "Known open gates: Presto pending configuration; production monitoring deployment/delivery; full activation package"
+  ],
+  "pendingExecutionForkTests": {
+    "passed": 1,
+    "failed": 0,
+    "testSha256": "a5b69e437c2106679e2312c7eeb2f9280f6e693b0d9e08d9695c068704f378f7"
+  },
+  "productionExecution": "not sent; unsigned batch prepared"
+}

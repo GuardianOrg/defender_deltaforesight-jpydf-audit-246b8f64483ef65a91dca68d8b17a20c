@@ -1,0 +1,164 @@
+diff --git a/contracts/test/CollateralVault.t.sol b/contracts/test/CollateralVault.t.sol
+index aa5c7e12..f1bc3ee5 100644
+--- a/contracts/test/CollateralVault.t.sol
++++ b/contracts/test/CollateralVault.t.sol
+@@ -827,6 +827,28 @@ contract CollateralVaultTest is Test {
+         assertEq(vault.backingRatio(), 1e18, "fresh cache keeps branch fully backed");
+     }
+ 
++    function test_BackingOpsViews_ZeroMaxAgeDisablesOnlyFallbackAndConfigCorrectionRecovers() public {
++        _deposit(alice, 100e8);
++
++        RevertingValuationStrategy strategy = new RevertingValuationStrategy(address(underlying));
++        strategy.setValues(50e8, 50e8);
++        vault.addToWhitelist(address(strategy));
++        vault.addStrategy(IStrategy(address(strategy)), 0, 0);
++
++        vault.setStrategyValuationMaxAge(0);
++        assertEq(vault.totalUnderlying(), 150e8, "zero TTL still uses live valuation");
++
++        strategy.setReverts(true, false);
++        deal(address(underlying), address(vault), 60e8);
++        assertEq(vault.totalUnderlying(), 60e8, "zero TTL fails closed to zero strategy value");
++        assertEq(vault.backingRatio(), 6e17, "solvency view returns conservative ratio without reverting");
++        assertEq(vault.backingShortfall(), 40e8, "disabled fallback exposes shortfall");
++
++        vault.setStrategyValuationMaxAge(1 days);
++        assertEq(vault.totalUnderlying(), 110e8, "nonzero TTL restores the existing fresh cache");
++        assertEq(vault.backingRatio(), 1e18, "corrected TTL restores fallback liveness");
++    }
++
+     function test_StrategyValuationRefresh_EmitsSuccessAndFailure() public {
+         RevertingValuationStrategy strategy = new RevertingValuationStrategy(address(underlying));
+         strategy.setValues(50e8, 80e8);
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-04-Valuation-Cache-TTL-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-04-Valuation-Cache-TTL-Differential-Review.md
+new file mode 100644
+index 00000000..68927273
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-04-Valuation-Cache-TTL-Differential-Review.md
+@@ -0,0 +1,125 @@
++# External Audit Info 04: Valuation cache TTL 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/CollateralVault.md` の VAULT-FR-012 / VAULT-FR-013 を参照する。
++
++## Executive Summary
++
++外部監査 Info 04「`setStrategyValuationMaxAge` Accepts Unvalidated `maxAge` Value」の setter 観測と、過大 TTL が
++stale cache を長時間利用させ得るという運用リスクは正しい。一方、推奨された `1 hours <= maxAge <= 7 days` は
++規定仕様の `maxAge = 0` fail-closed mode、および pre-cache proxy upgrade path と競合する。
++
++TTL 0 は「solvency call ごとの live read を新たに強制」しない。`CollateralVault` は TTL に関係なく常に live
++`estimatedTotalUnderlying()` / `principal()` を先に試し、両方が成功すれば live `min(est, principal)` を使う。
++TTL は live read failure 時の last-good fallback だけを制御する。
++
++live read failure + TTL 0 でも solvency view 自体は revert せず、当該 Strategy を 0 評価して保守的な
++`totalUnderlying` / `backingRatio` / `backingShortfall` を返す。TTL を非0へ戻し cache がまだ fresh なら、同じ Vault と
++cache で fallback は即時回復する。
++
++**判定**: Informational observation accepted; fixed bounds rejected。production semantics は維持し、実
++`CollateralVault` test で live-first、zero-TTL fail-closed、GOV correction 後の fallback recovery を固定する。
++
++## Scope And Baseline
++
++- 外部指摘: Info 04 — Strategy valuation cache TTL に setter bounds がない
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/CollateralVault.sol`
++- 規範: JP / EN `CollateralVault.md` VAULT-FR-012 / VAULT-FR-013 / VAULT-FR-015
++- 回帰証拠: `contracts/test/CollateralVault.t.sol`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| setter は任意 `uint256` を受ける | True and specified | VAULT-FR-012 は bounds なしと明記する |
++| TTL 0 は毎回 live read を強制する | Misleading | live-first は全 TTL 共通。0 は failure fallback だけを無効化する |
++| live failure + TTL 0 で solvency check が revert する | False | Strategy value 0 の conservative view を返す |
++| TTL 0 は無意味な誤設定 | False | fail-closed mode と pre-cache upgrade default で必要 |
++| 過大 TTL は stale value を長く保つ | True | live failure 窓では cache age bound が governance 設定まで伸びる |
++| cache は未実現利益も維持する | False | cache は live `min(estimated, principal)` の last-good conservative value |
++| 1 hour–7 days を code 強制すべき | Not established | collateral / venue / recovery SLA から導出された universal bound ではない |
++
++## Evaluation Order
++
++solvency valuation は次の順序で決まる。
++
++1. Strategy の `estimatedTotalUnderlying()` と `principal()` を live read する。
++2. 両方が読めれば `min(estimated, principal)` を使い、TTL / cache を参照しない。
++3. どちらかが読めなければ cache を調べる。
++4. cache initialized かつ age が `strategyValuationMaxAge` 以下なら cached conservative value を使う。
++5. cache missing / stale / TTL 0 なら Strategy value を 0 とする。
++
++したがって TTL 0 は external call count を増やさず、fallback trust をゼロにする安全側の切替である。
++
++## State Transition Evidence
++
++実 `CollateralVault` と live/reverting Strategy で次を replay する。
++
++| Step | Buffer | Strategy state | TTL | `totalUnderlying` | `backingRatio` |
++| --- | ---: | --- | ---: | ---: | ---: |
++| deposit + register | 100 | live 50 | 1 day | 150 | 1.0 |
++| set TTL 0 | 100 | live 50 | 0 | 150 | 1.0 |
++| buffer loss simulation | 60 | estimate reverts | 0 | 60 | 0.6 |
++| set TTL 1 day | 60 | estimate reverts; cache fresh 50 | 1 day | 110 | 1.0 |
++
++zero TTL は live value を捨てない。failure 時だけ cache 50 を不採用にして shortfall 40 を表面化し、view は revert しない。
++TTL correction 後は既存 cache を再利用し、Strategy migration や proxy upgrade なしに回復する。
++
++## Why Zero Must Remain Available
++
++pre-cache 実装から upgrade した既存 proxy では新規 storage slot の `strategyValuationMaxAge` が 0 から始まる。
++この default は unknown / uninitialized cache を暗黙に信用せず、GOV が明示的に TTL を設定するまで fallback を無効にする。
++minimum 1 hour check を導入すると storage default 自体は変わらない一方、0 semantics だけが setter で再現不能になり、
++incident 時に cache trust を明示的に切る手段も失う。
++
++## High-TTL Risk Boundary
++
++大きい TTL は live valuation が正常な間は結果に影響しない。risk は「live read が失敗し、かつ last-good cache が
++実際の回収可能額より高い」期間に限定される。cache は未実現 profit を含まず `min(est, principal)` だが、cache 取得後の
++元本毀損を一時的に隠す可能性は残る。
++
++この risk は実在するため、arbitrary max value を通常運用で推奨するものではない。具体 TTL は venue failure SLA、
++withdrawal / oracle recovery time、monitor cadence、writeoff response を根拠に activation package で決め、
++`StrategyValuationMaxAgeUpdated` と `getStrategyStatuses()` の cache age / stale state を監視する。
++
++ただし監査提案の 1 hour / 7 days はこれらから導出されておらず、現在の source-of-truth を置き換える根拠にならない。
++production freeze 中に universal bound を追加せず、governed parameter と fail-closed zero mode を維持する。
++
++## Verification
++
++```text
++forge test --match-contract CollateralVaultTest \
++  --match-test test_BackingOpsViews_ZeroMaxAgeDisablesOnlyFallbackAndConfigCorrectionRecovers -vv
++forge test --match-contract CollateralVaultTest
++forge test -q --summary --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++forge fmt --check test/CollateralVault.t.sol
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- TTL 0 + live valuation で Strategy value 50 を含む
++- TTL 0 + live failure で Strategy value 0、backing ratio 0.6、shortfall 40 を返す
++- TTL 1 day への correction 後、fresh cache 50 が再び使われ backing ratio 1.0 へ回復
++- production source diff は 0
++
++## Residual Risk
++
++- 過大 TTL は live failure 中に過去の conservative value を長く信用し、実損反映を遅らせ得る。activation review、
++  cache-age alert、permissionless refresh、Guardian allocation pause、高定足数 writeoff で扱う。
++- TTL 0 は transient dependency failure を即時0評価し、backing price を急落させ得る。意図した fail-closed operation として
++  downstream liquidation / shutdown 影響を proposal simulation に含める。
++- TTL correction は Timelock delay を受ける。即時の outbound containment は Guardian `pauseAllocation`、実損反映は
++  WRITEOFF_ROLE、Strategy recovery は ALLOCATOR / Strategy owner の別経路を使う。
++- cache が fresh でも真の回収可能額を保証しない。正常 live read と cache の双方が venue-side stale value を返す risk は
++  Strategy implementation / venue integration の監査対象である。
++
++## Methodology
++
++- freeze finding の claim / recommendation と current live-first implementation を比較した。
++- TTL が external read、fallback admission、solvency result のどこへ作用するかを分解した。
++- zero TTL fault、dependency failure、later parameter correction を同じ Vault/cache instance で replay した。
++- pre-cache proxy upgrade default と operational monitoring boundary を確認した。

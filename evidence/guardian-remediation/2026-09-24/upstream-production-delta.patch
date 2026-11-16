@@ -1,0 +1,197 @@
+diff --git a/CollateralVault.sol b/CollateralVault.sol
+index ebad26a96..9e46fcf2b 100644
+--- a/CollateralVault.sol
++++ b/CollateralVault.sol
+@@ -70,12 +70,21 @@ contract CollateralVault is
+     // =============================================================
+ 
+     bytes32 internal constant GOV_ROLE = keccak256("GOV_ROLE");
++    // ALLOCATOR is deliberately restricted to allocate; no legacy umbrella role.
+     bytes32 internal constant ALLOCATOR_ROLE = keccak256("ALLOCATOR_ROLE");
++    bytes32 internal constant WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
++    bytes32 internal constant HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
++    bytes32 internal constant TREASURY_TRANSFER_ROLE = keccak256("TREASURY_TRANSFER_ROLE");
+     bytes32 internal constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
+     bytes32 internal constant WRITEOFF_ROLE = keccak256("WRITEOFF_ROLE");
+ 
+     uint256 internal constant BPS_DENOMINATOR = 10000;
+     uint256 internal constant DEFAULT_STRATEGY_VALUATION_MAX_AGE = 1 days;
++    /// @dev Fixed gas budget handed to each Strategy valuation probe. A registered Strategy must
++    ///      value itself within this budget; a probe that exceeds it is a genuine valuation failure.
++    uint256 internal constant STRATEGY_VALUATION_GAS = 500_000;
++    /// @dev Headroom the Vault keeps for the probe call frames and the catch paths.
++    uint256 internal constant STRATEGY_VALUATION_GAS_MARGIN = 20_000;
+     uint256 public constant MAX_STRATEGIES = 32;
+ 
+     // =============================================================
+@@ -124,6 +133,9 @@ contract CollateralVault is
+     error Paused();
+     error ZeroAddress();
+     error ZeroAmount();
++    /// @dev Caller cannot fund the fixed Strategy valuation probe budget. Same signature as the
++    ///      price-feed gas guard so JpyFreezeLib and PriceFeedProxy bubble it instead of shutting down.
++    error InsufficientGasForExternalCall();
+     error InvalidBufferConfig();
+     error RequestNotReady();
+     error RequestNotFound();
+@@ -204,6 +216,9 @@ contract CollateralVault is
+         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+         _grantRole(GOV_ROLE, _admin);
+         _grantRole(ALLOCATOR_ROLE, _admin);
++        _grantRole(WITHDRAWER_ROLE, _admin);
++        _grantRole(HARVESTER_ROLE, _admin);
++        _grantRole(TREASURY_TRANSFER_ROLE, _admin);
+         _grantRole(GUARDIAN_ROLE, _admin);
+         _grantRole(WRITEOFF_ROLE, _admin);
+     }
+@@ -473,7 +488,7 @@ contract CollateralVault is
+     function transferYieldToTreasury()
+         external
+         override
+-        onlyRole(ALLOCATOR_ROLE)
++        onlyRole(TREASURY_TRANSFER_ROLE)
+         whenNotPausedAllocation
+         nonReentrant
+         returns (uint256 transferred)
+@@ -1189,7 +1204,12 @@ contract CollateralVault is
+         view
+         returns (uint256 estimated, bool available)
+     {
+-        try _strategy.estimatedTotalUnderlying() returns (uint256 value) {
++        // Check each probe at its call boundary: the previous probe may have spent its budget.
++        // Bubble caller underfunding instead of treating a clipped stipend as valuation failure.
++        if (gasleft() < STRATEGY_VALUATION_GAS * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++            revert InsufficientGasForExternalCall();
++        }
++        try _strategy.estimatedTotalUnderlying{gas: STRATEGY_VALUATION_GAS}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+@@ -1197,7 +1217,10 @@ contract CollateralVault is
+     }
+ 
+     function _tryPrincipal(IStrategy _strategy) internal view returns (uint256 principal_, bool available) {
+-        try _strategy.principal() returns (uint256 value) {
++        if (gasleft() < STRATEGY_VALUATION_GAS * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++            revert InsufficientGasForExternalCall();
++        }
++        try _strategy.principal{gas: STRATEGY_VALUATION_GAS}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+diff --git a/Dependencies/Constants.sol b/Dependencies/Constants.sol
+index 72e8a6f6f..3c0714a4b 100644
+--- a/Dependencies/Constants.sol
++++ b/Dependencies/Constants.sol
+@@ -26,7 +26,7 @@ uint256 constant CCR_DWSTETH = 14167 * _1pct / 100; // 141.67%
+ uint256 constant SCR_DWSTETH = 110 * _1pct; // 110%
+ uint256 constant BCR_DWSTETH = 10 * _1pct; // 10%
+ uint256 constant LIQUIDATION_PENALTY_SP_DWSTETH = 5 * _1pct; // 5%
+-uint256 constant LIQUIDATION_PENALTY_REDISTRIBUTION_DWSTETH = 10 * _1pct; // 10%
++uint256 constant LIQUIDATION_PENALTY_REDISTRIBUTION_DWSTETH = 20 * _1pct; // 20%
+ 
+ // Branch 1: dUSDC (USDC) — confirmed
+ uint256 constant MCR_DUSDC = 11158 * _1pct / 100; // 111.58%
+diff --git a/Interfaces/ICollateralVault.sol b/Interfaces/ICollateralVault.sol
+index 895702a4a..81c0256cc 100644
+--- a/Interfaces/ICollateralVault.sol
++++ b/Interfaces/ICollateralVault.sol
+@@ -226,7 +226,7 @@ interface ICollateralVault {
+     // --- Yield / Treasury Functions ---
+ 
+     /// @notice Send the managed-asset surplus over current liabilities to the treasury.
+-    ///         ALLOCATOR_ROLE. Computes
++    ///         TREASURY_TRANSFER_ROLE. Computes
+     ///         `managedUnderlying - (dToken backing + pendingWithdrawals)` using the
+     ///         liquid buffer plus conservative per-Strategy view
+     ///         `min(estimatedTotalUnderlying, principal)`, explicitly excluding
+diff --git a/Interfaces/IStrategy.sol b/Interfaces/IStrategy.sol
+index 3d5697fe8..6abc07cf2 100644
+--- a/Interfaces/IStrategy.sol
++++ b/Interfaces/IStrategy.sol
+@@ -46,7 +46,7 @@ interface IStrategy {
+     function estimatedTotalUnderlying() external view returns (uint256);
+ 
+     /// @notice Push underlying back to the Vault. Caller must hold the
+-    ///         ALLOCATOR_ROLE on the Vault. Used for deallocation /
++    ///         WITHDRAWER_ROLE on the Vault. Used for deallocation /
+     ///         portfolio rebalancing / removeStrategy preparation.
+     /// @param  _amount Requested amount. The actual sent amount may be less
+     ///         if the upstream protocol cannot fulfill the full request.
+@@ -54,7 +54,7 @@ interface IStrategy {
+     function sendToVault(uint256 _amount) external returns (uint256 sent);
+ 
+     /// @notice Push only realized yield to the Vault. Caller must hold the
+-    ///         ALLOCATOR_ROLE on the Vault. The amount is computed by the
++    ///         HARVESTER_ROLE on the Vault. The amount is computed by the
+     ///         Strategy as `realizedYield()` at call time; the caller does
+     ///         not supply an amount.
+     /// @return sent   Amount actually received by the Vault.
+diff --git a/PriceFeeds/JpyFreezeLib.sol b/PriceFeeds/JpyFreezeLib.sol
+index 9573e0ae6..baccc6ca2 100644
+--- a/PriceFeeds/JpyFreezeLib.sol
++++ b/PriceFeeds/JpyFreezeLib.sol
+@@ -129,7 +129,13 @@ library JpyFreezeLib {
+ 
+             self.lastGoodBacking = liveBacking;
+             return (Math.mulDiv(_jpyPrice, liveBacking, 1e18), false);
+-        } catch {
++        } catch (bytes memory err) {
++            // The Vault reverts with the same gas-guard error when the caller cannot fund the
++            // fixed Strategy probe budget (Guardian Remediation L-01). Bubble it unchanged so a
++            // gas-starved call is never classified as an oracle failure.
++            if (err.length == 4 && bytes4(err) == InsufficientGasForExternalCall.selector) {
++                revert InsufficientGasForExternalCall();
++            }
+             if (gasleft() <= gasBefore / 64) revert InsufficientGasForExternalCall();
+             return (0, true);
+         }
+diff --git a/Strategies/BaseStrategy.sol b/Strategies/BaseStrategy.sol
+index e25405780..25de35595 100644
+--- a/Strategies/BaseStrategy.sol
++++ b/Strategies/BaseStrategy.sol
+@@ -28,11 +28,11 @@ interface IMerklDistributor {
+  *   - `deposit(declared, received)`: onlyVault. Underlying is transferred BEFORE this call.
+  *                                  Runs `_doDeposit(received)` in an isolated self-call; on
+  *                                  rejection, returns the exact receipt to the Vault or reverts.
+- *   - `sendToVault(amount)`     : ALLOCATOR_ROLE on Vault.
++ *   - `sendToVault(amount)`     : WITHDRAWER_ROLE on Vault.
+  *                                  Withdraws from the upstream protocol via `_doWithdraw`,
+  *                                  reduces `principal` (principal-first), pushes the result
+  *                                  to the Vault via `receiveFromStrategy`.
+- *   - `sendProfitToVault()`     : ALLOCATOR_ROLE on Vault.
++ *   - `sendProfitToVault()`     : HARVESTER_ROLE on Vault.
+  *                                  Caps the amount at `realizedYield()`, withdraws via
+  *                                  `_doWithdraw`, leaves `principal` unchanged, pushes
+  *                                  the result directly to the Vault buffer.
+@@ -78,8 +78,11 @@ abstract contract BaseStrategy is Initializable, IStrategy, OwnableUpgradeable,
+     //                          CONSTANTS
+     // =============================================================
+ 
+-    /// @dev Must match `CollateralVault.ALLOCATOR_ROLE`.
++    /// @dev Legacy role retained only for archived async strategy request functions.
+     bytes32 internal constant _ALLOCATOR_ROLE = keccak256("ALLOCATOR_ROLE");
++    /// @dev Must match the operation-specific roles on CollateralVault.
++    bytes32 internal constant _WITHDRAWER_ROLE = keccak256("WITHDRAWER_ROLE");
++    bytes32 internal constant _HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
+     uint256 public constant MAX_MERKL_TOKENS_PER_CLAIM = 16;
+ 
+     // =============================================================
+@@ -329,7 +332,7 @@ abstract contract BaseStrategy is Initializable, IStrategy, OwnableUpgradeable,
+         external
+         override
+         nonReentrantStrategy
+-        onlyVaultRole(_ALLOCATOR_ROLE)
++        onlyVaultRole(_WITHDRAWER_ROLE)
+         returns (uint256 sent)
+     {
+         if (_amount == 0) return 0;
+@@ -361,7 +364,7 @@ abstract contract BaseStrategy is Initializable, IStrategy, OwnableUpgradeable,
+         external
+         override
+         nonReentrantStrategy
+-        onlyVaultRole(_ALLOCATOR_ROLE)
++        onlyVaultRole(_HARVESTER_ROLE)
+         returns (uint256 sent)
+     {
+         uint256 realizedProfit = realizedYield();

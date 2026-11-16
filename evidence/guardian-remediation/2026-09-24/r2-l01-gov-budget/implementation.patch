@@ -1,0 +1,216 @@
+diff --git a/contracts/src/CollateralVault.sol b/contracts/src/CollateralVault.sol
+index 9e46fcf2b..8645007f0 100644
+--- a/contracts/src/CollateralVault.sol
++++ b/contracts/src/CollateralVault.sol
+@@ -80,9 +80,12 @@ contract CollateralVault is
+ 
+     uint256 internal constant BPS_DENOMINATOR = 10000;
+     uint256 internal constant DEFAULT_STRATEGY_VALUATION_MAX_AGE = 1 days;
+-    /// @dev Fixed gas budget handed to each Strategy valuation probe. A registered Strategy must
+-    ///      value itself within this budget; a probe that exceeds it is a genuine valuation failure.
+-    uint256 internal constant STRATEGY_VALUATION_GAS = 500_000;
++    /// @dev Default gas budget handed to each Strategy valuation probe. A registered Strategy must
++    ///      value itself within the active budget; a probe that exceeds it is a genuine valuation
++    ///      failure. GOV can retune the budget within the bounds below.
++    uint256 internal constant DEFAULT_STRATEGY_VALUATION_GAS = 500_000;
++    uint256 internal constant MIN_STRATEGY_VALUATION_GAS = 100_000;
++    uint256 internal constant MAX_STRATEGY_VALUATION_GAS = 2_000_000;
+     /// @dev Headroom the Vault keeps for the probe call frames and the catch paths.
+     uint256 internal constant STRATEGY_VALUATION_GAS_MARGIN = 20_000;
+     uint256 public constant MAX_STRATEGIES = 32;
+@@ -122,9 +125,12 @@ contract CollateralVault is
+     uint256 private _backstopReserve;
+     mapping(IStrategy => StrategyValuationCache) public override strategyValuationCaches; // [3b]
+     uint256 public override strategyValuationMaxAge; // [3b]
++    /// @dev Zero means DEFAULT_STRATEGY_VALUATION_GAS, so an upgraded proxy whose slot is still
++    ///      unset keeps the default budget instead of probing with no gas.
++    uint256 private _strategyValuationGasBudget; // [3b]
+ 
+     /// @dev Storage gap for future upgrades. See OpenZeppelin's storage gap guidance.
+-    uint256[47] private __gap;
++    uint256[46] private __gap;
+ 
+     // =============================================================
+     //                          ERRORS
+@@ -136,6 +142,7 @@ contract CollateralVault is
+     /// @dev Caller cannot fund the fixed Strategy valuation probe budget. Same signature as the
+     ///      price-feed gas guard so JpyFreezeLib and PriceFeedProxy bubble it instead of shutting down.
+     error InsufficientGasForExternalCall();
++    error InvalidStrategyValuationGasBudget(uint256 budget);
+     error InvalidBufferConfig();
+     error RequestNotReady();
+     error RequestNotFound();
+@@ -210,6 +217,7 @@ contract CollateralVault is
+         bufferTargetBps = 2000; // 20%
+         allocateMaxMove = type(uint256).max;
+         strategyValuationMaxAge = DEFAULT_STRATEGY_VALUATION_MAX_AGE;
++        _strategyValuationGasBudget = DEFAULT_STRATEGY_VALUATION_GAS;
+         withdrawDelay = 1 days;
+         nextRequestId = 1;
+ 
+@@ -787,6 +795,22 @@ contract CollateralVault is
+         emit StrategyValuationMaxAgeUpdated(oldMaxAge, _maxAge);
+     }
+ 
++    /// @inheritdoc ICollateralVault
++    function setStrategyValuationGasBudget(uint256 _budget) external override onlyRole(GOV_ROLE) {
++        if (_budget < MIN_STRATEGY_VALUATION_GAS || _budget > MAX_STRATEGY_VALUATION_GAS) {
++            revert InvalidStrategyValuationGasBudget(_budget);
++        }
++        uint256 oldBudget = strategyValuationGasBudget();
++        _strategyValuationGasBudget = _budget;
++        emit StrategyValuationGasBudgetUpdated(oldBudget, _budget);
++    }
++
++    /// @inheritdoc ICollateralVault
++    function strategyValuationGasBudget() public view override returns (uint256 budget) {
++        budget = _strategyValuationGasBudget;
++        if (budget == 0) budget = DEFAULT_STRATEGY_VALUATION_GAS;
++    }
++
+     function refreshStrategyValuation(IStrategy _strategy) external override returns (bool refreshed) {
+         if (!_isRegisteredStrategy(_strategy)) revert StrategyNotFound();
+         refreshed = _refreshStrategyValuation(_strategy);
+@@ -1206,10 +1230,11 @@ contract CollateralVault is
+     {
+         // Check each probe at its call boundary: the previous probe may have spent its budget.
+         // Bubble caller underfunding instead of treating a clipped stipend as valuation failure.
+-        if (gasleft() < STRATEGY_VALUATION_GAS * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++        uint256 budget = strategyValuationGasBudget();
++        if (gasleft() < budget * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
+             revert InsufficientGasForExternalCall();
+         }
+-        try _strategy.estimatedTotalUnderlying{gas: STRATEGY_VALUATION_GAS}() returns (uint256 value) {
++        try _strategy.estimatedTotalUnderlying{gas: budget}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+@@ -1217,10 +1242,11 @@ contract CollateralVault is
+     }
+ 
+     function _tryPrincipal(IStrategy _strategy) internal view returns (uint256 principal_, bool available) {
+-        if (gasleft() < STRATEGY_VALUATION_GAS * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
++        uint256 budget = strategyValuationGasBudget();
++        if (gasleft() < budget * 64 / 63 + STRATEGY_VALUATION_GAS_MARGIN) {
+             revert InsufficientGasForExternalCall();
+         }
+-        try _strategy.principal{gas: STRATEGY_VALUATION_GAS}() returns (uint256 value) {
++        try _strategy.principal{gas: budget}() returns (uint256 value) {
+             return (value, true);
+         } catch {
+             return (0, false);
+diff --git a/contracts/src/Interfaces/ICollateralVault.sol b/contracts/src/Interfaces/ICollateralVault.sol
+index 81c0256cc..6ec5a1702 100644
+--- a/contracts/src/Interfaces/ICollateralVault.sol
++++ b/contracts/src/Interfaces/ICollateralVault.sol
+@@ -108,6 +108,7 @@ interface ICollateralVault {
+         uint256 backingRatioAfter
+     );
+     event StrategyValuationMaxAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
++    event StrategyValuationGasBudgetUpdated(uint256 oldBudget, uint256 newBudget);
+     event StrategyValuationRefreshed(
+         address indexed strategy, uint256 estimatedUnderlying, uint256 principal, uint256 conservativeValue
+     );
+@@ -146,6 +147,8 @@ interface ICollateralVault {
+     function pausedAllocation() external view returns (bool);
+     function pendingWithdrawals() external view returns (uint256);
+     function strategyValuationMaxAge() external view returns (uint256);
++    /// @notice Gas forwarded to each Strategy valuation probe (`estimatedTotalUnderlying`, `principal`).
++    function strategyValuationGasBudget() external view returns (uint256);
+     function strategyValuationCaches(IStrategy _strategy)
+         external
+         view
+@@ -277,6 +280,8 @@ interface ICollateralVault {
+ 
+     function setAllocatorConfig(uint256 _maxMove, uint256 _cooldown) external;
+     function setStrategyValuationMaxAge(uint256 _maxAge) external;
++    /// @notice Retune the per-probe Strategy valuation gas budget. GOV_ROLE; bounded to [100_000, 2_000_000].
++    function setStrategyValuationGasBudget(uint256 _budget) external;
+     function refreshStrategyValuation(IStrategy _strategy) external returns (bool refreshed);
+     /// @notice Drop a Strategy's fallback valuation cache. GOV_ROLE, or WRITEOFF_ROLE after allocation is paused
+     ///         or the Strategy is disabled.
+diff --git a/contracts/test/GuardianR2L01StrategyGasBudget.t.sol b/contracts/test/GuardianR2L01StrategyGasBudget.t.sol
+index 3a5c38c19..636c8d952 100644
+--- a/contracts/test/GuardianR2L01StrategyGasBudget.t.sol
++++ b/contracts/test/GuardianR2L01StrategyGasBudget.t.sol
+@@ -90,7 +90,7 @@ contract MockBO {
+ }
+ 
+ contract GuardianR2L01StrategyGasBudgetTest is Test {
+-    uint256 internal constant PROBE_BUDGET = 500_000; // CollateralVault.STRATEGY_VALUATION_GAS
++    uint256 internal constant PROBE_BUDGET = 500_000; // CollateralVault default Strategy valuation gas budget
+ 
+     MockERC20 internal underlying;
+     GasHeavyERC4626Vault internal yieldVault;
+@@ -319,4 +319,71 @@ contract GuardianR2L01StrategyGasBudgetTest is Test {
+         assertLt(hi, used + PROBE_BUDGET * 64 / 63 + 150_000, "minimum gas limit drifted far above usage + budget");
+         assertGt(hi, used + PROBE_BUDGET / 2, "pre-check no longer requires the probe budget");
+     }
++
++    // ------------------------------------------------------------------ GOV-tunable budget
++
++    event StrategyValuationGasBudgetUpdated(uint256 oldBudget, uint256 newBudget);
++
++    uint256 internal constant GAS_BUDGET_SLOT = 321; // forge inspect CollateralVault storageLayout
++
++    function test_budgetDefaultsTo500k() public view {
++        assertEq(vault.strategyValuationGasBudget(), PROBE_BUDGET);
++    }
++
++    function test_setBudget_onlyGovWithinBounds() public {
++        vm.prank(attacker);
++        vm.expectRevert();
++        vault.setStrategyValuationGasBudget(1_000_000);
++
++        vm.expectRevert(abi.encodeWithSelector(CollateralVault.InvalidStrategyValuationGasBudget.selector, 99_999));
++        vault.setStrategyValuationGasBudget(99_999);
++        vm.expectRevert(abi.encodeWithSelector(CollateralVault.InvalidStrategyValuationGasBudget.selector, 2_000_001));
++        vault.setStrategyValuationGasBudget(2_000_001);
++
++        vm.expectEmit(address(vault));
++        emit StrategyValuationGasBudgetUpdated(PROBE_BUDGET, 1_000_000);
++        vault.setStrategyValuationGasBudget(1_000_000);
++        assertEq(vault.strategyValuationGasBudget(), 1_000_000);
++
++        vault.setStrategyValuationGasBudget(100_000);
++        vault.setStrategyValuationGasBudget(2_000_000);
++        assertEq(vault.strategyValuationGasBudget(), 2_000_000);
++    }
++
++    /// @dev An upgraded proxy whose new slot is still zero must keep the default budget,
++    ///      not probe with zero gas.
++    function test_unsetSlotBehavesAsDefault() public {
++        assertEq(uint256(vm.load(address(vault), bytes32(GAS_BUDGET_SLOT))), PROBE_BUDGET, "slot position");
++        vm.store(address(vault), bytes32(GAS_BUDGET_SLOT), bytes32(0));
++        assertEq(vault.strategyValuationGasBudget(), PROBE_BUDGET);
++        yieldVault.setBurnGas(300_000);
++        assertTrue(vault.refreshStrategyValuation(IStrategy(address(strategy))), "valuation still works");
++    }
++
++    /// @dev Raising the budget lets a Strategy whose valuation grew past the default be valued
++    ///      again, and the raised budget keeps the no-latch guarantee.
++    function test_raisedBudgetRestoresValuationAndKeepsNoLatch() public {
++        yieldVault.setBurnGas(800_000); // valuation cost grew beyond the default budget
++        assertFalse(vault.refreshStrategyValuation(IStrategy(address(strategy))), "over the default budget");
++
++        vault.setStrategyValuationGasBudget(1_200_000);
++        assertTrue(vault.refreshStrategyValuation(IStrategy(address(strategy))), "valued within the raised budget");
++
++        _expireValuationCache();
++        vm.startPrank(attacker);
++        _assertNoGasLatch(4_000_000, 300_000, 5_000);
++        vm.stopPrank();
++    }
++
++    /// @dev Lowering the budget below a Strategy's real cost makes it a genuine valuation
++    ///      failure (the monitoring case Guardian flagged); it is never a caller-gas artefact.
++    function test_budgetBelowStrategyCostIsGenuineFailure() public {
++        yieldVault.setBurnGas(300_000);
++        vault.setStrategyValuationGasBudget(200_000);
++        assertFalse(vault.refreshStrategyValuation(IStrategy(address(strategy))));
++        _expireValuationCache();
++        (, bool failure) = proxy.fetchPrice();
++        assertTrue(failure);
++        assertTrue(bo.shutDownCalled());
++    }
+ }

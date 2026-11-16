@@ -1,0 +1,202 @@
+diff --git a/contracts/src/DFStabilityPool.sol b/contracts/src/DFStabilityPool.sol
+index 2cef5ca7..e17eaf28 100644
+--- a/contracts/src/DFStabilityPool.sol
++++ b/contracts/src/DFStabilityPool.sol
+@@ -185,9 +185,9 @@ contract DFStabilityPool is LiquityBase, IStabilityPool, IStabilityPoolEvents {
+     mapping(uint256 => uint256) public scaleToB;
+ 
+     // Prevent same-block flash deposits from capturing liquidation gains and
+-    // immediately withdrawing in the same atomic bundle. This does not remove
+-    // all timing/MEV risk, but forces at least one block of capital exposure
+-    // before a fresh SP deposit can exit with liquidation proceeds.
++    // immediately withdrawing in the same atomic bundle. The guard requires
++    // persistence across a block boundary; it does not guarantee an intervening
++    // offset or a full block of liquidation exposure.
+     mapping(address => uint256) public lastDepositBlock;
+ 
+     // --- Events ---
+diff --git a/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md b/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md
+index 546ce282..be1531e3 100644
+--- a/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md
++++ b/documents/en/protocol/product/spec/Liquity-v2-Core-Spec.md
+@@ -1898,7 +1898,7 @@ Minimal reprint of the Chainlink AggregatorV3 interface (only `decimals()` / `la
+ - **Revert / early return**: deposit→withdraw in the same block → `"StabilityPool: Withdrawal must wait after deposit"`.
+ - **Emitted events**: none (no dedicated event is added).
+ - **Design notes**:
+-  - The constraint releases **from the next block** only (not a timelock). Depositors are exposed to at least one block of pool risk (deposit depletion from liquidation), and attacks funded by flash loans requiring repayment within the same tx fail because withdrawal is impossible.
++  - The constraint releases **from the next block** only (not a timelock). A deposit persists across at least one block boundary, but a deposit in the last transaction of block N can be withdrawn in the first transaction of block N+1, so the guard does not guarantee an intervening `offset()` or a full block of liquidation-loss exposure. Attacks funded by flash loans requiring repayment within the same tx still fail because withdrawal is impossible.
+   - The guard is only on `withdrawFromSP`; it does not restrict `provideToSP` (redeposit) or `claimAllCollGains`. `claimAllCollGains` acts only on zero-deposit users (stash remaining from past operations), so it does not create a sniping path when combined with same-block deposit.
+   - StabilityPool.sol (base norm) does not have this state or guard. The deployed implementation is DFStabilityPool, and fork-source parity tests must verify that differences between the two are limited to this FR and the 3 items noted in CORE-SP-FR-002/003.
+ - **Verification**: unit (same-block revert, next-block success, top-up updates block, `claimAllCollGains` not affected) / copy-parity (DFStabilityPool behavior identical to StabilityPool except for this guard).
+@@ -4559,8 +4559,8 @@ The upper-bound check on the debt/shares ratio (`BatchSharesRatioTooHigh`) preve
+ 
+ #### CORE-SP-SEC-004: Preventing Liquidation-Gain Capture Through Same-Block Flash Deposits 🟡
+ - Attack scenario (possible in base): An attacker who anticipates that liquidation will occur in the same block obtains a large amount of JPYdf via a flash loan or similar, calls `provideToSP` → `offset` to receive most of the collateral gain through proportional distribution (liquidation collateral is normally distributed at a discount, yielding immediate profit) → calls `withdrawFromSP` within the same block to recover principal + gains. This imposes almost no pool-residency risk and dilutes the share of existing depositors.
+-- DF mitigation (CORE-MOD-004 (§2 DF Difference Ledger)): DFStabilityPool restricts `withdrawFromSP` to `lastDepositBlock[msg.sender] < block.number` (CORE-SP-FR-004). Flash loans that require repayment in the same tx cannot be used as the source of funds, and even self-funded deposits are exposed to liquidation-loss risk for at least one block.
+-- Residual risk: Withdrawals are unrestricted from the next block onward, so multi-block MEV (cases with highly accurate liquidation prediction) remains in a threshold sense. This guard is intended to eliminate "risk-free atomic capture."
++- DF mitigation (CORE-MOD-004 (§2 DF Difference Ledger)): DFStabilityPool restricts `withdrawFromSP` to `lastDepositBlock[msg.sender] < block.number` (CORE-SP-FR-004). Flash loans that require repayment in the same tx cannot be used as the source of funds, and a self-funded deposit must persist across at least one block boundary.
++- Residual risk: Transaction ordering can place a deposit in the last transaction of block N and its withdrawal in the first transaction of block N+1, with no intervening `offset()` and therefore no liquidation-loss exposure. Next-block withdrawal and multi-block MEV remain possible; this guard is intended only to eliminate "risk-free atomic capture."
+ - Verification: unit (same-block revert, success in next block, flash-loan path infeasible).
+ 
+ #### CORE-SP-SEC-005: External Call Surface and Reentrancy Considerations 🔵
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-08-Stability-Pool-Guard-Wording-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-08-Stability-Pool-Guard-Wording-Differential-Review.md
+new file mode 100644
+index 00000000..7503ed26
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-08-Stability-Pool-Guard-Wording-Differential-Review.md
+@@ -0,0 +1,131 @@
++# External Audit Info 08: Stability Pool same-block guard 表現差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md` の `CORE-SP-FR-004` / `CORE-SP-SEC-004`
++> を参照する。
++
++## Executive Summary
++
++外部監査 Info 08「`lastDepositBlock` Comment Overstates Guard Guarantee」は **受理する**。
++`lastDepositBlock[msg.sender] < block.number` が保証するのは、預入と出金を同一 block 内で完結できないことと、
++預入状態が少なくとも 1 つの block boundary を跨ぐことまでである。block N の末尾で預入し、block N+1 の
++先頭で出金する ordering では、その間に Stability Pool の `offset()` が 1 回も発生しない可能性がある。
++
++一方、これは実装上の保護不足を新たに示す finding ではない。同一 tx 内返済が必要な flash loan を使った
++原子的な「預入 → 清算益獲得 → 出金」は現行 guard で遮断されており、翌 block 以降の timing / MEV risk は
++もともと residual risk である。誤りは Solidity comment と JP / EN core spec が「最低 1 block の清算減耗
++risk」を保証するように読める点に限定される。
++
++修正は監査推奨 option 1 を採用し、実際の保証を「block boundary を跨ぐ persistence」と明記する。
++`lastDepositBlock + 1 < block.number` へ変更する option 2 は採用しない。Info finding の文言修正を超えて
++出金可能時点を 1 block 延長し、runtime behavior と upstream fork delta を変更する根拠がないためである。
++
++**判定**: Informational accepted。comment / JP 正本 / EN 補助訳のみ修正し、Solidity の実行ロジック、ABI、
++storage layout、test behavior は変更しない。
++
++## Scope And Baseline
++
++- 外部指摘: Info 08 — `lastDepositBlock` Comment Overstates Guard Guarantee
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/DFStabilityPool.sol`
++  - `lastDepositBlock` の設計意図 comment
++  - `_requireWithdrawalAfterDeposit()` の `lastDepositBlock[msg.sender] < block.number`
++- 規範対象:
++  - JP `CORE-SP-FR-004`
++  - JP `CORE-SP-SEC-004`
++  - 対応する EN support translation
++- 除外: guard 条件、revert message、storage、ABI、既存 unit test の変更
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| guard は預入 block より後の block で出金を許す | True | 条件は `lastDepositBlock < block.number` |
++| guard は「1 block 全体の capital exposure」を保証しない | True | N の末尾で預入し N+1 の先頭で出金可能 |
++| 間に liquidation / `offset()` が発生する保証はない | True | guard は block number だけを比較し、SP event や offset count を追跡しない |
++| same-tx flash-loan capture は現在も遮断される | True | 預入 tx と同じ tx / block 内の出金は revert |
++| runtime protection を 1 block 延長すべき | Not established | Informational wording mismatch から追加 lock の必要性は導けない |
++
++## Guarantee Boundary
++
++現行条件を預入 block `N` と出金 block `W` で表すと、成功条件は `N < W` である。この条件は次を保証する。
++
++- `N == W` の同一 block 出金は失敗する。
++- 同一 tx 内返済が必要な flash loan を預入原資にした原子的 capture は完結しない。
++- 成功する出金までに少なくとも 1 つの block boundary を跨ぐ。
++
++一方、次は保証しない。
++
++- `N` と `W` の間に別の transaction が存在すること。
++- 預入中に `offset()` が発生すること。
++- block N または N+1 の全期間にわたり預入が SP risk を負うこと。
++
++したがって「capital exposure」ではなく「persistence across a block boundary」が正確な表現である。
++
++## Remediation
++
++### Solidity comment
++
++`DFStabilityPool.sol` の comment を、同一 block / atomic capture の遮断を維持しつつ、full-block exposure を
++保証しない表現へ変更する。guard の条件、状態変数、function body は変更しない。
++
++### JP normative spec
++
++`CORE-SP-FR-004` と `CORE-SP-SEC-004` に以下を明記する。
++
++- 預入状態は少なくとも 1 つの block boundary を跨ぐ。
++- N 末尾の預入 → N+1 先頭の出金では intervening `offset()` がない可能性がある。
++- protection の目的は risk-free atomic capture の排除に限定される。
++
++### EN support translation
++
++JP 正本と同じ guarantee boundary に同期する。新しい要件や独立した解釈は追加しない。
++
++## Why Not Add A Full Intervening Block
++
++監査推奨 option 2 の `lastDepositBlock[msg.sender] + 1 < block.number` は、少なくとも block N+1 全体を跨がないと
++出金できないため、現在の next-block success を next-next-block success へ変更する。これは comment 修正ではなく、
++次の変更を伴う protocol behavior change である。
++
++- honest depositor の最短出金時点を 1 block 延長
++- `CORE-MOD-004` の差分境界と verification expectation の変更
++- unit / invariant handler / frontend expectation の更新
++- upstream core fork delta の拡大
++
++Info 08 は現行 protection の residual risk を新規に severity 付けしておらず、この behavior change を正当化する
++損失シナリオや費用対効果を提示していない。よって wording alignment に限定する。
++
++## Verification
++
++```text
++forge test --match-test 'testWithdrawFromSP_RevertsWhenCalledInSameBlockAsDeposit|testWithdrawFromSPWithClaim_WithOnlyCurrentCollGainsSendsTotalCollGainToDepositor' -vv
++  2 passed; 0 failed
++
++DFStabilityPool deployed runtime executable hash (CBOR metadata removed):
++  baseline: 433025fd767de4967aa00e3c1e37d86a389a64291a914bd2756f643b6c08ddf2
++  patched:  433025fd767de4967aa00e3c1e37d86a389a64291a914bd2756f643b6c08ddf2
++
++git diff --check
++```
++
++Solidity metadata は source comment を含むため、完全な artifact bytecode hash は変わり得る。上記比較は deployed
++runtime bytecode から compiler CBOR metadata trailer を除いた executable portion を比較し、実行命令が同一で
++あることを確認する。
++
++`forge fmt --check src/DFStabilityPool.sol` は baseline 由来の既存2箇所（空白行と式の折返し）を指摘する。
++監査 scope に無関係な整形差分を混ぜないため、本修正では触れない。
++
++## Residual Risk
++
++- same-block atomic capture は遮断されるが、next-block ordering と multi-block MEV は残る。
++- block boundary は経済的 exposure の代理指標ではない。将来 full-block lock を要求する場合は、新しい risk decision
++  として `CORE-MOD-004`、JP/EN spec、テスト、運用 UX を同時に変更する必要がある。
++- 本変更は security control 自体を強化しない。control の保証を正確に記述し、運用・監査上の過信を防ぐ変更である。
++
++## Methodology
++
++- freeze artifact と current `origin/develop` の guard / comment が同一であることを確認した。
++- `lastDepositBlock < block.number` の境界を block N / N+1 ordering に分解した。
++- JP source-of-truth と EN support translation の過大表現を横断検索した。
++- 既存 same-block revert / next-block success test を再実行した。
++- comment-only Solidity diff の executable runtime bytecode を baseline と比較した。
+diff --git a/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md b/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md
+index ee82f7fa..a046de9f 100644
+--- a/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md
++++ b/documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md
+@@ -1861,7 +1861,7 @@ Chainlink AggregatorV3 の最小インターフェース転載（`decimals()` /
+ - **revert / 早期 return**: 同一ブロック内の預入→引出 → `"StabilityPool: Withdrawal must wait after deposit"`。
+ - **発火イベント**: なし（専用イベントは追加されていない）。
+ - **設計上のポイント**:
+-  - 拘束は**翌ブロック以降の解除**のみ（タイムロックではない）。預入者は最低 1 ブロック分のプールリスク（清算による預金減耗）に晒され、かつ同一 tx 内で返済が必要な flash loan を原資とする攻撃は出金不能により成立しなくなる。
++  - 拘束は**翌ブロック以降の解除**のみ（タイムロックではない）。預入状態は少なくとも 1 つの block boundary を跨ぐが、block N の末尾で預入し block N+1 の先頭で出金できるため、途中の `offset()` や「1 block 全体の清算減耗リスク」は保証しない。一方、同一 tx 内で返済が必要な flash loan を原資とする攻撃は出金不能により成立しなくなる。
+   - ガードは `withdrawFromSP` のみに置かれ、`provideToSP`（再預入）と `claimAllCollGains` は制約しない。`claimAllCollGains` は預金 0（過去操作で確定済みの stash 残）にしか作用しないため、same-block 預入と組み合わせた横取り経路にはならない。
+   - StabilityPool.sol（base 規範）にはこの状態・ガードは存在しない。デプロイ実体が DFStabilityPool であることと、両者の差分がこの FR と CORE-SP-FR-002/003 の注記に列挙した 3 点に限られることを、フォーク元同一性テストの対象とする。
+ - **Verification**: unit（same-block revert・翌ブロック成功・トップアップによるブロック更新・`claimAllCollGains` 非対象）/ copy-parity（DFStabilityPool が本ガード以外で StabilityPool と同一挙動であること）。
+@@ -4274,8 +4274,8 @@ debt/shares 比の上限検査（`BatchSharesRatioTooHigh`）で shares の極
+ 
+ #### CORE-SP-SEC-004: same-block flash 預入による清算益横取りの防止 🟡
+ - 攻撃シナリオ（base で可能）: 清算が同一ブロックで発生することを予見した攻撃者が、flash loan 等で調達した大量 JPYdf を `provideToSP` → `offset` で担保ゲインの大半を比例配分で獲得（清算担保は通常ディスカウント付きで分配されるため即時利益）→ 同一ブロック内に `withdrawFromSP` で元本＋ゲインを回収。プール在籍リスクをほぼ負わず、既存預金者の取り分を希釈する。
+-- DF の対策（CORE-MOD-004（§2 DF 差分台帳））: DFStabilityPool は `withdrawFromSP` を `lastDepositBlock[msg.sender] < block.number` に制限（CORE-SP-FR-004）。同一 tx 返済が必須の flash loan は原資にできず、自己資金でも最低 1 ブロックは清算減耗リスクに晒される。
+-- 残余リスク: 翌ブロック以降の出金は自由であり、複数ブロックにわたる MEV（清算予見の精度が高いケース）は閾値的には残る。本ガードは「リスクフリーの原子的横取り」の排除を目的とする。
++- DF の対策（CORE-MOD-004（§2 DF 差分台帳））: DFStabilityPool は `withdrawFromSP` を `lastDepositBlock[msg.sender] < block.number` に制限（CORE-SP-FR-004）。同一 tx 返済が必須の flash loan は原資にできず、自己資金による預入も少なくとも 1 つの block boundary を跨いで存続する。
++- 残余リスク: block N の末尾で預入し block N+1 の先頭で出金する ordering では、間に `offset()` が発生せず清算減耗リスクを負わない可能性がある。翌ブロック以降の出金と複数ブロックにわたる MEV は残り、本ガードは「リスクフリーの原子的横取り」の排除だけを目的とする。
+ - Verification: unit（same-block revert・翌ブロック成功・flash loan 経路の不成立）。
+ 
+ #### CORE-SP-SEC-005: 外部呼出面と再入の考慮 🔵

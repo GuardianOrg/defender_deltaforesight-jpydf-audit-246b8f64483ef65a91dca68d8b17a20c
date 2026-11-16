@@ -1,0 +1,360 @@
+diff --git a/contracts/src/PriceFeeds/DFPriceFeedBase.sol b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+index 18186672..1d9567cc 100644
+--- a/contracts/src/PriceFeeds/DFPriceFeedBase.sol
++++ b/contracts/src/PriceFeeds/DFPriceFeedBase.sol
+@@ -32,6 +32,7 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+     using JpyFreezeLib for JpyFreezeLib.JpyConversionState;
+ 
+     error InvalidCollateralVault();
++    error InvalidInitialPrice();
+     error InvalidJpyUsdRateProvider();
+ 
+     // All branch feeds point to the same provider contract, so the cached JPY rate,
+@@ -61,7 +62,7 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+ 
+         // Fetch an initial price and confirm the oracle setup is live at deploy time.
+         _fetchStandardPricePrimary();
+-        assert(priceSource == PriceSource.primary);
++        if (priceSource != PriceSource.primary || lastGoodPrice == 0) revert InvalidInitialPrice();
+     }
+ 
+     function fetchPrice() public returns (uint256, bool) {
+@@ -137,7 +138,7 @@ abstract contract DFPriceFeedBase is MainnetPriceFeedBase {
+     }
+ 
+     /// @dev Shared-JPY-failure shutdown; see `JpyFreezeLib.shutDownFromSharedJpyFailure`.
+-function _shutDownFromSharedJpyFailure() internal returns (uint256) {
++    function _shutDownFromSharedJpyFailure() internal returns (uint256) {
+         // Latch the terminal source state only when the branch was actually shut down. Staying
+         // on `primary` is safe: while the oracle remains unhealthy, the provider re-reports
+         // failure=true until the registered caller acts on it. A later fresh response starts a
+diff --git a/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol b/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol
+index c9e86139..ee8275dd 100644
+--- a/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol
++++ b/contracts/src/PriceFeeds/DFWstETHPriceFeed.sol
+@@ -48,6 +48,7 @@ contract DFWstETHPriceFeed is CompositePriceFeed {
+     using JpyFreezeLib for JpyFreezeLib.JpyConversionState;
+ 
+     error InvalidCollateralVault();
++    error InvalidInitialPrice();
+     error InvalidRateProvider();
+     error InvalidRateProviderDecimals();
+     error InvalidRateProviderRate();
+@@ -82,7 +83,7 @@ contract DFWstETHPriceFeed is CompositePriceFeed {
+ 
+         // Fetch an initial price and confirm the oracle setup is live at deploy time.
+         _fetchPricePrimary(false);
+-        assert(priceSource == PriceSource.primary);
++        if (priceSource != PriceSource.primary || lastGoodPrice == 0) revert InvalidInitialPrice();
+     }
+ 
+     function _validateRateProvider(address _wstEthAddress) private view {
+@@ -162,7 +163,7 @@ contract DFWstETHPriceFeed is CompositePriceFeed {
+     }
+ 
+     /// @dev Shared-JPY-failure shutdown; see `JpyFreezeLib.shutDownFromSharedJpyFailure`.
+-function _shutDownFromSharedJpyFailure() internal returns (uint256) {
++    function _shutDownFromSharedJpyFailure() internal returns (uint256) {
+         // Latch the terminal source state only when the branch was actually shut down. Staying
+         // on `primary` is safe: while the oracle remains unhealthy, the provider re-reports
+         // failure=true until the registered caller acts on it. A later fresh response starts a
+diff --git a/contracts/test/JpySharedShutdownLatch.t.sol b/contracts/test/JpySharedShutdownLatch.t.sol
+index dcc705c4..579edc0b 100644
+--- a/contracts/test/JpySharedShutdownLatch.t.sol
++++ b/contracts/test/JpySharedShutdownLatch.t.sol
+@@ -2,6 +2,7 @@
+ pragma solidity 0.8.24;
+ 
+ import "forge-std/Test.sol";
++import "src/PriceFeeds/DFUSDCPriceFeed.sol";
+ import "src/PriceFeeds/DFWstETHPriceFeed.sol";
+ import "src/PriceFeeds/JpyUsdRateProvider.sol";
+ import "src/PriceFeeds/PriceFeedProxy.sol";
+@@ -167,6 +168,51 @@ contract JpySharedShutdownLatchTest is Test {
+         assertTrue(bo.hasBeenShutDown(), "control: proxy performs the shutdown");
+     }
+ 
++    function test_expiredSharedProviderRejectsNewActiveFeedDeployments() public {
++        _expireSharedProviderWithoutBranchShutdown();
++
++        ChainlinkOracleMock usdcUsd = new ChainlinkOracleMock();
++        usdcUsd.setDecimals(8);
++        usdcUsd.setPrice(1e8);
++        usdcUsd.setUpdatedAt(block.timestamp);
++
++        vm.expectRevert(DFPriceFeedBase.InvalidInitialPrice.selector);
++        new DFUSDCPriceFeed(
++            address(usdcUsd), STETH_STALENESS, address(jpyRateProvider), address(backingVault), address(bo)
++        );
++
++        vm.expectRevert(DFWstETHPriceFeed.InvalidInitialPrice.selector);
++        new DFWstETHPriceFeed(
++            address(stEthUsd),
++            address(wstEth),
++            STETH_STALENESS,
++            address(jpyRateProvider),
++            address(backingVault),
++            address(bo)
++        );
++    }
++
++    function test_activeFeedDeploymentRecoversAfterFreshJpyRound() public {
++        _expireSharedProviderWithoutBranchShutdown();
++
++        jpyUsd.setPrice(700_000);
++        jpyUsd.setUpdatedAt(block.timestamp);
++        stEthUsd.setUpdatedAt(block.timestamp);
++
++        DFWstETHPriceFeed recoveredFeed = new DFWstETHPriceFeed(
++            address(stEthUsd),
++            address(wstEth),
++            STETH_STALENESS,
++            address(jpyRateProvider),
++            address(backingVault),
++            address(bo)
++        );
++
++        assertGt(recoveredFeed.lastGoodPrice(), 0, "fresh JPY round seeds a nonzero price");
++        assertEq(uint256(recoveredFeed.priceSource()), uint256(IMainnetPriceFeed.PriceSource.primary));
++        assertFalse(jpyRateProvider.jpyFreezeExpired(), "fresh round clears the episode expiry");
++    }
++
+     /// PoC 2: `jpyFrozenSince` is never cleared unless a FRESH round is observed, so a brand new
+     /// staleness episode inherits a months-old freeze onset and latches terminal expiry instantly.
+     function test_staleFreezeOnsetStillReachesTerminalExpiry() public {
+@@ -199,4 +245,21 @@ contract JpySharedShutdownLatchTest is Test {
+         assertTrue(fail);
+         assertTrue(bo.hasBeenShutDown(), "PoC: whole branch permanently shut down");
+     }
++
++    function _expireSharedProviderWithoutBranchShutdown() internal {
++        proxy.fetchPrice();
++
++        vm.warp(block.timestamp + JPY_STALENESS + 1);
++        stEthUsd.setUpdatedAt(block.timestamp);
++        proxy.fetchPrice();
++
++        vm.warp(jpyRateProvider.jpyFrozenSince() + jpyRateProvider.MAX_JPY_FREEZE_DURATION());
++        stEthUsd.setUpdatedAt(block.timestamp);
++
++        vm.prank(ATTACKER);
++        (, bool failure) = feed.fetchPrice();
++        assertTrue(failure, "direct source call observes the expired provider");
++        assertTrue(jpyRateProvider.jpyFreezeExpired(), "provider episode is expired");
++        assertFalse(bo.hasBeenShutDown(), "unregistered source cannot shut the branch down");
++    }
+ }
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 7942a6e3..3e1163d2 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -100,6 +100,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | V21 | 2026-08-08 | jpydf-v2 / `fix/preaudit-morpho-pricing-rails` | `825e9674` | forge 1.7.1 local | none | affected 5 suites; fast PR gate; full local gate; `forge build --sizes`; `cloc 2.06`; `git diff --check` | Codex | PASS: affected 253, fast 1,536, full local 1,589; all with 0 failed / 0 skipped. Verified fee-on-transfer receiver delta, Strategy receipt/cache ambiguity, and unavailable/recovering Sky quotes. Vault runtime 23,047 bytes (margin 1,529); full body 5,219 nSLOC |
+ | PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | none | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35, fast 1,547, all with 0 failed / 0 skipped. The price-feed integration regression failed before the fix and passed after remediation. Sky Strategy runtime 20,173 bytes (margin 4,403); converter runtime 5,596 bytes (margin 18,980) |
+ | PRELIM-L01 | 2026-08-12 | jpydf-audit / `audit/preliminary-l01-remediation` | source `fe3d3d0` + M-01/M-02/L-01 overlays | forge 1.7.1 local | none | CollateralVault focused; push-model invariant; fast PR gate; production size gate; pre-fix mutation; production-source `forge fmt --check`; `git diff --check` | Codex | PASS: Vault focused 197, invariant 4, fast 1,547; all with 0 failed / 0 skipped. Before the fix, the owner-retry idempotence regression failed with `RequestNotFound`; after remediation it passed. Vault runtime 23,032 bytes (margin 1,544). The test file has unrelated pre-existing fmt drift, so the full-file fmt gate was not applied; the changed block and production sources were checked separately |
++| PRELIM-L02 | 2026-08-12 | jpydf-audit / `audit/preliminary-l02-remediation` | source `fe3d3d0` + M-01/M-02/L-01/L-02 overlays | forge 1.7.1 local | none | active-feed constructor focused; deploy selector; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 129, fast 1,549; all with 0 failed / 0 skipped. Before the fix, a Standard feed deployed against an expired shared provider and the regression failed; after remediation Standard / dwstETH both revert `InvalidInitialPrice`, while deployment succeeds after fresh JPY recovery. DFUSDC runtime 3,095 bytes (margin 21,481); DFWstETH runtime 3,492 bytes (margin 21,084) |
+ 
+ ---
+ 
+@@ -118,7 +119,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | §9A ERC4626Strategy (E4626) | - | - | 8 | - | - | - | - | - | 8 | 0 | 0 |
+ | §9C SkyUsdcSUsdsStrategy (SKY) | - | - | 11 | - | - | - | - | 0 | 11 | 0 | 11 |
+ | §9E MorphoV2Strategy (MV2) | 5 | 3 | 7 | - | - | - | - | 0 | 15 | 0 | 15 |
+-| §10 Oracle (ORCL) | 15 | 11 | 7 | 5 | 9 | 0 | - | 6 | 53 | 14 | 5 |
++| §10 Oracle (ORCL) | 15 | 12 | 7 | 5 | 9 | 0 | - | 6 | 54 | 15 | 6 |
+ | §11 Zapper (ZAP) | 15 | 9 | 7 | 3 | 1 | 0 | - | 10 | 45 | 11 | 33 |
+ | §12 Parameters (PRM) | - | 7 | - | - | - | - | parameter IDs 15 | 0 | 22 | 15 | 5 |
+ | §13 Treasury (TRSY) | 9 | 6 | - | - | 8 | 0 | - | 3 | 26 | 6 | 0 |
+@@ -128,16 +129,17 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | §13D InterestRouter (IRTR) | 5 | 6 | 5 | 5 | 3 | 0 | - | 6 | 30 | 1 | 0 |
+ | §13E PILAllocator / UniV4MerklInitiative (PILA) | 16 | 8 | 6 | 6 | 7 | 0 | - | 8 | 51 | 0 | 38 |
+ | §14 Frontend (FRNT) | 36 | 4 | 8 | 5 | 3 | 6 | - | 9 | 71 | 3 | 1 |
+-| **Total (active)** | **185** | **126** | **88** | **41** | **89** | **13** | **48** | **72** | **662** | **116** | **111** |
++| **Total (active)** | **185** | **127** | **88** | **41** | **89** | **13** | **48** | **72** | **663** | **117** | **112** |
+ | §9B LidoStrategy (LIDO, archived) | 9 | 10 | 8 | 3 | 5 | 5 | - | 7 | 47 | 0 | 39 |
+ | §9D EtherfiWeETHStrategy (EFWEETH, archived) | - | - | 13 | - | - | - | - | 0 | 13 | 0 | 13 |
+ | §15 Multichain (MCHN, excluded) | 13 | 8 | 6 | 5 | 6 | - | - | 3 | 41 | 1 | - |
+ 
+-- **IDs under verification** = 658 - open TBD. The Resolved / open / conditional / deferred breakdown of the 72 active TBD items (the archived §9B contributes a further 7, excluded) is governed by each document's TBD register; open gates are outside verification scope. `CORE-*` ID totals and verification status are governed by [Core-Requirements-Verification-Ledger.md](Core-Requirements-Verification-Ledger.md) and are not included in this ledger's active total.
++- **IDs under verification** = 663 - open TBD. The Resolved / open / conditional / deferred breakdown of the 72 active TBD items (the archived §9B contributes a further 7, excluded) is governed by each document's TBD register; open gates are outside verification scope. `CORE-*` ID totals and verification status are governed by [Core-Requirements-Verification-Ledger.md](Core-Requirements-Verification-Ledger.md) and are not included in this ledger's active total.
+ - The "Verified" column is the number of IDs whose rows are all PASS or N/A. Update per campaign.
+ - **V21 update (2026-08-08)**: Remediated the additional variants from the cross-skill review. VAULT-FR-002 now tracks receiver delta, VAULT-FR-005 invalidates ambiguous declared/received cache state, ZAP-FR-006 / ZAP-SEC-005 cover fee-on-transfer minimums, and SKY-SEC-011 separates unavailable quotes from measured zero. The §9C dashboard had omitted existing SKY-SEC-008..010; reconciling those three plus new 011 changes 7→11 and adds four to active SEC / IDs / Verified.
+ - **PRELIM-M02 update (2026-08-12)**: Refined SKY-SEC-011 for preliminary finding M-02. An explicit Sky reverse-route halt continues principal-capped 1:1 valuation without recognizing unrealized yield. Invalid fee, status-read failure, and every other quote failure remain fail-closed and are not inferred to be halts. Requirement and Verified totals are unchanged.
+ - **PRELIM-L01 update (2026-08-12)**: Refined VAULT-FR-006 for preliminary finding L-01. A retry for an existing, settled request returns `0` without a second transfer, accounting mutation, or event; an unissued ID still reverts with `RequestNotFound`. Permissionless triggering and fixed owner payout remain unchanged. Re-certifying VAULT-FR-006 updates §7 / active Verified from **2 to 3 / 110 to 111**; requirement-ID totals are unchanged.
++- **PRELIM-L02 update (2026-08-12)**: Added ORCL-INV-012, requiring every active DF feed constructor to seed a primary, nonzero `lastGoodPrice`. An unhealthy expired shared-JPY episode rejects deployment even when an unregistered feed's shutdown call is caught, and fresh recovery restores deployability. §10 INV / IDs / non-ID checks / Verified change **11→12 / 53→54 / 14→15 / 5→6**; active totals change **126→127 / 662→663 / 116→117 / 111→112**. The stale base in the IDs-under-verification formula is also reconciled to the dashboard total, **663**.
+ - **V10 update (2026-07-07)**: Added EFWEETH-SEC-014 and updated the active ID total from **615 to 616**. `WeETHWithdrawAdapter` is now included as first-party production source / audit scope and marked PASS based on Etherfi focused tests, deploy selector tests, build, and diff check.
+ - **V11 update (2026-07-07)**: Active ID total remains **616**. Added a DF-specific identity marker to `WeETHWithdrawAdapter` and marked the `EtherfiWeETHStrategy.initialize` marker-less ABI-compatible adapter rejection PASS based on focused tests, deploy selector tests, build, fmt, and diff check.
+ - **Artifact-boundary sync (2026-07-31)**: Added the existing missing `SYS-RISK-008`, the new `SYS-RISK-009`, and `ADR-007`, updating the active ID total from **616 to 619**. The rows remain Not run because operational Evidence has not been collected.
+@@ -965,6 +967,7 @@ Source of truth: [Oracle.md](../../protocol/product/spec/Oracle.md). Target: `Pr
+ | ORCL-INV-009 | placeholder is (1e18, false), does not trigger shutdown, and is consistent with Vault/dToken multi-layer guards | unit / integration | ☐ | ☐ | | Not run | |
+ | ORCL-INV-010 | standard / peg type / composite peg have only two states: primary and lastGoodPrice | unit | ☐ | ☐ | | Not run | |
+ | ORCL-INV-011 | Backing ratio is downward-only (0, 1e18] and multiplies into all collateral prices | unit / fork | ☐ | ☐ | | Not run | |
++| ORCL-INV-012 | Active DF feed constructor succeeds only after an initial primary fetch seeds nonzero `lastGoodPrice`; expired shared-provider / unregistered-shutdown catch cannot deploy a zero cache, and fresh JPY recovery restores deployment | unit / integration | ☑ | ☑ | `test_expiredSharedProviderRejectsNewActiveFeedDeployments`; `test_activeFeedDeploymentRecoversAfterFreshJpyRound` | PASS(PRELIM-L02) | Covers Standard and dwstETH rejection plus recovery liveness |
+ 
+ ### 10.3 Security Requirements (ORCL-SEC)
+ 
+@@ -1032,6 +1035,7 @@ Error catalog:
+ | 5 | UnderlyingNotSet (Vault side) | placeholder branch deposit/redeem (ORCL-FR-008) | ☐ | | Not run | |
+ | 6 | UnderlyingMismatch (Vault side) | dToken-first order violation (ORCL-FR-009) | ☐ | | Not run | |
+ | 7 | TokenInfoNotSet (dToken side) | convertTo* in placeholder phase (ORCL-FR-008) | ☐ | | Not run | |
++| 8 | InvalidInitialPrice | Initial active-feed constructor fetch cannot establish primary + nonzero price (ORCL-INV-012) | ☑ | `test_expiredSharedProviderRejectsNewActiveFeedDeployments` | PASS(PRELIM-L02) | Confirms custom errors for Standard and dwstETH |
+ 
+ ### 10.7 Open Issue Register (ORCL-TBD)
+ 
+diff --git a/documents/en/protocol/product/spec/Oracle.md b/documents/en/protocol/product/spec/Oracle.md
+index 78a31c3e..38c12dda 100644
+--- a/documents/en/protocol/product/spec/Oracle.md
++++ b/documents/en/protocol/product/spec/Oracle.md
+@@ -338,6 +338,8 @@ Each DF PriceFeed uses the two-layer composition in §5. The current branch map
+ 
+ Each DF PriceFeed applies the **shared final layer that multiplies dToken backing ratio ([ORCL-FR-014](#orcl-fr-014))** to the market price (JPY-denominated) calculated by collateral-specific `_fetchPricePrimary()`, and returns actual dToken collateral value (market price × backing ratio).
+ 
++The constructor of every active DF PriceFeed requires `priceSource == primary && lastGoodPrice != 0` after its initial primary fetch and reverts the entire deployment with `InvalidInitialPrice` otherwise. This also rejects a zero-price deployment when the shared JPY provider is in an unhealthy expired episode and the not-yet-registered feed's shutdown call is caught. The same constructor becomes deployable again after a fresh JPY round clears the provider episode ([ORCL-INV-012](#8-invariants-inv)).
++
+ Oracle patterns and PriceFeed implementations specified in this document:
+ 
+ | Underlying (collateral asset) | Oracle pattern | PriceFeed implementation | Requirement |
+@@ -733,6 +735,7 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ | ORCL-INV-009 | Placeholder branches use `PriceFeedPlaceholder` (always `(1e18, false)`) as source, do not trigger branch shutdown, and are inoperable through Vault / dToken multi-guards | unit / integration |
+ | ORCL-INV-010 | Standard, peg, composite peg, and dwstETH composite feeds use only `primary` and `lastGoodPrice` states. Collateral/USD, peg-monitor, stETH/USD, and canonical-rate failures shut down; `ETHUSDxCanonical` is not used. JPY/USD failure soft-freezes while staying `primary`. Composite rate (sUSDS) also uses only its USDS/USD source and `lastGoodPrice` | unit |
+ | ORCL-INV-011 | dToken backing ratio is downward-only `backingRatio ∈ (0, 1e18]` (healthy `== 1e18`) and is symmetrically applied to all collateral prices as `dTokenJpy = collJpy × backingRatio / 1e18` on both consumers. If the pricing view returns `available == false` or the call fails, `lastGoodBacking` is not used as pass-through and the branch shuts down; a gas-guard revert is re-reverted. Only a measured zero with all Strategies valued receives the 1-wei floor ([ORCL-FR-014](#orcl-fr-014)) | unit / fork |
++| ORCL-INV-012 | An active DF PriceFeed constructor succeeds only when its initial fetch leaves `priceSource == primary && lastGoodPrice != 0`. An unhealthy shared-JPY expiry, collateral oracle / canonical / backing failure, or failed shutdown call from an unregistered feed must revert with `InvalidInitialPrice` rather than deploy a zero cache; deployment resumes after fresh JPY recovery | unit / integration |
+ 
+ ---
+ 
+@@ -765,8 +768,8 @@ The oracle layer has no value accounting (principal/profit/buffer). It holds onl
+ ### <a id="orcl-sec-005"></a>ORCL-SEC-005: JPY/USD shared dependency failsafe
+ 
+ - Type: Security
+-- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Exactly one `JpyUsdRateProvider` is deployed and injected into every active source; inherited or duplicated per-feed state is prohibited because it cannot provide shared storage. The provider stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`, and on first failure sets `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)`. Every branch therefore receives the same frozen rate and onset. While the oracle remains unhealthy after `PRM-ORACLE-006`, expiry is latched before returning `failure=true`, so the signal remains available to every consumer during that outage. A later fresh response must remain readable even after expiry: it adopts the live rate, clears `jpyFrozenSince` and `jpyFreezeExpired`, and emits `JpyRateUnfrozen`. A branch that already observed expiry remains pinned at its branch-local `lastGoodPrice`; a branch still on `primary` resumes the recovered live rate. When a source is behind `PriceFeedProxy`, it catches the expected source-level BorrowerOperations caller-mismatch during the unhealthy expiry episode and returns `failure=true`; the registered Proxy performs shutdown in the same transaction. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback. Monitor the provider address/state/events (`JpyRateFrozen`, `JpyRateUnfrozen`, `JpyFreezeExpired`) externally and fail deployment/preflight if active sources reference different providers.
+-- Verification: unit (cached-rate timestamp provenance, immediate shutdown for stale and invalid responses on the first call after the freeze limit elapses with no traffic, first-observation anchoring while the cached rate is fresh, fresh recovery before and after expiry, stale responses do not clear expiry, a later outage expires independently, already-shut branches remain pinned while branches that did not observe expiry resume, standard and sUSDS implementations), integration (Proxy path), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
++- Statement: The JPY/USD oracle is shared by every branch and has the widest blast radius. A JPY-leg failure must therefore not cause immediate terminal shutdown. Exactly one `JpyUsdRateProvider` is deployed and injected into every active source; inherited or duplicated per-feed state is prohibited because it cannot provide shared storage. The provider stores `lastGoodJpyRate` with the same response's `lastGoodJpyUpdatedAt`, and on first failure sets `jpyFrozenSince = min(block.timestamp, lastGoodJpyUpdatedAt + PRM-ORACLE-001)`. Every branch therefore receives the same frozen rate and onset. While the oracle remains unhealthy after `PRM-ORACLE-006`, expiry is latched before returning `failure=true`, so the signal remains available to every consumer during that outage. A later fresh response must remain readable even after expiry: it adopts the live rate, clears `jpyFrozenSince` and `jpyFreezeExpired`, and emits `JpyRateUnfrozen`. A branch that already observed expiry remains pinned at its branch-local `lastGoodPrice`; a branch still on `primary` resumes the recovered live rate. When a source is behind `PriceFeedProxy`, it catches the expected source-level BorrowerOperations caller-mismatch during the unhealthy expiry episode and returns `failure=true`; the registered Proxy performs shutdown in the same transaction. Collateral, peg-monitor, canonical-rate, and backing failures remain branch-local terminal failures and are evaluated before JPY fallback. An active source constructor must seed a primary, nonzero `lastGoodPrice`; a caught shutdown call from an unregistered source during an unhealthy expiry must not permit zero-price deployment, while a fresh provider recovery restores deployability. Monitor the provider address/state/events (`JpyRateFrozen`, `JpyRateUnfrozen`, `JpyFreezeExpired`) externally and fail deployment/preflight if active sources reference different providers.
++- Verification: unit (cached-rate timestamp provenance, immediate shutdown for stale and invalid responses on the first call after the freeze limit elapses with no traffic, first-observation anchoring while the cached rate is fresh, fresh recovery before and after expiry, stale responses do not clear expiry, a later outage expires independently, already-shut branches remain pinned while branches that did not observe expiry resume, Standard / dwstETH constructor rejection under expired provider and successful deployment after fresh recovery, standard and sUSDS implementations), integration (Proxy path), fork (JPY/USD staleness), manual (heartbeat × N and weekend update history finalization)
+ 
+ ### <a id="orcl-sec-006"></a>ORCL-SEC-006: Peg monitoring for centralized wrapper collateral
+ 
+@@ -891,6 +894,7 @@ lastGoodPrice         (thereafter returns the last recorded price / branch alrea
+ | `InsufficientGasForExternalCall` (re-revert) | Proxy passes through upstream gas griefing protection ([ORCL-FR-004](#orcl-fr-004)) |
+ | `CallerNotPriceFeed` (upstream) | Underlying feed directly calling `shutdownFromOracleFailure()` has `msg.sender != address(priceFeed)`. Proxy delegation avoids this ([ORCL-FR-004](#orcl-fr-004)) |
+ | `InvalidCollateralVault` | `DFPriceFeedBase` / `sUSDSPriceFeed` constructor receives a backing CollateralVault reference that is not a contract |
++| `InvalidInitialPrice` | Initial fetch in an active `DFPriceFeedBase` / `DFWstETHPriceFeed` constructor leaves `priceSource != primary` or `lastGoodPrice == 0` (ORCL-INV-012) |
+ | `InvalidRateProvider` | `sUSDSPriceFeed` constructor receives an sUSDS rate provider, or the provider's `asset()`, that is not a contract |
+ | `InvalidRateProviderDecimals` | `sUSDSPriceFeed` constructor sees sUSDS or its asset using decimals other than 18 |
+ | `UnderlyingNotSet` (Vault side) | `deposit`/`redeem` in placeholder branch ([ORCL-FR-008](#orcl-fr-008)) |
+@@ -919,7 +923,7 @@ Pass condition for each requirement = the verification method in the table is sa
+ | ORCL-FR-012 | Composite rate (sUSDS; USDS/USD/canonical rate failure shutdown, JPY/USD failure soft-freeze) | unit, fork, integration |
+ | ORCL-FR-013 | Future XAUT candidate uses on-chain downside-depeg reflection as a mandatory activation condition | unit, fork, integration, manual |
+ | ORCL-FR-015 | dwstETH (stETH/USD × canonical rate composite, JPY/USD, backing ratio) | unit, fork, integration, invariant |
+-| ORCL-INV-001..011 | Each invariant in §8 | unit / invariant / fork / manual / CI (as specified in §8) |
++| ORCL-INV-001..012 | Each invariant in §8 | unit / invariant / fork / manual / CI (as specified in §8) |
+ | ORCL-SEC-001..007 | Each security requirement in §9 | unit / fork / integration / manual / CI |
+ 
+ ---
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index ec3af926..4ade747f 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -107,6 +107,7 @@ source ~/.config/deltaforesight/rpc.env
+ | V21 | 2026-08-08 | jpydf-v2 / `fix/preaudit-morpho-pricing-rails` | `825e9674` | forge 1.7.1 local | なし | affected 5 suites; fast PR gate; full local gate; `forge build --sizes`; `cloc 2.06`; `git diff --check` | Codex | PASS: affected 253、fast 1,536、full local 1,589、全て 0 failed / 0 skipped。fee-on-transfer receiver delta、Strategy receipt/cache ambiguity、Sky quote unavailable/recovery を確認。Vault runtime 23,047 bytes（margin 1,529）、full body 5,219 nSLOC |
+ | PRELIM-M02 | 2026-08-12 | jpydf-audit / `audit/preliminary-m02-remediation` | source `fe3d3d0` + M-01/M-02 overlays | forge 1.7.1 local | なし | Sky converter/strategy focused; compatibility mocks; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused/compat 35、fast 1,547、全て 0 failed / 0 skipped。pre-fix では価格 feed 統合回帰が失敗し、remediation 後に成功。Sky Strategy runtime 20,173 bytes（margin 4,403）、converter runtime 5,596 bytes（margin 18,980） |
+ | PRELIM-L01 | 2026-08-12 | jpydf-audit / `audit/preliminary-l01-remediation` | source `fe3d3d0` + M-01/M-02/L-01 overlays | forge 1.7.1 local | なし | CollateralVault focused; push-model invariant; fast PR gate; production size gate; pre-fix mutation; production-source `forge fmt --check`; `git diff --check` | Codex | PASS: Vault focused 197、invariant 4、fast 1,547、全て 0 failed / 0 skipped。pre-fix では owner retry の idempotence 回帰が `RequestNotFound` で失敗し、remediation 後に成功。Vault runtime 23,032 bytes（margin 1,544）。既存 test file には本変更外の fmt drift があるため全ファイル fmt gate は適用せず、本変更ブロックと production source を個別確認 |
++| PRELIM-L02 | 2026-08-12 | jpydf-audit / `audit/preliminary-l02-remediation` | source `fe3d3d0` + M-01/M-02/L-01/L-02 overlays | forge 1.7.1 local | なし | active feed constructor focused; deploy selector; fast PR gate; production size gate; pre-fix mutation; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 129、fast 1,549、全て 0 failed / 0 skipped。pre-fix では expired shared provider に対する Standard feed deploy が成功して回帰テストが失敗し、remediation 後は Standard / dwstETH とも `InvalidInitialPrice`、fresh JPY recovery 後は deploy 成功。DFUSDC runtime 3,095 bytes（margin 21,481）、DFWstETH runtime 3,492 bytes（margin 21,084） |
+ 
+ ---
+ 
+@@ -125,7 +126,7 @@ source ~/.config/deltaforesight/rpc.env
+ | §9A ERC4626Strategy（E4626） | — | — | 8 | — | — | — | — | — | 8 | 0 | 0 |
+ | §9C SkyUsdcSUsdsStrategy（SKY） | — | — | 11 | — | — | — | — | 0 | 11 | 0 | 11 |
+ | §9E MorphoV2Strategy（MV2） | 5 | 3 | 7 | — | — | — | — | 0 | 15 | 0 | 15 |
+-| §10 Oracle（ORCL） | 15 | 11 | 7 | 5 | 9 | 0 | — | 6 | 53 | 14 | 5 |
++| §10 Oracle（ORCL） | 15 | 12 | 7 | 5 | 9 | 0 | — | 6 | 54 | 15 | 6 |
+ | §11 Zapper（ZAP） | 15 | 9 | 7 | 3 | 1 | 0 | — | 10 | 45 | 11 | 33 |
+ | §12 Parameters（PRM） | — | 7 | — | — | — | — | パラメータ ID 15 | 0 | 22 | 15 | 5 |
+ | §13 Treasury（TRSY） | 9 | 6 | — | — | 8 | 0 | — | 3 | 26 | 6 | 0 |
+@@ -135,18 +136,19 @@ source ~/.config/deltaforesight/rpc.env
+ | §13D InterestRouter（IRTR） | 5 | 6 | 5 | 5 | 3 | 0 | — | 6 | 30 | 1 | 0 |
+ | §13E PILAllocator / UniV4MerklInitiative（PILA） | 16 | 8 | 6 | 6 | 7 | 0 | — | 8 | 51 | 0 | 38 |
+ | §14 Frontend（FRNT） | 36 | 4 | 8 | 5 | 3 | 6 | — | 9 | 71 | 3 | 1 |
+-| **合計（active）** | **185** | **126** | **88** | **41** | **89** | **13** | **48** | **72** | **662** | **116** | **111** |
++| **合計（active）** | **185** | **127** | **88** | **41** | **89** | **13** | **48** | **72** | **663** | **117** | **112** |
+ | §9B LidoStrategy（LIDO・archived） | 9 | 10 | 8 | 3 | 5 | 5 | — | 7 | 47 | 0 | 39 |
+ | §9D EtherfiWeETHStrategy（EFWEETH・archived） | — | — | 13 | — | — | — | — | 0 | 13 | 0 | 13 |
+ | §15 Multichain（MCHN・対象外） | 13 | 8 | 6 | 5 | 6 | — | — | 3 | 41 | 1 | — |
+ 
+-- **検証対象 ID** = 658 −（未決 TBD）。active な TBD 72 件（archived の §9B が別途 7 件を持つが除外）の Resolved / 未決 / 条件付き / 延期の内訳は各文書の TBD レジスタを正本とし、未決ゲートは対象外として扱う。`CORE-*` の ID 総数・検証状況は [Core-Requirements-Verification-Ledger.md](./Core-Requirements-Verification-Ledger.md) を正本とし、本表の active 合計には含めない。
++- **検証対象 ID** = 663 −（未決 TBD）。active な TBD 72 件（archived の §9B が別途 7 件を持つが除外）の Resolved / 未決 / 条件付き / 延期の内訳は各文書の TBD レジスタを正本とし、未決ゲートは対象外として扱う。`CORE-*` の ID 総数・検証状況は [Core-Requirements-Verification-Ledger.md](./Core-Requirements-Verification-Ledger.md) を正本とし、本表の active 合計には含めない。
+ - 「検証済」列は全行 PASS または N/A となった ID 数。キャンペーンごとに更新する。
+ - **V19 更新（2026-08-06）**: §9B `LidoStrategy`（`LIDO-*` 47 件）と §9D `EtherfiWeETHStrategy`（`EFWEETH-*` 13 件）を archived とし、active ID 計を **718 → 658**、active 検証済を **158 → 106** に更新。これは**削除ではなくアーカイブ**である。Solidity source は `contracts/src/Strategies/archive/`、test は `contracts/test/archive/` へ移動し、いずれも compile / test（84 tests）は継続して通る。両 Strategy の underlying は構造的に WETH であり、それを束ねていた deploy selector は PR #1424 で削除済み。branch 0 の underlying も WETH → wstETH へ移行したため、WETH underlying を供給できる branch は存在しない。両 surface は 2026-08-05 完了の外部監査（監査対象 identity `0c7766e0`）の対象に含まれていたため、要件が監査トレーサビリティから消えないよう行と ID を active 合計の下に残す。`LIDO-*` / `EFWEETH-*` は履歴 ID として凍結し、再利用も active scope としての参照も禁止する。再有効化には新規 activation package と audit-scope 変更が必要。
+ - **V20 更新（2026-08-08）**: 外部監査開始前の是正として、MV2-FR-003 を bounded partial retry、MV2-FR-005 を Vault incident rails / donation-first penalty 会計へ更新し、focused 74 tests と fast Foundry gate で再確認した。pricing は valuation unavailable と measured zero を分離し、VAULT-FR-016 / ORCL-FR-014 に unit evidence を追加したが、fork / invariant / full integration 未実施のため両行は PARTIAL のままとした。既に PASS だった MV2 / ORCL-FR-015 の再実証であり、active ID 数・検証済集計は変更しない。
+ - **V21 更新（2026-08-08）**: security-skill 横断 review の追加 variant を是正した。VAULT-FR-002 は receiver 実着額、VAULT-FR-005 は declared/received 不一致時 cache 無効化、ZAP-FR-006 / ZAP-SEC-005 は fee-on-transfer 下限、SKY-SEC-011 は quote 不能と測定済み0の分離を追跡する。§9C 集計が既存 SKY-SEC-008..010 を未計上だったため、新規011と併せて 7→11へ訂正し、active SEC / ID / 検証済をそれぞれ +4 とした。
+ - **PRELIM-M02 更新（2026-08-12）**: SKY-SEC-011 を予備監査 M-02 に合わせて精緻化した。明示的な Sky 逆変換 route halt は principal-capped 1:1 valuation を継続し、停止中の未実現 yield を認識しない。invalid fee、status read failure、その他の quote failure は halt と推測せず従来どおり fail-closed とする。要件 ID 数・検証済集計は不変。
+ - **PRELIM-L01 更新（2026-08-12）**: VAULT-FR-006 を予備監査 L-01 に合わせて精緻化した。実在する settlement 済み request の再 claim は二重送金・二重減算・追加 event を行わず `0` を返し、未発行 ID は従来どおり `RequestNotFound` とする。permissionless trigger と owner 固定送金は維持する。VAULT-FR-006 の再認定により §7 / active 検証済を **2 → 3 / 110 → 111** に更新し、要件 ID 数は不変。
++- **PRELIM-L02 更新（2026-08-12）**: active DF feed の初期 fetch が `primary` かつ nonzero `lastGoodPrice` を seed する constructor invariant を ORCL-INV-012 として追加した。shared JPY provider の unhealthy expiry 中は未登録 feed の shutdown call が catch されても deployment を拒否し、fresh recovery 後は再開する。§10 INV / ID / 非 ID check / 検証済を **11→12 / 53→54 / 14→15 / 5→6**、active 合計を **126→127 / 662→663 / 116→117 / 111→112** に更新し、stale だった検証対象 ID 式の基数も dashboard と同じ **663** に同期した。
+ - **V1-MAP（2026-06-20）件数訂正**: メタ監査（[ledger-completeness-audit](../historical-reviews/2026-06-20-ledger-completeness-audit.md)）により Product-Overview（ARCH/ADR）・LIDO（INV/EVT）・Parameters（bridge-minter-timelock）の欠落 **5 行**を反映。develop の §3 集計（566）に +5 し ID 計 **571**。追加行 = **ARCH-006 / ADR-006 / LIDO-INV-010 / LIDO-EVT-005 / PRM-BRIDGE-MINTER-TIMELOCK**（うち bridge-minter は commit `756a736` 由来）。**合計行はセル和と一致するよう全面再計算済**。
+ - **台帳同期（2026-06-24）**: Strategy / Etherfi の追補 ID **6 行**（STGY-INV-011 / STGY-EVT-012 / EFWEETH-SEC-008..011）を反映し、active ID 計を **571 → 577** に更新。追加時点では検証実体未確認のため PASS にせず、未実施として扱った。
+ - **V8 更新（2026-06-24）**: EFWEETH-SEC-012 を追加し、active ID 計を **577 → 578** に更新。`test/*Strategy*.t.sol` の実走で EFWEETH-SEC-008..012 を PASS に更新した。
+@@ -976,6 +978,7 @@ placeholder 期挙動:
+ | ORCL-INV-009 | placeholder は (1e18, false)・shutdown 非誘発・Vault/dToken 多重ガードと整合 | unit / integration | ☐ | ☐ | | 未実施 | |
+ | ORCL-INV-010 | standard / peg 型 / composite peg は primary と lastGoodPrice の 2 状態のみ | unit | ☐ | ☐ | | 未実施 | |
+ | ORCL-INV-011 | backing 比は下方専用 (0, 1e18]・全担保価格へ乗算 | unit / fork | ☐ | ☐ | | 未実施 | |
++| ORCL-INV-012 | active DF feed constructor は初回 fetch 後に primary + nonzero `lastGoodPrice` の場合だけ成功。expired shared provider / 未登録 shutdown catch で zero cache を deploy せず、fresh JPY recovery 後は再開 | unit / integration | ☑ | ☑ | `test_expiredSharedProviderRejectsNewActiveFeedDeployments`; `test_activeFeedDeploymentRecoversAfterFreshJpyRound` | PASS(PRELIM-L02) | Standard / dwstETH 両方を拒否し、fresh recovery の liveness を確認 |
+ 
+ ### 10.3 セキュリティ要件（ORCL-SEC）
+ 
+@@ -1043,6 +1046,7 @@ placeholder 期挙動:
+ | 5 | UnderlyingNotSet（Vault 側） | placeholder ブランチの deposit/redeem（ORCL-FR-008） | ☐ | | 未実施 | |
+ | 6 | UnderlyingMismatch（Vault 側） | dToken-first 順序違反（ORCL-FR-009） | ☐ | | 未実施 | |
+ | 7 | TokenInfoNotSet（dToken 側） | placeholder 期の convertTo*（ORCL-FR-008） | ☐ | | 未実施 | |
++| 8 | InvalidInitialPrice | active feed constructor の初回 fetch が primary + nonzero price を確立できない（ORCL-INV-012） | ☑ | `test_expiredSharedProviderRejectsNewActiveFeedDeployments` | PASS(PRELIM-L02) | Standard / dwstETH の custom error を確認 |
+ 
+ ### 10.7 未決事項レジスタ（ORCL-TBD）
+ 
+diff --git a/documents/jp/protocol/product/spec/Oracle.md b/documents/jp/protocol/product/spec/Oracle.md
+index b3a7d3af..21f7519f 100644
+--- a/documents/jp/protocol/product/spec/Oracle.md
++++ b/documents/jp/protocol/product/spec/Oracle.md
+@@ -335,6 +335,8 @@ dToken/JPY（担保価値）  = mulDiv(Collateral/JPY, backingRatio, 1e18) // 
+ 
+ なお各 DF PriceFeed は、担保別 `_fetchPricePrimary()` で算出した market price（JPY 建て）に、**全担保共通で dToken backing 比を乗じる後段層（[ORCL-FR-014](#orcl-fr-014-dtoken-backing-peg-の反映全担保共通の後段層)）**を適用し、dToken の実質担保価値（market price × backing 比）を返す。
+ 
++active な DF PriceFeed の constructor は初回 primary fetch 後に `priceSource == primary && lastGoodPrice != 0` を強制し、満たさなければ `InvalidInitialPrice` で deployment 全体を revert する。shared JPY provider が unhealthy な expiry episode 中で feed 自身がまだ BorrowerOperations に登録されていない場合も、shutdown call の catch によって zero-price deployment を通してはならない。fresh JPY round が provider の episode state を解除した後は同じ constructor が正常に成功する（[ORCL-INV-012](#8-不変条件inv)）。
++
+ 本書が具体化するオラクルパターンと PriceFeed 実装（担保資産別）:
+ 
+ | Underlying（担保資産） | オラクルパターン | PriceFeed 実装 | 規定要件 |
+@@ -602,6 +604,7 @@ dTokenアプローチによりDay-1時点で8slotを登録する。Branch 0–1
+ | ORCL-INV-009 | placeholder ブランチは `PriceFeedPlaceholder`（常に `(1e18, false)`）を source とし、branch shutdown を誘発せず、かつ Vault / dToken の多重ガードで操作不能 | unit / integration |
+ | ORCL-INV-010 | 全 production pattern は `primary` と `lastGoodPrice` の 2 状態のみを使い、`ETHUSDxCanonical` を使わない。JPY レッグは `ORCL-SEC-005` に従う | unit |
+ | ORCL-INV-011 | dToken backing 比は下方専用 `backingRatio ∈ (0, 1e18]`（健全時 `== 1e18`）で、全担保価格に `dTokenJpy = mulDiv(collJpy, backingRatio, 1e18)`（floor）として両 consumer 対称に適用される。pricing view の `available == false` または read failure 時は `lastGoodBacking` で素通しせず shutdown、gas guard revert は再 revert する。全 Strategy を評価できた実測 0 のみ 1 wei floor を適用する（[ORCL-FR-014](#orcl-fr-014-dtoken-backing-peg-の反映全担保共通の後段層)） | unit / fork |
++| ORCL-INV-012 | active DF PriceFeed の constructor は初回 fetch 後に `priceSource == primary && lastGoodPrice != 0` を満たす場合だけ成功する。shared JPY provider の unhealthy expiry、担保 oracle / canonical / backing failure、未登録 feed の shutdown call failureを `lastGoodPrice == 0` のまま通さず `InvalidInitialPrice` で revertし、fresh JPY recovery 後は deployment が自動的に再開可能 | unit / integration |
+ 
+ ---
+ 
+@@ -642,8 +645,9 @@ dTokenアプローチによりDay-1時点で8slotを登録する。Branch 0–1
+   5. `PriceFeedProxy` 配下の source は、unhealthy な expiry episode で想定される BorrowerOperations caller 不一致を catch して `failure=true` を返し、登録済み Proxy が同一 transaction で shutdown する。expiry を観測して `lastGoodPrice` に移行した branch は provider 回復後も pinned のまま、未観測で `primary` の branch は fresh rate を再開する。provider state change を revert してはならない。
+   6. 担保・peg・canonical・backing レッグの障害は JPY soft-freeze より優先して標準 shutdown とする。
+   7. `InsufficientGasForExternalCall` は障害へ変換せず再 revert する。
++  8. active feed source の constructor は初回 fetch が `primary` かつ nonzero `lastGoodPrice` を seed したことを検証する。unhealthy な shared expiry 中に未登録 feed からの shutdown が catch されても deployment を成功させず、fresh provider recovery 後は再 deployment を許可する（ORCL-INV-012）。
+ - Parameters: `PRM-ORACLE-001`、`PRM-ORACLE-006`
+-- Verification: unit（保存済み rate の timestamp provenance、stale / invalid 応答で無通信の freeze 上限超過後の初回 call が即 shutdown、保存済み rate が fresh な間の invalid response は初回観測 anchor、期限前後の fresh 回復、stale 応答では expiry 維持、回復後の次 episode が再度上限判定、既 shutdown branch は pinned / expiry 未観測 branch は再開、標準 / sUSDS 両実装）, integration（Proxy 経路）, fork
++- Verification: unit（保存済み rate の timestamp provenance、stale / invalid 応答で無通信の freeze 上限超過後の初回 call が即 shutdown、保存済み rate が fresh な間の invalid response は初回観測 anchor、期限前後の fresh 回復、stale 応答では expiry 維持、回復後の次 episode が再度上限判定、既 shutdown branch は pinned / expiry 未観測 branch は再開、expired provider で Standard / dwstETH constructor reject・fresh recovery 後 deploy 成功、標準 / sUSDS 両実装）, integration（Proxy 経路）, fork
+ 
+ ### ORCL-SEC-006: 中央集権ラッパー担保のペグ監視
+ 
+@@ -765,6 +769,7 @@ lastGoodPrice         （以後は最後に記録した価格を返し続ける
+ | `InsufficientGasForExternalCall`（再 revert） | upstream の gas griefing 保護を Proxy が透過（[ORCL-FR-004](#orcl-fr-004-fetchprice障害透過と-shutdown-代行)） |
+ | `CallerNotPriceFeed`（upstream） | underlying feed が直接 `shutdownFromOracleFailure()` を呼ぶと `msg.sender != address(priceFeed)`。Proxy 代行で回避（[ORCL-FR-004](#orcl-fr-004-fetchprice障害透過と-shutdown-代行)） |
+ | `InvalidCollateralVault` | `DFPriceFeedBase` / `sUSDSPriceFeed` constructor で backing 参照先 CollateralVault が contract でない |
++| `InvalidInitialPrice` | active `DFPriceFeedBase` / `DFWstETHPriceFeed` constructor の初回 fetch 後に `priceSource != primary` または `lastGoodPrice == 0`（ORCL-INV-012） |
+ | `InvalidRateProvider` | `sUSDSPriceFeed` constructor で sUSDS rate provider またはその `asset()` が contract でない |
+ | `InvalidRateProviderDecimals` | `sUSDSPriceFeed` constructor で sUSDS またはその asset が 18 decimals でない |
+ | `UnderlyingNotSet`（Vault 側） | placeholder ブランチの `deposit`/`redeem`（[ORCL-FR-008](#orcl-fr-008-placeholder-ブランチの初期-source-pricefeedplaceholder)） |
+@@ -793,7 +798,7 @@ lastGoodPrice         （以後は最後に記録した価格を返し続ける
+ | ORCL-FR-012 | Composite rate（sUSDS・USDS/USD/canonical rate 障害は shutdown、JPY/USD 障害は soft-freeze） | unit, fork, integration |
+ | ORCL-FR-013 | XAUT 候補の Composite peg（on-chain downside depeg 反映を activation の必須条件とする） | unit, fork, integration, manual |
+ | ORCL-FR-015 | dwstETH（stETH/USD × canonical rate composite、JPY/USD、backing ratio） | unit, fork, integration, invariant |
+-| ORCL-INV-001..011 | §8 各不変条件 | unit / invariant / fork / manual / CI（§8 記載どおり） |
++| ORCL-INV-001..012 | §8 各不変条件 | unit / invariant / fork / manual / CI（§8 記載どおり） |
+ | ORCL-SEC-001..007 | §9 各セキュリティ要件 | unit / fork / integration / manual / CI |
+ 
+ ---

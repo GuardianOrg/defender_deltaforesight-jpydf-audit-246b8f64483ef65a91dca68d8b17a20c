@@ -1,0 +1,676 @@
+diff --git a/contracts/src/Initiatives/UniV4MerklInitiative.sol b/contracts/src/Initiatives/UniV4MerklInitiative.sol
+index 6afe24bc0..13eb7f1f9 100644
+--- a/contracts/src/Initiatives/UniV4MerklInitiative.sol
++++ b/contracts/src/Initiatives/UniV4MerklInitiative.sol
+@@ -8,6 +8,7 @@ import {ReentrancyGuard} from "openzeppelin-contracts/contracts/security/Reentra
+ 
+ import {IDistributionCreator} from "src/Interfaces/IDistributionCreator.sol";
+ import {IInitiative} from "src/Interfaces/IInitiative.sol";
++import {PILAllocator} from "src/PILAllocator.sol";
+ 
+ /**
+  * @title UniV4MerklInitiative
+@@ -36,6 +37,7 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     mapping(uint256 => bytes32) public campaignIdByStartTimestamp;
+ 
+     event NewMerklCampaign(uint256 indexed epoch, uint256 amount, bytes32 campaignId);
++    event FundsReturnedToAllocator(uint256 amount);
+     event MerklCampaignAlreadyCreated(
+         uint256 indexed epoch, uint256 indexed startTimestamp, uint256 amount, bytes32 campaignId
+     );
+@@ -51,6 +53,10 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     error UniV4MerklInitiative__CampaignCreationTooEarly(uint256 earliestPublicCreation);
+     error UniV4MerklInitiative__TimestampTooLarge(uint256 timestamp);
+     error UniV4MerklInitiative__DependencyNotContract(address dependency);
++    error UniV4MerklInitiative__Unauthorized();
++    error UniV4MerklInitiative__Inactive();
++    error UniV4MerklInitiative__StillRegistered();
++    error UniV4MerklInitiative__AllocatorTokenMismatch();
+ 
+     constructor(
+         address _allocator,
+@@ -70,8 +76,12 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         if (address(_jpydfToken) == address(0)) revert UniV4MerklInitiative__ZeroAddress();
+         if (address(_merklDistributionCreator) == address(0)) revert UniV4MerklInitiative__ZeroAddress();
+         if (_campaignCreator == address(0)) revert UniV4MerklInitiative__ZeroAddress();
++        _requireContractDependency(_allocator);
+         _requireContractDependency(address(_jpydfToken));
+         _requireContractDependency(address(_merklDistributionCreator));
++        if (address(PILAllocator(_allocator).jpydfToken()) != address(_jpydfToken)) {
++            revert UniV4MerklInitiative__AllocatorTokenMismatch();
++        }
+         _requireEpochConfig(_epochStart, _epochDuration);
+         _requireCampaignConfig(_campaignJpydfAmountThreshold, _campaignCreationWindow, _epochDuration, _uniV4PoolId);
+         _requireWeights(_weightFees, _weightToken0, _weightToken1);
+@@ -97,7 +107,12 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     //////////////////////////////////////////////////////////////*/
+ 
+     function createCampaign() external nonReentrant returns (bytes32 campaignId) {
+-        uint256 amount = jpydfToken.balanceOf(address(this));
++        PILAllocator funding = PILAllocator(allocator);
++        if (!funding.registeredInitiatives(address(this)) || funding.paused()) {
++            revert UniV4MerklInitiative__Inactive();
++        }
++        uint256 pending = funding.pendingFunding(address(this));
++        uint256 amount = jpydfToken.balanceOf(address(this)) + pending;
+         if (amount < CAMPAIGN_JPYDF_AMOUNT_THRESHOLD) return bytes32(0);
+ 
+         uint256 currentEpoch = epoch();
+@@ -111,6 +126,8 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         }
+         _requireCampaignCreationAllowed(campaignStart);
+ 
++        // A Merkl revert rolls back both this withdrawal and the allocator's accounting.
++        if (pending != 0) funding.claimDeferredFunding();
+         jpydfToken.forceApprove(address(merklDistributionCreator), amount);
+         campaignId = merklDistributionCreator.createCampaign(
+             IDistributionCreator.CampaignParameters({
+@@ -131,7 +148,20 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         emit NewMerklCampaign(currentEpoch, amount, campaignId);
+     }
+ 
+-    function onRegisterInitiative(uint256) external override {}
++    function onRegisterInitiative(uint256) external override {
++        if (msg.sender != allocator) revert UniV4MerklInitiative__Unauthorized();
++        PILAllocator(allocator).enableDeferredFunding();
++    }
++
++    /// @notice Return direct transfers after retirement, always to the fixed allocator.
++    function returnFundsToAllocator() external nonReentrant {
++        if (PILAllocator(allocator).registeredInitiatives(address(this))) {
++            revert UniV4MerklInitiative__StillRegistered();
++        }
++        uint256 amount = jpydfToken.balanceOf(address(this));
++        jpydfToken.safeTransfer(allocator, amount);
++        emit FundsReturnedToAllocator(amount);
++    }
+ 
+     function onUnregisterInitiative(uint256) external override {}
+ 
+@@ -166,7 +196,14 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+     }
+ 
+     function canCreateCampaign(address caller) public view returns (bool) {
+-        if (jpydfToken.balanceOf(address(this)) < CAMPAIGN_JPYDF_AMOUNT_THRESHOLD) return false;
++        PILAllocator funding = PILAllocator(allocator);
++        if (!funding.registeredInitiatives(address(this)) || funding.paused()) return false;
++        if (
++            jpydfToken.balanceOf(address(this)) + funding.pendingFunding(address(this))
++                < CAMPAIGN_JPYDF_AMOUNT_THRESHOLD
++        ) {
++            return false;
++        }
+         uint256 campaignStart = nextCampaignStart();
+         if (campaignIdByStartTimestamp[campaignStart] != bytes32(0)) return false;
+         if (caller == CAMPAIGN_CREATOR) return true;
+@@ -206,7 +243,9 @@ contract UniV4MerklInitiative is IInitiative, ReentrancyGuard {
+         uint256 epochDuration_,
+         bytes32 uniV4PoolId_
+     ) internal pure {
+-        if (campaignJpydfAmountThreshold_ == 0) revert UniV4MerklInitiative__ZeroCampaignThreshold();
++        if (campaignJpydfAmountThreshold_ == 0) {
++            revert UniV4MerklInitiative__ZeroCampaignThreshold();
++        }
+         if (campaignCreationWindow_ == 0 || campaignCreationWindow_ >= epochDuration_) {
+             revert UniV4MerklInitiative__InvalidCampaignCreationWindow();
+         }
+diff --git a/contracts/src/PILAllocator.sol b/contracts/src/PILAllocator.sol
+index 885c1c067..ca614f5c3 100644
+--- a/contracts/src/PILAllocator.sol
++++ b/contracts/src/PILAllocator.sol
+@@ -36,11 +36,18 @@ contract PILAllocator is ReentrancyGuard {
+     mapping(address => bool) public registeredInitiatives;
+     mapping(address => uint256) public initiativeIndexPlusOne;
+     mapping(address => uint256) public weightOf;
++    mapping(address => bool) public deferredFunding;
++    mapping(address => uint256) public pendingFunding;
++    uint256 public totalPendingFunding;
+ 
+     event InitiativeRegistered(address indexed initiative, uint256 atEpoch, bool hookSucceeded);
+     event InitiativeUnregistered(address indexed initiative, uint256 atEpoch, bool hookSucceeded);
+     event WeightsUpdated(address[] initiatives, uint256[] weights);
+     event Distributed(address indexed initiative, uint256 amount, uint256 indexed epoch, bool hookSucceeded);
++    event FundingDeferred(address indexed initiative);
++    event FundingReserved(address indexed initiative, uint256 amount, uint256 indexed epoch);
++    event FundingClaimed(address indexed initiative, uint256 amount);
++    event FundingReleased(address indexed initiative, uint256 amount);
+     event Paused();
+     event Unpaused();
+     event GuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
+@@ -65,6 +72,8 @@ contract PILAllocator is ReentrancyGuard {
+     error PILAllocator__DependencyNotContract(address dependency);
+     error PILAllocator__InsufficientGasForHook();
+     error PILAllocator__TooManyInitiatives(uint256 maxInitiatives);
++    error PILAllocator__RegistrationHookFailed(address initiative);
++    error PILAllocator__FundingNotDeferred();
+ 
+     modifier onlyOwner() {
+         if (msg.sender != owner) revert PILAllocator__Unauthorized();
+@@ -119,6 +128,8 @@ contract PILAllocator is ReentrancyGuard {
+         bool hookSucceeded = _safeCallWithMinGas(
+             _initiative, MIN_GAS_TO_HOOK, 0, abi.encodeCall(IInitiative.onRegisterInitiative, (currentEpoch))
+         );
++        // Funding-mode setup must succeed before an initiative can receive a weight.
++        if (!hookSucceeded) revert PILAllocator__RegistrationHookFailed(_initiative);
+ 
+         emit InitiativeRegistered(_initiative, currentEpoch, hookSucceeded);
+     }
+@@ -131,6 +142,11 @@ contract PILAllocator is ReentrancyGuard {
+         delete weightOf[_initiative];
+         registeredInitiatives[_initiative] = false;
+         _removeInitiative(_initiative);
++        uint256 released = pendingFunding[_initiative];
++        delete pendingFunding[_initiative];
++        delete deferredFunding[_initiative];
++        totalPendingFunding -= released;
++        if (released != 0) emit FundingReleased(_initiative, released);
+ 
+         uint256 currentEpoch = epoch();
+         bool hookSucceeded = _safeCallWithMinGas(
+@@ -163,7 +179,7 @@ contract PILAllocator is ReentrancyGuard {
+     function distribute() external nonReentrant returns (uint256 total) {
+         if (paused) revert PILAllocator__Paused();
+ 
+-        uint256 balance = jpydfToken.balanceOf(address(this));
++        uint256 balance = jpydfToken.balanceOf(address(this)) - totalPendingFunding;
+         if (balance < MIN_DISTRIBUTE || totalWeight == 0 || _initiatives.length == 0) return 0;
+ 
+         uint256 currentEpoch = epoch();
+@@ -176,6 +192,12 @@ contract PILAllocator is ReentrancyGuard {
+             if (amount == 0) continue;
+ 
+             total += amount;
++            if (deferredFunding[initiative]) {
++                pendingFunding[initiative] += amount;
++                totalPendingFunding += amount;
++                emit FundingReserved(initiative, amount, currentEpoch);
++                continue;
++            }
+             jpydfToken.safeTransfer(initiative, amount);
+             bool hookSucceeded = _safeCallWithMinGas(
+                 initiative, MIN_GAS_TO_HOOK, 0, abi.encodeCall(IInitiative.onClaimForInitiative, (currentEpoch, amount))
+@@ -185,6 +207,28 @@ contract PILAllocator is ReentrancyGuard {
+         }
+     }
+ 
++    /// @dev A registered receiver may opt into funding retained here until it claims.
++    /// Registration hooks use this without a reentrancy guard; no assets leave here.
++    function enableDeferredFunding() external {
++        if (!registeredInitiatives[msg.sender]) revert PILAllocator__NotRegistered(msg.sender);
++        deferredFunding[msg.sender] = true;
++        emit FundingDeferred(msg.sender);
++    }
++
++    /// @dev The initiative calls this within its atomic funding/consumption transaction.
++    function claimDeferredFunding() external nonReentrant returns (uint256 amount) {
++        if (paused) revert PILAllocator__Paused();
++        if (!registeredInitiatives[msg.sender]) revert PILAllocator__NotRegistered(msg.sender);
++        if (!deferredFunding[msg.sender]) revert PILAllocator__FundingNotDeferred();
++        amount = pendingFunding[msg.sender];
++        delete pendingFunding[msg.sender];
++        totalPendingFunding -= amount;
++        if (amount != 0) {
++            jpydfToken.safeTransfer(msg.sender, amount);
++            emit FundingClaimed(msg.sender, amount);
++        }
++    }
++
+     function pause() external {
+         if (msg.sender != guardian) revert PILAllocator__Unauthorized();
+ 
+@@ -248,7 +292,7 @@ contract PILAllocator is ReentrancyGuard {
+     }
+ 
+     function pendingDistributable() external view returns (uint256 amount) {
+-        amount = jpydfToken.balanceOf(address(this));
++        amount = jpydfToken.balanceOf(address(this)) - totalPendingFunding;
+         if (amount < MIN_DISTRIBUTE || totalWeight == 0 || _initiatives.length == 0) return 0;
+         amount = amount * totalWeight / WAD;
+     }
+diff --git a/contracts/test/PILAllocator.t.sol b/contracts/test/PILAllocator.t.sol
+index c7f10b965..5e1d46850 100644
+--- a/contracts/test/PILAllocator.t.sol
++++ b/contracts/test/PILAllocator.t.sol
+@@ -29,7 +29,7 @@ contract MockInitiative is IInitiative {
+         revertClaimHook = value;
+     }
+ 
+-    function onRegisterInitiative(uint256 atEpoch) external override {
++    function onRegisterInitiative(uint256 atEpoch) external virtual override {
+         registeredAt = atEpoch;
+     }
+ 
+@@ -108,6 +108,25 @@ contract RevertBombInitiative is IInitiative {
+     }
+ }
+ 
++contract DeferredClaimInitiative is MockInitiative {
++    PILAllocator public funding;
++    bool public failRegistration;
++
++    constructor(PILAllocator allocator_, bool fail_) {
++        funding = allocator_;
++        failRegistration = fail_;
++    }
++
++    function onRegisterInitiative(uint256) external override {
++        funding.enableDeferredFunding();
++        require(!failRegistration, "registration failed");
++    }
++
++    function claim() external returns (uint256) {
++        return funding.claimDeferredFunding();
++    }
++}
++
+ contract PILAllocatorTest is Test {
+     uint256 internal constant EPOCH_DURATION = 7 days;
+     uint256 internal constant MIN_DISTRIBUTE = 1e18;
+@@ -237,6 +256,41 @@ contract PILAllocatorTest is Test {
+         assertEq(allocator.weightOf(address(initiativeB)), 0, "initiative B");
+     }
+ 
++    function test_DeferredReservationWithRealJpydfIsClaimedOnce() public {
++        DeferredClaimInitiative target = new DeferredClaimInitiative(allocator, false);
++        vm.prank(owner);
++        allocator.registerInitiative(address(target));
++        address[] memory targets = new address[](1);
++        targets[0] = address(target);
++        uint256[] memory weights = new uint256[](1);
++        weights[0] = 1e18;
++        vm.prank(owner);
++        allocator.setWeights(targets, weights);
++        activePoolMinter.mint(token, address(allocator), 100e18);
++        assertEq(allocator.distribute(), 100e18);
++        assertEq(token.balanceOf(address(target)), 0);
++        assertEq(allocator.pendingFunding(address(target)), 100e18);
++        assertEq(allocator.totalPendingFunding(), 100e18);
++        assertEq(allocator.pendingDistributable(), 0);
++        assertEq(target.claim(), 100e18);
++        assertEq(target.claim(), 0);
++        assertEq(token.balanceOf(address(target)), 100e18);
++        assertEq(allocator.totalPendingFunding(), 0);
++    }
++
++    function test_RegistrationFailureRollsBackFundingModeAndRegistry() public {
++        DeferredClaimInitiative target = new DeferredClaimInitiative(allocator, true);
++        vm.expectRevert(
++            abi.encodeWithSelector(PILAllocator.PILAllocator__RegistrationHookFailed.selector, address(target))
++        );
++        vm.prank(owner);
++        allocator.registerInitiative(address(target));
++        assertFalse(allocator.registeredInitiatives(address(target)));
++        assertFalse(allocator.deferredFunding(address(target)));
++        assertEq(allocator.initiativeCount(), 0);
++        assertEq(allocator.initiativeIndexPlusOne(address(target)), 0);
++    }
++
+     function test_DistributePushesByFullWeightAndRepeatedCallNoops() public {
+         _registerTwoInitiatives();
+         _setTwoWeights(0.4e18, 0.6e18);
+diff --git a/contracts/test/UniV4MerklInitiative.t.sol b/contracts/test/UniV4MerklInitiative.t.sol
+index dfd3541e6..71b741115 100644
+--- a/contracts/test/UniV4MerklInitiative.t.sol
++++ b/contracts/test/UniV4MerklInitiative.t.sol
+@@ -7,6 +7,8 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+ 
+ import {IDistributionCreator} from "src/Interfaces/IDistributionCreator.sol";
+ import {IInitiative} from "src/Interfaces/IInitiative.sol";
++import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
++import {PILAllocator} from "src/PILAllocator.sol";
+ import {UniV4MerklInitiative} from "src/Initiatives/UniV4MerklInitiative.sol";
+ import {ERC20Faucet} from "test/TestContracts/ERC20Faucet.sol";
+ 
+@@ -21,6 +23,10 @@ contract MockDistributionCreator is IDistributionCreator {
+     uint32 public lastDuration;
+     bytes public lastCampaignData;
+ 
++    function setNextCampaignId(bytes32 id) external {
++        nextCampaignId = id;
++    }
++
+     function acceptConditions() external override {
+         acceptedConditions = true;
+     }
+@@ -74,6 +80,30 @@ contract ReentrantDistributionCreator is IDistributionCreator {
+     }
+ }
+ 
++// Mirrors Merkl's identity omission: neither amount nor the actual caller is hashed.
++contract CollisionDistributionCreator is IDistributionCreator {
++    mapping(bytes32 => bool) public exists;
++    error CampaignAlreadyExists();
++
++    function acceptConditions() external {}
++
++    function campaignId(CampaignParameters memory p) public view returns (bytes32) {
++        return keccak256(
++            abi.encodePacked(
++                block.chainid, p.creator, p.rewardToken, p.campaignType, p.startTimestamp, p.duration, p.campaignData
++            )
++        );
++    }
++
++    function createCampaign(CampaignParameters memory p) external returns (bytes32 id) {
++        // The real venue pulls tokens before its duplicate check; that pull must revert too.
++        IERC20(p.rewardToken).transferFrom(msg.sender, address(this), p.amount);
++        id = campaignId(p);
++        if (exists[id]) revert CampaignAlreadyExists();
++        exists[id] = true;
++    }
++}
++
+ contract UniV4MerklInitiativeTest is Test {
+     event NewMerklCampaign(uint256 indexed epoch, uint256 amount, bytes32 campaignId);
+     event MerklCampaignAlreadyCreated(
+@@ -88,11 +118,17 @@ contract UniV4MerklInitiativeTest is Test {
+     ERC20Faucet internal token;
+     MockDistributionCreator internal merkl;
+     UniV4MerklInitiative internal initiative;
+-    address internal allocator = makeAddr("allocator");
++    address internal allocator;
+     address internal campaignCreator = makeAddr("campaignCreator");
+ 
+     function setUp() public {
+         token = new ERC20Faucet("JPYdf", "JPYdf", 0, type(uint256).max);
++        allocator = address(
++            new PILAllocator(
++                IJpydfToken(address(token)), block.timestamp, EPOCH_DURATION, 1e18, address(this), address(this)
++            )
++        );
++        vm.mockCall(address(token), abi.encodeWithSelector(IJpydfToken.requireValidRecipient.selector), bytes(""));
+         merkl = new MockDistributionCreator();
+         initiative = _newInitiative(merkl);
+     }
+@@ -371,7 +407,9 @@ contract UniV4MerklInitiativeTest is Test {
+     function test_CreateCampaignBlocksReentrantMerklCallback() public {
+         ReentrantDistributionCreator reentrantMerkl = new ReentrantDistributionCreator();
+         UniV4MerklInitiative reentrantInitiative = _newInitiative(reentrantMerkl);
+-        token.mint(address(reentrantInitiative), 250e18);
++        _setDeferredWeight(reentrantInitiative);
++        token.mint(allocator, 250e18);
++        PILAllocator(allocator).distribute();
+ 
+         vm.prank(campaignCreator);
+         bytes32 campaignId = reentrantInitiative.createCampaign();
+@@ -394,17 +432,272 @@ contract UniV4MerklInitiativeTest is Test {
+         assertEq(initiative.getCampaignData(), expected, "campaign data");
+     }
+ 
+-    function test_HooksAreNoopAndPhaseBReusable() public {
++    function test_RegistrationRequiresAllocatorAndOtherHooksStayNoop() public {
+         IInitiative.UserState memory userState;
+         IInitiative.Allocation memory allocation;
+         IInitiative.InitiativeState memory initiativeState;
+ 
++        vm.expectRevert(UniV4MerklInitiative.UniV4MerklInitiative__Unauthorized.selector);
+         initiative.onRegisterInitiative(1);
++        assertTrue(PILAllocator(allocator).deferredFunding(address(initiative)));
+         initiative.onUnregisterInitiative(2);
+         initiative.onClaimForInitiative(3, 4);
+         initiative.onAfterAllocateLQTY(5, address(this), userState, allocation, initiativeState);
+     }
+ 
++    function test_ZeroCampaignIdRollsBackWithdrawalAndAllowance() public {
++        _setDeferredWeight(initiative);
++        token.mint(allocator, THRESHOLD);
++        PILAllocator funding = PILAllocator(allocator);
++        funding.distribute();
++        merkl.setNextCampaignId(bytes32(0));
++        vm.expectRevert(UniV4MerklInitiative.UniV4MerklInitiative__ZeroCampaignId.selector);
++        vm.prank(campaignCreator);
++        initiative.createCampaign();
++        assertEq(funding.pendingFunding(address(initiative)), THRESHOLD);
++        assertEq(funding.totalPendingFunding(), THRESHOLD);
++        assertEq(token.balanceOf(allocator), THRESHOLD);
++        assertEq(token.balanceOf(address(merkl)), 0);
++        assertEq(token.allowance(address(initiative), address(merkl)), 0);
++    }
++
++    function test_RejectsMismatchedAllocatorToken() public {
++        ERC20Faucet other = new ERC20Faucet("other", "other", 0, type(uint256).max);
++        address mismatched = address(
++            new PILAllocator(
++                IJpydfToken(address(other)), block.timestamp, EPOCH_DURATION, 1, address(this), address(this)
++            )
++        );
++        vm.expectRevert(UniV4MerklInitiative.UniV4MerklInitiative__AllocatorTokenMismatch.selector);
++        new UniV4MerklInitiative(
++            mismatched,
++            token,
++            merkl,
++            campaignCreator,
++            THRESHOLD,
++            CAMPAIGN_CREATION_WINDOW,
++            POOL_ID,
++            5000,
++            2500,
++            2500,
++            block.timestamp,
++            EPOCH_DURATION
++        );
++    }
++
++    function test_DeferredFundingAndDirectTransfersAreConsumedTogether() public {
++        _setDeferredWeight(initiative);
++        token.mint(allocator, 150e18);
++        token.mint(address(initiative), 25e18);
++        PILAllocator(allocator).distribute();
++        vm.prank(campaignCreator);
++        initiative.createCampaign();
++        assertEq(token.balanceOf(address(merkl)), 175e18);
++        assertEq(PILAllocator(allocator).totalPendingFunding(), 0);
++        assertEq(token.balanceOf(address(initiative)), 0);
++    }
++
++    function test_DuplicateCampaignLeavesNewReservationUntilNextEpoch() public {
++        _setDeferredWeight(initiative);
++        PILAllocator funding = PILAllocator(allocator);
++        token.mint(allocator, THRESHOLD);
++        funding.distribute();
++        vm.prank(campaignCreator);
++        initiative.createCampaign();
++        token.mint(allocator, THRESHOLD);
++        funding.distribute();
++        assertFalse(initiative.canCreateCampaign(campaignCreator));
++        assertEq(initiative.createCampaign(), bytes32(0));
++        assertEq(funding.pendingFunding(address(initiative)), THRESHOLD);
++        assertEq(token.balanceOf(address(initiative)), 0);
++        vm.warp(block.timestamp + EPOCH_DURATION);
++        vm.prank(campaignCreator);
++        assertNotEq(initiative.createCampaign(), bytes32(0));
++        assertEq(funding.totalPendingFunding(), 0);
++        assertEq(token.balanceOf(address(merkl)), 2 * THRESHOLD);
++    }
++
++    function testFuzz_CollisionRollsBackFundingAndRecoversNextEpoch(uint96 rawAmount) public {
++        uint256 amount = bound(uint256(rawAmount), THRESHOLD, 1e27);
++        CollisionDistributionCreator venue = new CollisionDistributionCreator();
++        UniV4MerklInitiative target = _newInitiative(venue);
++        _setDeferredWeight(target);
++        token.mint(allocator, amount);
++        PILAllocator funding = PILAllocator(allocator);
++        assertEq(funding.distribute(), amount);
++        assertEq(token.balanceOf(address(target)), 0, "no pre-funding");
++        assertEq(funding.pendingDistributable(), 0, "reserved funds excluded");
++
++        for (uint256 i; i < 3; ++i) {
++            _squat(venue, target);
++            vm.expectRevert(CollisionDistributionCreator.CampaignAlreadyExists.selector);
++            vm.prank(campaignCreator);
++            target.createCampaign();
++            assertEq(token.balanceOf(allocator), amount, "transfer rolled back");
++            assertEq(funding.pendingFunding(address(target)), amount, "reservation restored");
++            assertEq(funding.totalPendingFunding(), amount, "aggregate restored");
++            assertEq(token.balanceOf(address(target)), 0);
++            assertEq(token.allowance(address(target), address(venue)), 0);
++            assertEq(target.campaignIdByStartTimestamp(target.nextCampaignStart()), bytes32(0));
++            assertEq(funding.distribute(), 0, "no double allocation");
++            vm.warp(block.timestamp + EPOCH_DURATION);
++        }
++
++        vm.prank(campaignCreator);
++        assertNotEq(target.createCampaign(), bytes32(0));
++        assertEq(funding.pendingFunding(address(target)), 0);
++        assertEq(funding.totalPendingFunding(), 0);
++        assertEq(token.balanceOf(allocator), 0);
++        assertEq(token.balanceOf(address(venue)), amount + 3, "campaign plus squatter funds");
++        assertEq(token.allowance(address(target), address(venue)), 0);
++    }
++
++    function test_CollisionDoesNotBlockOrRepeatedlyFundOtherInitiatives() public {
++        CollisionDistributionCreator venue = new CollisionDistributionCreator();
++        UniV4MerklInitiative target = _newInitiative(venue);
++        PILAllocator funding = PILAllocator(allocator);
++        address recipient = makeAddr("unaffected recipient");
++        funding.registerInitiative(recipient);
++        address[] memory targets = new address[](2);
++        uint256[] memory weights = new uint256[](2);
++        targets[0] = address(target);
++        targets[1] = recipient;
++        weights[0] = 0.6e18;
++        weights[1] = 0.4e18;
++        funding.setWeights(targets, weights);
++        _squat(venue, target);
++        token.mint(allocator, 1_000e18);
++        funding.distribute();
++        vm.expectRevert(CollisionDistributionCreator.CampaignAlreadyExists.selector);
++        vm.prank(campaignCreator);
++        target.createCampaign();
++        assertEq(token.balanceOf(recipient), 400e18);
++        assertEq(funding.pendingFunding(address(target)), 600e18);
++        assertEq(funding.distribute(), 0);
++        assertEq(token.balanceOf(recipient), 400e18, "reservation not redistributed");
++
++        token.mint(allocator, 1_000e18);
++        funding.distribute();
++        assertEq(token.balanceOf(recipient), 800e18);
++        assertEq(funding.pendingFunding(address(target)), 1_200e18);
++        assertEq(token.balanceOf(allocator), funding.totalPendingFunding());
++    }
++
++    function test_DeferredFundingAccumulatesToThresholdAndPublicFallbackWorks() public {
++        _setDeferredWeight(initiative);
++        PILAllocator funding = PILAllocator(allocator);
++        token.mint(allocator, THRESHOLD / 2);
++        funding.distribute();
++        assertFalse(initiative.canCreateCampaign(campaignCreator));
++        assertEq(initiative.createCampaign(), bytes32(0));
++        assertEq(funding.totalPendingFunding(), THRESHOLD / 2);
++        token.mint(allocator, THRESHOLD / 2);
++        funding.distribute();
++        assertTrue(initiative.canCreateCampaign(campaignCreator));
++        vm.expectRevert();
++        initiative.createCampaign();
++        assertEq(funding.totalPendingFunding(), THRESHOLD, "early caller cannot withdraw");
++        vm.warp(initiative.publicCampaignCreationStart());
++        assertNotEq(initiative.createCampaign(), bytes32(0));
++        assertEq(token.balanceOf(address(merkl)), THRESHOLD);
++        assertEq(funding.totalPendingFunding(), 0);
++    }
++
++    function test_PauseBlocksClaimAndCampaignThenRecovers() public {
++        _setDeferredWeight(initiative);
++        PILAllocator funding = PILAllocator(allocator);
++        token.mint(allocator, THRESHOLD);
++        funding.distribute();
++        funding.pause();
++        assertFalse(initiative.canCreateCampaign(campaignCreator));
++        vm.expectRevert(UniV4MerklInitiative.UniV4MerklInitiative__Inactive.selector);
++        vm.prank(campaignCreator);
++        initiative.createCampaign();
++        vm.expectRevert(PILAllocator.PILAllocator__Paused.selector);
++        vm.prank(address(initiative));
++        funding.claimDeferredFunding();
++        assertEq(funding.totalPendingFunding(), THRESHOLD);
++        funding.unpause();
++        vm.prank(campaignCreator);
++        assertNotEq(initiative.createCampaign(), bytes32(0));
++    }
++
++    function test_RetirementReleasesReservationAndRecoversDirectTransfers() public {
++        _setDeferredWeight(initiative);
++        PILAllocator funding = PILAllocator(allocator);
++        token.mint(allocator, THRESHOLD);
++        token.mint(address(initiative), 7e18);
++        funding.distribute();
++        vm.expectRevert(UniV4MerklInitiative.UniV4MerklInitiative__StillRegistered.selector);
++        initiative.returnFundsToAllocator();
++        address[] memory targets = new address[](1);
++        targets[0] = address(initiative);
++        uint256[] memory weights = new uint256[](1);
++        funding.setWeights(targets, weights);
++        funding.unregisterInitiative(address(initiative));
++        assertEq(funding.totalPendingFunding(), 0);
++        assertEq(funding.pendingFunding(address(initiative)), 0);
++        assertFalse(funding.deferredFunding(address(initiative)));
++        assertFalse(initiative.canCreateCampaign(campaignCreator));
++        vm.expectRevert(UniV4MerklInitiative.UniV4MerklInitiative__Inactive.selector);
++        vm.prank(campaignCreator);
++        initiative.createCampaign();
++        address caller = makeAddr("recovery caller");
++        vm.prank(caller);
++        initiative.returnFundsToAllocator();
++        assertEq(token.balanceOf(caller), 0, "fixed destination");
++        assertEq(token.balanceOf(address(initiative)), 0);
++        assertEq(token.balanceOf(allocator), THRESHOLD + 7e18);
++        // Late direct transfers remain recoverable even after retirement.
++        token.mint(address(initiative), 3e18);
++        initiative.returnFundsToAllocator();
++        assertEq(token.balanceOf(allocator), THRESHOLD + 10e18);
++        funding.registerInitiative(address(initiative));
++        assertTrue(funding.deferredFunding(address(initiative)), "re-registration restores mode");
++        assertEq(funding.pendingFunding(address(initiative)), 0, "no stale reservation");
++    }
++
++    function test_ClaimCannotTakeAnotherInitiativesReservation() public {
++        _setDeferredWeight(initiative);
++        PILAllocator funding = PILAllocator(allocator);
++        token.mint(allocator, THRESHOLD);
++        funding.distribute();
++        vm.expectRevert(abi.encodeWithSelector(PILAllocator.PILAllocator__NotRegistered.selector, address(this)));
++        funding.claimDeferredFunding();
++        vm.expectRevert(abi.encodeWithSelector(PILAllocator.PILAllocator__NotRegistered.selector, address(this)));
++        funding.enableDeferredFunding();
++        funding.registerInitiative(address(0x1234));
++        vm.expectRevert(PILAllocator.PILAllocator__FundingNotDeferred.selector);
++        vm.prank(address(0x1234));
++        funding.claimDeferredFunding();
++        assertEq(funding.pendingFunding(address(initiative)), THRESHOLD);
++    }
++
++    function _setDeferredWeight(UniV4MerklInitiative target) internal {
++        address[] memory targets = new address[](1);
++        targets[0] = address(target);
++        uint256[] memory weights = new uint256[](1);
++        weights[0] = 1e18;
++        PILAllocator(allocator).setWeights(targets, weights);
++    }
++
++    function _squat(CollisionDistributionCreator venue, UniV4MerklInitiative target) internal {
++        token.mint(address(this), 1);
++        token.approve(address(venue), 1);
++        venue.createCampaign(
++            IDistributionCreator.CampaignParameters({
++                campaignId: bytes32(0),
++                creator: address(target),
++                rewardToken: address(token),
++                amount: 1,
++                campaignType: target.CAMPAIGN_TYPE(),
++                startTimestamp: uint32(target.nextCampaignStart()),
++                duration: uint32(EPOCH_DURATION),
++                campaignData: target.getCampaignData()
++            })
++        );
++    }
++
+     function _newInitiative(IDistributionCreator distributionCreator)
+         internal
+         returns (UniV4MerklInitiative newInitiative)
+@@ -423,5 +716,6 @@ contract UniV4MerklInitiativeTest is Test {
+             block.timestamp,
+             EPOCH_DURATION
+         );
++        PILAllocator(allocator).registerInitiative(address(newInitiative));
+     }
+ }

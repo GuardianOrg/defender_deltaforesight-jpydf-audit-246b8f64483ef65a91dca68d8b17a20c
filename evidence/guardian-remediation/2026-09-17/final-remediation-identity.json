@@ -1,0 +1,11 @@
+{
+  "comparisonBase": "ac26da740074f33ce0e0590058a59fb22cbc2958",
+  "integratedMainCommit": "9ff9cb16d5e6ffb06457e1ded831d89db7385623",
+  "remediationCommit": "1aeafc3d92af624eb994958d65ff902587ec445b",
+  "branch": "audit/guardian-remediation-20260917",
+  "tree": "3394dee2f7f87826d1e0fcaae7fd00c3603a0b12",
+  "sourceSnapshotTree": "23fa1a7a027b24699b4fff6af892b92da0cd83db",
+  "productionSourceTree": "4d461638a27fccd2f749f7086ec955985d04c2a0",
+  "treeEqualsIntegratedMain": true,
+  "purpose": "Single remediation review commit; individual merged PR history remains on main. Baseline artifact/provenance manifests are unchanged and describe the earlier candidate."
+}

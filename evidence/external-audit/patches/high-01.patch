@@ -1,0 +1,255 @@
+diff --git a/contracts/test/SkyUsdcSUsdsStrategy.t.sol b/contracts/test/SkyUsdcSUsdsStrategy.t.sol
+index d84cbb59..8fd3f738 100644
+--- a/contracts/test/SkyUsdcSUsdsStrategy.t.sol
++++ b/contracts/test/SkyUsdcSUsdsStrategy.t.sol
+@@ -83,8 +83,9 @@ contract MockSkyUsdcUsdsConverter is ISkyUsdcSUsdsConverter {
+         returns (uint256 usdcOut)
+     {
+         uint256 usdsSpent = usdsAmount - reverseRefund;
+-        IERC20(address(usds)).safeTransferFrom(msg.sender, address(this), usdsSpent);
++        IERC20(address(usds)).safeTransferFrom(msg.sender, address(this), usdsAmount);
+         usds.burn(address(this), usdsSpent);
++        if (reverseRefund != 0) IERC20(address(usds)).safeTransfer(msg.sender, reverseRefund);
+         usdcOut = (usdsSpent * (10_000 - feeBps)) / 10_000 / 1e12;
+         require(usdcOut >= minUsdcOut, "USDC_MIN");
+         usdc.mint(receiver, usdcOut);
+@@ -130,6 +131,28 @@ contract SkyUsdcSUsdsStrategyTest is Test {
+         assertEq(strategy.estimatedTotalUnderlying(), 600e6, "remaining value");
+     }
+ 
++    function test_SendToVault_RefundedUsdsBudgetRemainsTracked() public {
++        (
++            CollateralVault vault,
++            SkyUsdcSUsdsStrategy strategy,,
++            MockERC20 usdc,
++            MockERC20 usds,
++            MockSkyUsdcUsdsConverter converter
++        ) = _deploySkySetup();
++        _depositAndAllocate(vault, usdc, 1_000e6);
++        converter.setReverseRefund(123);
++
++        uint256 sent = strategy.sendToVault(400e6);
++
++        assertEq(sent, 399_999_999, "actual USDC output sent");
++        assertEq(vault.bufferBalance(), 399_999_999, "vault received actual output");
++        assertEq(strategy.principal(), 600_000_001, "principal reduced by actual output");
++        assertEq(strategy.ownIdleUsds(), 123, "unspent USDS remains tracked");
++        assertEq(usds.balanceOf(address(strategy)), 123, "tracked USDS remains in strategy");
++        assertEq(usds.balanceOf(address(converter)), 0, "converter keeps no USDS");
++        assertEq(usds.allowance(address(strategy), address(converter)), 0, "converter allowance cleared");
++    }
++
+     function test_SendProfitToVault_HarvestsSUsdsYieldAsUsdcWithoutReducingPrincipal() public {
+         (
+             CollateralVault vault,
+@@ -252,8 +275,13 @@ contract SkyUsdcSUsdsStrategyTest is Test {
+     }
+ 
+     function test_EmergencyConvertTracksActualUsdsSpentWhenConverterUsesBudget() public {
+-        (CollateralVault vault, SkyUsdcSUsdsStrategy strategy,, MockERC20 usdc,, MockSkyUsdcUsdsConverter converter) =
+-            _deploySkySetup();
++        (
++            CollateralVault vault,
++            SkyUsdcSUsdsStrategy strategy,,
++            MockERC20 usdc,
++            MockERC20 usds,
++            MockSkyUsdcUsdsConverter converter
++        ) = _deploySkySetup();
+         _depositAndAllocate(vault, usdc, 1_000e6);
+         strategy.emergencyRedeemSUsdsToUsds(1_000e18);
+         converter.setReverseRefund(123);
+@@ -263,6 +291,33 @@ contract SkyUsdcSUsdsStrategyTest is Test {
+         assertEq(sent, 999_999_999);
+         assertEq(strategy.ownIdleUsds(), 123, "unspent USDS remains tracked");
+         assertEq(usdc.balanceOf(address(vault)), 999_999_999);
++        assertEq(strategy.principal(), 1, "principal reduced by actual output");
++        assertEq(usds.balanceOf(address(strategy)), 123, "tracked USDS remains in strategy");
++        assertEq(usds.balanceOf(address(converter)), 0, "converter keeps no USDS");
++        assertEq(usds.allowance(address(strategy), address(converter)), 0, "converter allowance cleared");
++    }
++
++    function test_EmergencyWithdrawFromSky_RefundedUsdsBudgetRemainsTracked() public {
++        (
++            CollateralVault vault,
++            SkyUsdcSUsdsStrategy strategy,,
++            MockERC20 usdc,
++            MockERC20 usds,
++            MockSkyUsdcUsdsConverter converter
++        ) = _deploySkySetup();
++        _depositAndAllocate(vault, usdc, 1_000e6);
++        converter.setReverseRefund(123);
++
++        uint256 sent = strategy.emergencyWithdrawFromSky(type(uint256).max, 999_999_999);
++
++        assertEq(sent, 999_999_999, "actual USDC output sent");
++        assertEq(vault.bufferBalance(), 999_999_999, "vault received actual output");
++        assertEq(strategy.principal(), 1, "principal reduced by actual output");
++        assertEq(strategy.ownSUsdsShares(), 0, "all owned sUSDS redeemed");
++        assertEq(strategy.ownIdleUsds(), 123, "unspent USDS remains tracked");
++        assertEq(usds.balanceOf(address(strategy)), 123, "tracked USDS remains in strategy");
++        assertEq(usds.balanceOf(address(converter)), 0, "converter keeps no USDS");
++        assertEq(usds.allowance(address(strategy), address(converter)), 0, "converter allowance cleared");
+     }
+ 
+     function test_EmergencyWithdrawCannotBypassMaxConversionLoss() public {
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md
+new file mode 100644
+index 00000000..8831eba2
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md
+@@ -0,0 +1,145 @@
++# External Audit High 01: Sky USDS 返金処理の差分レビュー
++
++> Historical / Evidence snapshot (2026-08-03)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/strategies/SkySUsdsStrategy.md` の `SKY-SEC-010` を参照する。
++
++## Executive Summary
++
++外部監査 High 01「PSM Fee (`tout > 0`) Bricks All `SkyUsdcSUsdsStrategy` Withdrawal Paths」は、
++修正前 commit `528ac15f74cc5b307500bedf82f2b725987bd46b` に対しては成立する。一方、review baseline の
++`origin/develop` (`95c7086f7470afb42ffd919554d4b53ae8c51f1f`) では、PR
++[#1052](https://github.com/deltaforesight/jpydf-v2/pull/1052) / commit
++`eed3edfab5a18ddf56edda4c5ca88e9df32a3f37` により既に解消済みである。
++
++したがって現行コードへの追加修正は不要であり、判定は **historically valid / currently resolved** とする。
++今回の差分は、本番コードを変更せず、本番 converter と同じ「USDS 予算を全額 pull し、未使用分を呼出元へ
++返金する」挙動を Strategy mock に反映し、全3出金経路の regression coverage を追加する。
++
++| Severity | New finding count |
++| --- | ---: |
++| Critical | 0 |
++| High | 0 |
++| Medium | 0 |
++| Low | 0 |
++
++**Recommendation**: focused / strategy-family / CI test が通り、PR の production diff が引き続きゼロであることを
++確認した上で merge 可。
++
++## Scope And Baselines
++
++- 外部指摘: High 01 — PSM Fee (`tout > 0`) Bricks All `SkyUsdcSUsdsStrategy` Withdrawal Paths
++- 現行 baseline: `origin/develop` at `95c7086f7470afb42ffd919554d4b53ae8c51f1f`
++- 指摘を再現する旧 baseline: `eed3edfa^` = `528ac15f74cc5b307500bedf82f2b725987bd46b`
++- 既存 remediation: `eed3edfab5a18ddf56edda4c5ca88e9df32a3f37`
++- 今回の変更対象:
++  - `contracts/test/SkyUsdcSUsdsStrategy.t.sol`
++  - 本 historical review
++- 本番 contract、ABI、storage layout、deploy 設定: 変更なし
++
++## Validity Assessment
++
++旧実装は converter 呼出し後の USDS 残高を `balanceBefore - maxUsdsIn` と完全一致させていた。
++しかし production converter は `maxUsdsIn` を予算として受け取り、Sky wrapper が実際に消費しなかった USDS を
++Strategy に返金する。このため返金が1 weiでもあれば、正常な返金後残高を異常と判定して transaction 全体を
++revert していた。
++
++指摘の中心である「返金により3経路が停止する」は正しい。ただし原因を `tout > 0` のみに限定する表現は狭い。
++直接の発火条件は、fee・丸め・出力量の量子化などにより **予算と実消費額が一致せず返金が発生すること** である。
++
++現行実装は次の順序で処理する。
++
++1. converter 呼出し前後の Strategy USDS 実残高から `usdsSpent` を算出する。
++2. `0 < usdsSpent <= maxUsdsIn` を要求する。
++3. `_ownIdleUsds` を `usdsSpent` だけ減らす。
++4. 未使用分は Strategy の実残高と `_ownIdleUsds` の双方に残す。
++
++これは `SKY-SEC-010` の budget / refund / actual-spend 要件と一致する。
++
++## Blast Radius
++
++`_convertUsdsToUsdc()` の直接 caller は次の3経路だけであり、外部指摘の列挙と一致する。
++
++| Entry path | Purpose | Refund regression |
++| --- | --- | --- |
++| `sendToVault()` -> `_doWithdraw()` | 通常の allocator 回収 | 追加 |
++| `emergencyConvertIdleUsdsToVault()` | redeem 済み idle USDS の分割回収 | 既存 test を本番同等 mock と追加 assertion で強化 |
++| `emergencyWithdrawFromSky()` | redeem と conversion の一括緊急回収 | 追加 |
++
++下流では `CollateralVault.receiveFromStrategy()` が実受領 USDC を計測し、Strategy principal は実受領額だけ減る。
++したがって返金 dust により USDC 出力が要求額を1 atom下回る場合も、Vault buffer と principal は同じ実額で更新される。
++
++## Adversarial And Side-Effect Review
++
++想定する adversarial / fault condition は、converter が予算全額を pull した後、一部だけを wrapper で消費し、残りを
++同一 transaction 内で返金するケースである。test では123 weiの返金を注入した。
++
++| Invariant / side effect | Evidence | Result |
++| --- | --- | --- |
++| 3経路が返金で revert しない | 3つの refund regression test | Pass |
++| 予算超過消費を許さない | 現行 `InvalidUsdsSpent(actual, maximum)` guard を維持 | Pass / unchanged |
++| 未使用 USDS を失わない | physical balance と `ownIdleUsds()` がともに123 | Pass |
++| principal を要求額で過剰減算しない | Vault 実受領 USDC と principal reduction を照合 | Pass |
++| converter に残高を残さない | converter USDS balance = 0 | Pass |
++| Strategy -> converter approval を残さない | allowance = 0 | Pass |
++| ABI / storage / production behavior を変えない | production source diff = 0 | Pass |
++
++現行 guard は、converter が USDS を追加送付して前後差分を負に見せるケースと、消費ゼロまたは予算超過を報告する
++ケースを fail closed にする。今回その guard は変更していない。
++
++## Historical Reproduction
++
++isolated worktree で `_convertUsdsToUsdc()` の残高判定だけを旧 predicate
++`_requireTokenBalance(usds, usdsBalanceBefore - _usdsAmount)` に戻し、同じ3 test を実行した。
++
++```text
++0 passed; 3 failed
++SkyUsdcSUsdsStrategy__UnexpectedTokenBalance(..., expected=0, actual=123)
++```
++
++その後、source を現行実装へ戻し、production source に差分がないことを確認して再実行した。
++
++```text
++3 passed; 0 failed
++```
++
++この A/B 結果により、失敗原因が外部指摘どおり旧 strict-balance predicate であり、現行 actual-spend accounting が
++その原因を除去していることを確認した。
++
++## Verification
++
++実行済み:
++
++```text
++forge fmt --check test/SkyUsdcSUsdsStrategy.t.sol
++forge test -vv --match-path test/SkyUsdcSUsdsStrategy.t.sol
++  15 passed; 0 failed
++forge test -vv --match-path test/SkyUsdcSUsdsConverter.t.sol
++  11 passed; 0 failed
++forge test -vv --match-path 'test/*Strategy.t.sol'
++  258 passed; 0 failed
++forge test -vv --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++  1376 passed; 0 failed; 0 skipped
++git diff --check
++```
++
++converter suite の `test_ConvertUsdsToUsdc_UsesBudgetAndRefundsUnspentDust` は `tout = 1%`、
++`budget = 101e18 + 123` に対して100 USDCを出力し、123 weiを返金する具体例を検証する。Strategy suite は
++同じ pull-all / refund semantics を全3 caller path に伝播させる。
++
++## Residual Risk And Limitations
++
++- 今回の Strategy regression は deterministic mock を使用する。production converter の1% `tout` と返金計算は
++  converter unit test で別途検証している。
++- `MAINNET_RPC_URL` を設定していないため、converter suite 内の mainnet fork test は環境条件により早期 return し、
++  live Sky route の実行証拠には数えない。
++- Sky の live fee、halt、流動性は変化し得る。merge 前のコード副作用確認とは別に、launch / production readiness では
++  configured RPC を用いた mainnet fork と運用監視を継続する。
++
++## Methodology
++
++- 外部 finding の主張を現行コードへ無条件適用せず、対象 commit の親、remediation commit、現行
++  `origin/develop` を比較した。
++- `git log -S` と commit diff で strict-balance predicate から actual-spend accounting への変更履歴を確認した。
++- `_convertUsdsToUsdc()` の全 caller を静的検索し、各 path に regression test を対応付けた。
++- 旧 predicate / 現行 predicate の A/B fault injection を実行した。
++- 残高、内部 accounting、Vault principal、allowance、converter residue、ABI/storage の副作用を確認した。
+diff --git a/documents/jp/engineering/historical-reviews/README.md b/documents/jp/engineering/historical-reviews/README.md
+index 3a834b88..2f0badbb 100644
+--- a/documents/jp/engineering/historical-reviews/README.md
++++ b/documents/jp/engineering/historical-reviews/README.md
+@@ -6,4 +6,5 @@
+ 
+ | 文書 | Snapshot | 内容 |
+ | --- | --- | --- |
++| [`2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md`](./2026-08-03-External-Audit-High-01-Sky-Refund-Differential-Review.md) | 2026-08-03 | 外部監査 High 01 の成立時点、既存修正、3つの Sky 出金経路の返金回帰試験と副作用確認 |
+ | [`2026-07-27-Collateral-Parameter-Rationale.md`](./2026-07-27-Collateral-Parameter-Rationale.md) | 2026-07-27 | 担保parameterの生データ、過去候補、棄却案、旧Notionから移管した検討記録 |

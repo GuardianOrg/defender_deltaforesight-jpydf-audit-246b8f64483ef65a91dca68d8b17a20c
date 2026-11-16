@@ -1,0 +1,28 @@
+Compiling 151 files with Solc 0.8.24
+Solc 0.8.24 finished in 13.42s
+Compiler run successful!
+
+Ran 9 tests for test/GuardianOraclePolicy.t.sol:GuardianOraclePolicyTest
+[PASS] testFuzz_GraceWindowCanMissLiquidationWhenJpyStrengthens(uint32) (runs: 256, μ: 719785, ~: 719844)
+Logs:
+  Bound result 108003
+
+[PASS] testFuzz_GraceWindowCanWrongfullyLiquidateWhenJpyWeakens(uint32) (runs: 256, μ: 734730, ~: 734789)
+Logs:
+  Bound result 108003
+  fresh ICR: 1121830617303688493
+  stale ICR: 1110610923480915328
+
+[PASS] test_30hBlocksAllRiskIncreasesButFreshRoundReopens() (gas: 620250)
+[PASS] test_54hStopsLiquidationAndSafeActionsRemainAvailable() (gas: 839374)
+[PASS] test_FreshFxAvoidsWrongfulPermanentShutdown() (gas: 212782)
+[PASS] test_OtherInputFailureStopsLiquidationInsideGraceWindow() (gas: 240091)
+[PASS] test_PausingAt30hCanLeaveUncoveredDebtDuringGraceWindow() (gas: 696243)
+Logs:
+  uncovered JPYdf before liquidation: 3442643880194833416691
+
+[PASS] test_SafeAddAndRepayNeverCallUnavailableOracle() (gas: 270816)
+[PASS] test_StaleShutdownWaitsForFreshFxAndDebtKeepsAccruing() (gas: 520401)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 351.20ms (331.00ms CPU time)
+
+Ran 1 test suite in 363.87ms (351.20ms CPU time): 9 tests passed, 0 failed, 0 skipped (9 total tests)

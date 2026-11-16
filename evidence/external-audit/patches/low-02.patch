@@ -1,0 +1,648 @@
+diff --git a/contracts/src/CollateralVault.sol b/contracts/src/CollateralVault.sol
+index 813eac6d..0a341285 100644
+--- a/contracts/src/CollateralVault.sol
++++ b/contracts/src/CollateralVault.sol
+@@ -458,7 +458,8 @@ contract CollateralVault is
+     ///      reserve, and never sweeps liquidity a pending `claim` depends on.
+     ///      Strategy value uses `min(estimatedTotalUnderlying, principal)`, so
+     ///      unrealized yield is not pre-counted. Unlike backing views, this path
+-    ///      does not spend against cached Strategy valuation on read failure.
++    ///      does not spend against cached or partial Strategy valuation: one
++    ///      unavailable registered Strategy makes the entire transfer zero.
+     function transferYieldToTreasury()
+         external
+         override
+@@ -955,11 +956,15 @@ contract CollateralVault is
+     /// @dev Assets managed for liquidity/yield operations. Excludes protected
+     ///      backstop reserve so repair funds cannot create allocatable or
+     ///      treasury-sweepable surplus until GOV explicitly releases them.
++    ///      Returns zero unless every registered Strategy has a live valuation,
++    ///      preventing outbound transfers based on a partial system view.
+     function _managedUnderlying() internal view returns (uint256 total) {
+         total = bufferBalance();
+         uint256 strategyCount = strategies.length;
+         for (uint256 strategyIndex; strategyIndex < strategyCount; strategyIndex++) {
+-            total += _strategyConservativeValueLiveOrZero(strategies[strategyIndex]);
++            (,,,, uint256 conservativeValue, bool liveAvailable) = _liveStrategyValuation(strategies[strategyIndex]);
++            if (!liveAvailable) return 0;
++            total += conservativeValue;
+         }
+     }
+ 
+@@ -988,13 +993,6 @@ contract CollateralVault is
+         return cacheAvailable ? cachedValue : 0;
+     }
+ 
+-    /// @dev Treasury/yield accounting must not spend against a cached Strategy
+-    ///      value. If live valuation is unavailable, skip the Strategy instead.
+-    function _strategyConservativeValueLiveOrZero(IStrategy _strategy) internal view returns (uint256) {
+-        (,,,, uint256 conservativeValue, bool liveAvailable) = _liveStrategyValuation(_strategy);
+-        return liveAvailable ? conservativeValue : 0;
+-    }
+-
+     function _buildStrategyStatus(IStrategy _strategy, StrategyConfig memory _config)
+         internal
+         view
+diff --git a/contracts/test/CollateralVaultStrategy.t.sol b/contracts/test/CollateralVaultStrategy.t.sol
+index 8d2bdb40..4f262426 100644
+--- a/contracts/test/CollateralVaultStrategy.t.sol
++++ b/contracts/test/CollateralVaultStrategy.t.sol
+@@ -22,6 +22,7 @@ contract ConfigurableValuationStrategy is IStrategy {
+     bool public revertEstimated;
+     bool public revertPrincipal;
+     uint256 public estimatedValue;
++    uint256 public principalValue;
+ 
+     constructor(address _underlying) {
+         underlyingToken = _underlying;
+@@ -35,6 +36,10 @@ contract ConfigurableValuationStrategy is IStrategy {
+         estimatedValue = _estimatedValue;
+     }
+ 
++    function setPrincipalValue(uint256 _principalValue) external {
++        principalValue = _principalValue;
++    }
++
+     function setRevertEstimated(bool _revertEstimated) external {
+         revertEstimated = _revertEstimated;
+     }
+@@ -49,7 +54,7 @@ contract ConfigurableValuationStrategy is IStrategy {
+ 
+     function principal() external view override returns (uint256) {
+         if (revertPrincipal) revert("principal failed");
+-        return 0;
++        return principalValue;
+     }
+ 
+     function realizedYield() external pure override returns (uint256) {
+@@ -596,28 +601,41 @@ contract CollateralVaultStrategyTest is Test {
+         assertEq(failing.principal(), 0, "failed strategy principal remains zero");
+     }
+ 
+-    function test_Allocate_SkipsStrategyWhenValuationReverts() public {
+-        uint256 amount = 10e8;
+-        ConfigurableValuationStrategy bad = new ConfigurableValuationStrategy(address(underlying));
+-        bad.setRevertEstimated(true);
+-
++    function test_Allocate_StopsAllOutboundOnEstimateFailureAndRecoversAutomatically() public {
++        uint256 bufferAmount = 100e8;
++        ConfigurableValuationStrategy unavailable = new ConfigurableValuationStrategy(address(underlying));
++        ConfigurableValuationStrategy healthy = new ConfigurableValuationStrategy(address(underlying));
++        unavailable.setEstimatedValue(800e8);
++        unavailable.setPrincipalValue(800e8);
++        healthy.setEstimatedValue(200e8);
++        healthy.setPrincipalValue(200e8);
+         vault.updateStrategy(IStrategy(address(stratA)), 0, type(uint256).max, false);
+-        vault.addToWhitelist(address(bad));
+-        vault.addStrategy(IStrategy(address(bad)), 5000, type(uint256).max);
+-        vault.setBufferConfig(0, 0);
+-        _deposit(alice, amount);
++        vault.updateStrategy(IStrategy(address(stratB)), 0, type(uint256).max, false);
++        vault.addToWhitelist(address(unavailable));
++        vault.addStrategy(IStrategy(address(unavailable)), 0, type(uint256).max);
++        vault.addToWhitelist(address(healthy));
++        vault.addStrategy(IStrategy(address(healthy)), 10_000, type(uint256).max);
++        vault.setBufferConfig(2000, 0);
++        underlying.mint(address(vault), bufferAmount);
+ 
+-        vm.expectEmit(true, false, false, true, address(vault));
+-        emit StrategyAllocated(address(stratB), amount / 2);
+-        vm.expectEmit(true, false, false, true, address(vault));
+-        emit StrategyAllocationSkipped(address(bad));
++        unavailable.setRevertEstimated(true);
+         vault.allocate();
+ 
+-        assertEq(stratB.principal(), amount / 2, "healthy strategy still allocated");
+-        assertEq(vault.bufferBalance(), amount / 2, "skipped share remains in buffer");
++        assertEq(vault.bufferBalance(), bufferAmount, "partial valuation cannot reduce the liquid buffer");
++        assertEq(underlying.balanceOf(address(unavailable)), 0, "unavailable strategy receives nothing");
++        assertEq(underlying.balanceOf(address(healthy)), 0, "healthy strategy receives nothing from a partial view");
++        assertEq(vault.lastAllocatorTime(), 0, "failed preflight does not consume the recovery cooldown");
++
++        unavailable.setRevertEstimated(false);
++        underlying.mint(address(vault), 200e8);
++        vault.allocate();
++
++        assertEq(underlying.balanceOf(address(unavailable)), 0, "zero-weight strategy remains unfunded");
++        assertEq(underlying.balanceOf(address(healthy)), 40e8, "healthy strategy resumes without manual reset");
++        assertEq(vault.bufferBalance(), 260e8, "only live-view excess leaves the buffer");
+     }
+ 
+-    function test_Allocate_SkipsStrategyWhenPrincipalValuationReverts() public {
++    function test_Allocate_StopsAllOutboundWhenPrincipalValuationReverts() public {
+         uint256 amount = 10e8;
+         ConfigurableValuationStrategy bad = new ConfigurableValuationStrategy(address(underlying));
+         bad.setRevertPrincipal(true);
+@@ -628,14 +646,10 @@ contract CollateralVaultStrategyTest is Test {
+         vault.setBufferConfig(0, 0);
+         _deposit(alice, amount);
+ 
+-        vm.expectEmit(true, false, false, true, address(vault));
+-        emit StrategyAllocated(address(stratB), amount / 2);
+-        vm.expectEmit(true, false, false, false, address(vault));
+-        emit StrategyAllocationSkipped(address(bad));
+         vault.allocate();
+ 
+-        assertEq(stratB.principal(), amount / 2, "healthy strategy still allocated");
+-        assertEq(vault.bufferBalance(), amount / 2, "principal-bricked strategy share remains in buffer");
++        assertEq(stratB.principal(), 0, "healthy strategy is not funded from a partial system view");
++        assertEq(vault.bufferBalance(), amount, "all outbound allocation stops on principal failure");
+     }
+ 
+     function test_Allocate_CapCheckDoesNotOverflowOnHugeEstimate() public {
+@@ -1071,6 +1085,38 @@ contract CollateralVaultStrategyTest is Test {
+         assertEq(underlying.balanceOf(treasury), 0, "treasury untouched");
+     }
+ 
++    function test_TransferYieldToTreasury_StopsOnPartialValuationAndRecoversAutomatically() public {
++        _deposit(alice, 100e8);
++        vault.setBufferConfig(0, 0);
++        vault.allocate();
++
++        uint256 yieldAmount = 20e8;
++        underlying.mint(address(stratA), yieldAmount);
++        stratA.setMockYield(yieldAmount);
++        vm.prank(admin);
++        stratA.sendProfitToVault();
++
++        ConfigurableValuationStrategy unavailable = new ConfigurableValuationStrategy(address(underlying));
++        vault.addToWhitelist(address(unavailable));
++        vault.addStrategy(IStrategy(address(unavailable)), 0, type(uint256).max);
++        unavailable.setRevertEstimated(true);
++
++        vm.expectEmit(false, true, false, true, address(vault));
++        emit YieldTransferredToTreasury(0, treasury);
++        uint256 blockedTransfer = vault.transferYieldToTreasury();
++
++        assertEq(blockedTransfer, 0, "partial valuation cannot authorize a treasury transfer");
++        assertEq(underlying.balanceOf(treasury), 0, "treasury remains untouched during the failure");
++        assertEq(vault.bufferBalance(), yieldAmount, "yield remains liquid in the vault");
++
++        unavailable.setRevertEstimated(false);
++        uint256 recoveredTransfer = vault.transferYieldToTreasury();
++
++        assertEq(recoveredTransfer, yieldAmount, "treasury transfer resumes after live valuation recovers");
++        assertEq(underlying.balanceOf(treasury), yieldAmount, "only the realized yield is transferred");
++        assertEq(vault.bufferBalance(), 0, "recovered transfer consumes the liquid surplus");
++    }
++
+     function test_TransferYieldToTreasury_RequiresAllocatorRole() public {
+         address noRole = makeAddr("noRole");
+         vm.expectRevert(); // AccessControl: missing role
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index ce9664cc..4156921f 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -355,7 +355,7 @@ Source of truth: [CollateralVault.md](../../protocol/product/spec/CollateralVaul
+ | VAULT-FR-001 | deposit (Underlying -> dToken; pause/ready/zero; actual-received conversion; mint) | unit, integration | ☐ | ☐ | | Not run | |
+ | VAULT-FR-002 | redeem (immediate/delayed, first-come all-or-nothing, CEI, reject non-exact amount) | unit, integration, invariant=VAULT-INV-002/003/014 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-003 | redeemWithPermit (exact check -> permit -> burn(self), all reverts) | unit, integration | ☐ | ☐ | | Not run | |
+-| VAULT-FR-004 | allocate (cooldown/pause/M==0, cap clamp, fixed weights, valuation-failure skip, exact-recovery deposit-reject skip, recovery-mismatch full revert, no reallocation) | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | Not run | |
++| VAULT-FR-004 | allocate (cooldown/pause/M==0, all-outbound stop plus no cooldown consumption and automatic recovery on partial valuation, cap clamp, fixed weights, exact-recovery deposit-reject skip, recovery-mismatch full revert, no reallocation) | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-005 | receiveFromStrategy (registration check, balance-delta accounting, zero short-circuit) | unit, invariant=VAULT-INV-005 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-006 | claim (existence/ownership/time/buffer reverts, no partial claim, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-007 | transferYieldToTreasury (M<=L early return, buffer clamp, min valuation, backstop excluded) | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | Not run | |
+diff --git a/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md b/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+index c7c541f1..fa1c8aeb 100644
+--- a/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
++++ b/documents/en/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+@@ -44,7 +44,14 @@ Whether an event appears in accounting, is unrecoverable, or is merely a liquidi
+ - **Market depeg vs canonical accounting**: stETH / wstETH and some yield tokens can trade lower on DEXs without immediate impairment in protocol canonical accounting. Liquidation price reflection belongs to JPYdf oracle / backing policy and is separate from Strategy principal writeoff.
+ - **Do not classify by branch symbol**: dUSDC / dUSDT / dUSDS can use Aave, Morpho/Euler, Sky, etc. Use the rule for the actual venue.
+ 
+-### 2.1 Monitoring and Upgrade for Allocation Deposit Rejection
++### 2.1 Monitoring and Recovery for Allocation Valuation Preflight
++
++- Before and after every allocation keeper call, have an external monitor read `getStrategyStatuses()` and require `estimateAvailable && principalAvailable` for every registered Strategy, regardless of enabled state or weight. If any is false, `allocate` and `transferYieldToTreasury` use neither cache nor a partial sum and produce zero outbound movement. Because `allocate` emits no `Allocated` event and consumes no cooldown on this path, do not treat a successful keeper receipt alone as successful allocation; alert on unavailable status correlated with the missing `Allocated` event as the earliest stable machine signal.
++- A later healthy dependency automatically allows the next keeper call to resume. The recovery probe must confirm both views on the affected Strategy, all registry statuses, buffer target, actual `Allocated` / `StrategyAllocated` events, and buffer deltas in the same block. A never-settling or gas-exhausting view can revert the whole transaction, so a caller timeout is not recovery evidence; require a successful receipt on the affected data path and the expected events.
++- Page on-call for consecutive failures or a failure lasting longer than one keeper interval. Proceed through `pauseAllocation`, external venue / RPC / Strategy implementation diagnosis, and a recovery probe. Never use a fresh valuation cache as authority to resume outbound movement.
++- Before production enablement, connect an external monitor, escalation policy, and real recipient, then run a labeled test incident through valuation unavailable, zero outbound, dependency recovery, automatic resume, receipt, and resolution. Record it without tokens or webhook URLs.
++
++### 2.2 Monitoring and Upgrade for Allocation Deposit Rejection
+ 
+ - Subscribe to `StrategyAllocationSkipped` from an external monitor. When the contemporaneous `getStrategyStatuses()` is live-available with cap headroom, classify it as an external-venue deposit rejection rather than a valuation/cap skip. Warn on the first event and page on-call when the same Strategy rejects consecutively or again within one keeper interval. If `allocate` reverts with `DepositRecoveryFailed`, page on the first occurrence and pause allocation because exact recovery could not be proven.
+ - Structured logs alone are not alert delivery. Before production enablement, connect an enabled external monitor, escalation policy, and real on-call recipient; run a labeled test incident through creation, receipt, and resolution, and record it in the incident log without tokens or webhook URLs.
+diff --git a/documents/en/protocol/product/spec/CollateralVault.md b/documents/en/protocol/product/spec/CollateralVault.md
+index 1357d1a9..9fc08b98 100644
+--- a/documents/en/protocol/product/spec/CollateralVault.md
++++ b/documents/en/protocol/product/spec/CollateralVault.md
+@@ -34,7 +34,7 @@ CollateralVault is designed consistently as the "custody and accounting layer" f
+ 
+ - **Only dToken is exposed to the core**: The core treats dToken as 18-decimal collateral ERC-20 and knows nothing about the real Underlying, Strategy operations, buffer, or delayed redemption behind it. The Vault absorbs that complexity.
+ - **Push model**: funds returning from Strategy to Vault are Strategy-initiated. Principal returns, protocol-specific emergency recovery, and generic idle rescue routes that should reduce the Strategy valuation cache are consolidated into `receiveFromStrategy` ([VAULT-FR-005](#vault-fr-005)). Yield-only pushes such as `sendProfitToVault` and Underlying reward claims transfer directly into the Vault buffer and do not reduce Strategy principal or Vault valuation caches. The Vault does not pull principal from Strategies; Strategies push to the Vault. The approval direction is therefore reversed: **Strategy max-approves the Vault during initialization** (a premise of `sendToVault`, etc. in [Strategy Requirements Specification](strategies/Strategy.md)). Synchronous/asynchronous differences are contained in each Strategy implementation and are not represented in Vault accounting (`StrategyConfig`).
+-- **Conservative accounting (`min(est, principal)`)**: Solvency valuation uses live `min(estimatedTotalUnderlying, principal)` and falls back to a bounded last-good cache only when valuation fails. Treasury transfer never sends against cached value; a Strategy whose live valuation cannot be read is valued at 0 for transfer. Allocation and Treasury transfer use `managedUnderlying`, excluding protected backstop reserve ([VAULT-INV-005](#vault-inv-005) and [§7](#7-state-variables-and-accounting-model)).
++- **Conservative accounting (`min(est, principal)`)**: Solvency valuation uses live `min(estimatedTotalUnderlying, principal)` and falls back to a bounded last-good cache only when valuation fails. Allocation and Treasury transfer never send against cached value or an incomplete partial system view; if any registered Strategy lacks a live valuation, `managedUnderlying` is zero and the entire outbound operation returns early. `managedUnderlying` also excludes protected backstop reserve ([VAULT-INV-005](#vault-inv-005) and [§7](#7-state-variables-and-accounting-model)).
+ - **First-come-takes-all + delayed redemption**: When liquid buffer is sufficient, `redeem` completes in one transaction. When insufficient, the current liquid buffer is paid to the first caller and the remainder becomes a delayed `WithdrawRequest`. `pendingWithdrawals` protects claim funds from flowing out to Strategies ([VAULT-FR-002](#vault-fr-002) and [VAULT-FR-006](#vault-fr-006)).
+ - **Buffer / backstop responsibility separation**: `bufferBalance()` represents only liquidity available for redeem / claim / allocate / Treasury transfer. `backstopDeposit()` records Underlying in the same Vault as protected reserve; it is included in `totalUnderlying()` / `backingRatio()` but cannot be used for redeem / claim until GOV explicitly releases it through `releaseBackstopToBuffer()`. This prevents replenishment funds for Strategy impairment from being drained first-come-first-served by normal redeems ([VAULT-FR-017](#vault-fr-017)).
+ - **Two-stage monetization**: Stage 1 = each Strategy pushes realized Underlying-denominated profit to the buffer via `Strategy.sendProfitToVault` ([Strategy Requirements Specification](strategies/Strategy.md)); Stage 2 = `transferYieldToTreasury` sends buffer surplus to Treasury ([VAULT-FR-007](#vault-fr-007)). Profit remaining inside a Strategy cannot be reached by Stage 2 alone due to the buffer clamp, so ALLOCATOR first pulls it up in Stage 1. Non-Underlying, non-position reward tokens such as Aave incentives / Merkl are outside this two-stage accounting and are sent to Treasury through the shared Strategy `sweepRewardToken`. This prevents one Strategy failure from cascading to others.
+@@ -243,7 +243,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ - **Authorization**: `ALLOCATOR_ROLE` only. `pausedAllocation == false` (`whenNotPausedAllocation`).
+ - **Preconditions (Checks)**: `block.timestamp >= lastAllocatorTime + allocatorCooldown`; `pausedAllocation == false`.
+ - **Behavior (Effects)**:
+-  1. **Measure managed assets and buffer** — `M = managedUnderlying = bufferBalance() + Σ live min(Strategy_i.estimatedTotalUnderlying(), Strategy_i.principal())`. Protected backstop reserve and cached Strategy value are not allocation targets or target-buffer inputs. If `M == 0`, return without updating `lastAllocatorTime` or emitting `Allocated`
++  1. **Measure managed assets and buffer** — `M = managedUnderlying = bufferBalance() + Σ live min(Strategy_i.estimatedTotalUnderlying(), Strategy_i.principal())`. Protected backstop reserve and cached Strategy value are not allocation targets or target-buffer inputs. If any registered Strategy lacks a live valuation, regardless of enabled state or weight, treat `M` as zero and fail closed for all outbound movement. If `M == 0`, return without updating `lastAllocatorTime` or emitting `Allocated`, allowing an immediate retry after dependency recovery without waiting for cooldown
+   2. **Calculate target buffer** — `B_target = max(M * bufferTargetBps / 10000, bufferFloor) + pendingWithdrawals` (reason for adding `pendingWithdrawals`: prevent claim funds from flowing out to Strategies, [VAULT-FR-006](#vault-fr-006))
+   3. **Determine allocation amount `excess`** — `excess = min(max(B - B_target, 0), allocateMaxMove)`
+   4. **Allocate `excess` across Strategies** (allocation rules below. Actual allocation per Strategy emits `StrategyAllocated(strategy, amount)`)
+@@ -252,17 +252,17 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+   - Only registered Strategies with `enabled = true` are targets
+   - Allocation to each Strategy is prorated by `weightBps_i / totalWeightBps`
+   - Allocation **first transfers Underlying with `safeTransfer(strategy, share)`, measures the Strategy's net `received` amount by balance delta, and then calls `strategy.deposit(share, received)`**. The Strategy returns `received` on success or 0 after exact recovery and skip
+-  - Do not send an amount that exceeds each Strategy's cap headroom (`cap_i - estimatedTotalUnderlying_i`). If `estimatedTotalUnderlying()` or `principal()` reverts and live `min(est, principal)` cannot be formed, skip that Strategy for this allocation run
++  - Do not send an amount that exceeds each Strategy's cap headroom (`cap_i - estimatedTotalUnderlying_i`). If the managed-assets preflight cannot read `estimatedTotalUnderlying()` or `principal()` for any registered Strategy, return early from the entire allocation run. If only the per-Strategy cap reread fails after preflight, skip that Strategy's share
+   - `BaseStrategy.deposit` executes `_doDeposit(received)` in a separate self-only call frame. A non-zero `share` with zero `received` fails closed. If the external protocol rejects a non-zero receipt, that frame's protocol effects roll back. Only when `share == received` (no outbound transfer fee) and both the Strategy decrease and Vault increase equal `received` does it return the idle Underlying to the Vault and return 0. The Vault emits `StrategyAllocationSkipped` and continues to later Strategies
+   - If `share != received`, the return transfer fails, or fee-on-transfer / rebasing makes either balance delta differ, `DepositRecoveryFailed` reverts the whole `allocate()` call back through the initial `safeTransfer`. A simple catch that leaves Underlying idle in the Strategy is not permitted
+-  - **Amounts reduced by caps and shares skipped due to valuation or deposit failure are not reallocated to other Strategies** (they remain in the Vault buffer)
++  - **Amounts reduced by caps and shares skipped due to a post-preflight valuation reread or deposit failure are not reallocated to other Strategies** (they remain in the Vault buffer)
+   - Operationally, maintain `totalWeightBps == 10000`. If intentionally lower, note that the amount prorated among registered Strategies increases
+-- **Revert / early return**: `block.timestamp < lastAllocatorTime + allocatorCooldown` -> `CooldownNotMet`; `pausedAllocation == true` -> revert; `M == 0` -> early return (no event/time update); a deposit rejection that cannot be recovered exactly -> whole-call revert with `DepositRecoveryFailed`. A rejection with exact recovery skips only that Strategy.
+-- **Emitted event**: `StrategyAllocated(strategy, amount)` (actual allocation per Strategy) / `StrategyAllocationSkipped(strategy)` (live valuation unavailable, cap reached, or exact recovery after deposit rejection) / `Allocated(bufferBefore, targetBuffer, bufferAfter)` (aggregate buffer before/target/after for one `allocate()` run, [VAULT-EVT-004](#11-events-and-monitoring-requirements-evt)). Combine events with `getStrategyStatuses()` availability / capRemaining / remaining buffer; a skip with healthy availability and cap headroom identifies deposit rejection.
++- **Revert / early return**: `block.timestamp < lastAllocatorTime + allocatorCooldown` -> `CooldownNotMet`; `pausedAllocation == true` -> revert; `M == 0` (zero assets or any registered Strategy lacks live valuation) -> early return (no event/time update); a deposit rejection that cannot be recovered exactly -> whole-call revert with `DepositRecoveryFailed`. A rejection with exact recovery skips only that Strategy.
++- **Emitted event**: `StrategyAllocated(strategy, amount)` (actual allocation per Strategy) / `StrategyAllocationSkipped(strategy)` (post-preflight cap valuation reread unavailable, cap reached, or exact recovery after deposit rejection) / `Allocated(bufferBefore, targetBuffer, bufferAfter)` (aggregate buffer before/target/after for one `allocate()` run, [VAULT-EVT-004](#11-events-and-monitoring-requirements-evt)). Managed-assets preflight failure returns without outbound movement, cooldown consumption, or an event; external monitoring correlates `getStrategyStatuses()` availability with a missing `Allocated` event after the keeper call. A skip with healthy availability and cap headroom identifies deposit rejection.
+ - **Design notes**:
+   - Per-Strategy invested amounts can be tracked via `StrategyAllocated`. Current value, AUM, and estimated PnL use `getStrategyStatuses()` as the primary source and are time-series snapshotted by subgraph (The Graph) operations ([§11](#11-events-and-monitoring-requirements-evt)).
+-  - Example: `excess = 1000`, A (`weightBps = 5000`, cap headroom 200), B (`weightBps = 5000`, cap headroom 1000), `totalWeightBps = 10000` -> A computes 500 -> capped to 200, A=200, `remaining=800`; B computes 500 -> cap allows, B=500, `remaining=300`; **remaining 300 stays in Vault buffer**. If A valuation (estimate or principal) reverts, A is skipped and A's computed share stays in the buffer.
+-- **Verification**: unit (cooldown, pause, M==0, cap clamp, estimate/principal failure skip, exact recovery plus continuation after deposit rejection, full revert when transfer fees prevent exact recovery, no reallocation), invariant=[VAULT-INV-006](#vault-inv-006).
++  - Example: `excess = 1000`, A (`weightBps = 5000`, cap headroom 200), B (`weightBps = 5000`, cap headroom 1000), `totalWeightBps = 10000` -> A computes 500 -> capped to 200, A=200; B computes 500 -> cap allows, B=500; **remaining 300 stays in Vault buffer**. If A valuation (estimate or principal) reverts during managed-assets preflight, the entire allocation run returns early and B receives nothing.
++- **Verification**: unit (cooldown, pause, M==0, cap clamp, all-outbound stop plus no cooldown consumption and automatic recovery on estimate/principal failure, exact recovery plus continuation after deposit rejection, full revert when transfer fees prevent exact recovery, no reallocation), invariant=[VAULT-INV-006](#vault-inv-006).
+ 
+ ### <a id="vault-fr-005"></a>VAULT-FR-005: `receiveFromStrategy` (Strategy -> Vault push receipt)
+ 
+@@ -323,7 +323,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ - **Preconditions (Checks)**: caller has ALLOCATOR_ROLE; `pausedAllocation == false`.
+ - **Accounting principles**:
+   - `A = totalUnderlying()`: total assets for backing / oracle. Vault raw Underlying balance (liquid buffer + backstop reserve) plus each Strategy's conservative valuation
+-  - `M = managedUnderlying`: managed assets for allocation / Treasury. `bufferBalance() + Σ live min(estimatedTotalUnderlying, principal)`, excluding protected backstop reserve. If Strategy valuation cannot be read, do not send against cached value; value that Strategy at 0
++  - `M = managedUnderlying`: managed assets for allocation / Treasury. `bufferBalance() + Σ live min(estimatedTotalUnderlying, principal)`, excluding protected backstop reserve. If any registered Strategy valuation cannot be read, do not send against cached value or a partial sum; set `M = 0` and return early from the entire outbound operation
+   - `L_user = actual dToken liabilities`: based on `convertToUnderlying(dToken.totalSupply())`, rounded up to 1 base unit if total supply contains dust not exactly corresponding to an Underlying base unit due to legacy/migration
+   - `L_pending = pendingWithdrawals`: unclaimed balance of issued delayed redemptions ([VAULT-FR-006](#vault-fr-006))
+   - `L_effective = L_user + L_pending`
+@@ -339,7 +339,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ - **Design notes**:
+   - **Reason for two-stage separation**: Profit residing inside Strategies cannot be reached by this function alone (due to the buffer cap). ALLOCATOR first pulls profit into the buffer through Strategy `sendProfitToVault` ([Strategy Requirements Specification](strategies/Strategy.md)), then sends it to Treasury through this function.
+   - **Suppressing over-transfer**: `M` uses conservative `min(estimatedTotalUnderlying, principal)` to prevent pre-recognition of unrealized profit (`est > principal`), and transfer is capped by buffer so Strategy assets and backstop reserve are not consumed. However, if a loss is not reflected in `est` (or writeoff is delayed) and `est` does not fall below principal, surplus can be overstated and buffer can be over-transferred. Timely `writeoffStrategyPrincipal` ([VAULT-FR-009](#vault-fr-009)) and conservative estimates mitigate this ([§9](#9-security-requirements-sec) / [§12](#12-failure-and-exception-behavior-err)).
+-  - **Isolation of individual Strategy failures**: in the push model, ALLOCATOR calls each Strategy one by one with `sendProfitToVault`, so one failure does not cascade to others. This function reads Strategy valuation views; Strategies that cannot be read are valued at 0, and Treasury transfer is not made against cached value.
++  - **Isolation of individual Strategy failures**: in the push model, ALLOCATOR calls each Strategy one by one with `sendProfitToVault`, so one failure does not cascade to others. This function preflights every registered Strategy valuation view; if any is unavailable, `managedUnderlying = 0` and the entire Treasury transfer returns early. It does not transfer against cached value or an incomplete partial sum.
+   - **Non-Underlying and non-position reward tokens are out of scope**: `transferYieldToTreasury` handles only Underlying in the Vault liquid buffer and does not touch backstop reserve. Other-token rewards such as Aave incentives / Merkl are excluded from `totalUnderlying()` / `backingRatio()` and sent to Treasury through Strategy-side `sweepRewardToken`. Position / receipt / accounting tokens such as Aave aToken, Morpho vault shares, or Euler eToken / vault shares are not rewards and are rejected from sweeps as protected tokens in derived Strategies. If rewards are used for backing repair, Treasury/backstop converts them to Underlying and explicitly deposits through `backstopDeposit` or similar.
+   - Example: Strategy A (`principal=1000`, `est=1080`), buffer=50, backstop reserve=0, `L_effective=1000` -> before Stage 1, `M = 50 + min(1080,1000) = 1050`, `surplus=50` (80 profit inside Strategy is hidden by conservative valuation). ALLOCATOR calls `A.sendProfitToVault()` (Strategy function): realized 80 enters buffer, buffer=130, principal unchanged. ALLOCATOR calls `transferYieldToTreasury()`: `M = 130 + min(1000,1000) = 1130`, `surplus=130`, `transferred = min(130,130) = 130` -> Treasury receives 130 (this example assumes `bufferTargetBps=0` and `pendingWithdrawals=0`, so `B_reserve=0` and no reserve is subtracted; with `pendingWithdrawals>0` or `bufferTargetBps>0` the transfer shrinks to `min(surplus, max(bufferBalance()-B_reserve,0))`). If backstop reserve exists, it is excluded from `M`, so reserve deposits alone do not create Treasury surplus.
+ - **Verification**: unit (M<=L early path, buffer clamp, min valuation, backstop exclusion), invariant=[VAULT-INV-005](#vault-inv-005).
+@@ -689,10 +689,10 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ 
+ ### Accounting Principles
+ 
+-- **Conservative valuation (`min(est, principal)`)**: Solvency (`totalUnderlying`) values each Strategy at live `min(estimatedTotalUnderlying, principal)` to prevent pre-recognition of unrealized profit (`est > principal`). If Strategy valuation view reverts, use last-good conservative cache within `strategyValuationMaxAge` temporarily; stale/missing/disabled cache is 0. In contrast, `managedUnderlying` for Treasury transfer does not send against cached value and values Strategies whose live valuation cannot be read at 0. `getAllStrategies` returns raw `est` values for monitoring when readable, or 0 for unreadable estimates.
++- **Conservative valuation (`min(est, principal)`)**: Solvency (`totalUnderlying`) values each Strategy at live `min(estimatedTotalUnderlying, principal)` to prevent pre-recognition of unrealized profit (`est > principal`). If Strategy valuation view reverts, use last-good conservative cache within `strategyValuationMaxAge` temporarily; stale/missing/disabled cache is 0. In contrast, outbound `managedUnderlying` does not send against cached value or live values from only part of the registry; if any registered Strategy lacks live valuation, the entire value is 0. `getAllStrategies` returns raw `est` values for monitoring when readable, or 0 for unreadable estimates.
+ - **Liability definition**: `L_user = convertToUnderlying(dToken.totalSupply())`, rounded up to 1 base unit if dToken total supply contains dust not exactly corresponding to an Underlying base unit (same as `actualLiabilities()`). `L_pending = pendingWithdrawals`, `L_effective = L_user + L_pending`.
+ - **A/L is Underlying-denominated accounting, not a price oracle**: `A = totalUnderlying()` and `L_effective` are compared in the Underlying units of the Vault. `A < L_effective` does not mean "JPY market price fell"; it is an accounting comparison between recoverable Underlying from Strategies and dToken/pending claims in the same asset. dToken itself has no price oracle; Oracle Layer only multiplies market price by the Vault's `backingRatio()`.
+-- **Solvency principle**: the system aims to maintain `A = totalUnderlying() >= L_effective` at all times. Here, `A` is for backing / `backingRatio()` and includes protected backstop reserve. Transferable profit is computed internally from `M = managedUnderlying = bufferBalance() + Σ live min(est, principal)` with `surplus = max(M - L_effective, 0)`, and Treasury transfer is clamped by the liquid buffer above the reserve `B_reserve` (buffer target + `pendingWithdrawals`, the same one `allocate` keeps, [VAULT-FR-004](#vault-fr-004)). On Strategy valuation failure, `A` may use fresh cache, but `M` does not use cache and values that Strategy at 0. Therefore backstop reserve and cached Strategy value do not become Treasury surplus ([VAULT-FR-007](#vault-fr-007) / [VAULT-INV-001](#vault-inv-001)).
++- **Solvency principle**: the system aims to maintain `A = totalUnderlying() >= L_effective` at all times. Here, `A` is for backing / `backingRatio()` and includes protected backstop reserve. Transferable profit is computed internally from `M = managedUnderlying = bufferBalance() + Σ live min(est, principal)` with `surplus = max(M - L_effective, 0)`, and Treasury transfer is clamped by the liquid buffer above the reserve `B_reserve` (buffer target + `pendingWithdrawals`, the same one `allocate` keeps, [VAULT-FR-004](#vault-fr-004)). On Strategy valuation failure, `A` may use fresh cache, but `M` uses neither cache nor a partial sum and becomes 0 in full. Therefore backstop reserve, cached Strategy value, and an incomplete system view do not become allocation or Treasury surplus ([VAULT-FR-007](#vault-fr-007) / [VAULT-INV-001](#vault-inv-001)).
+ - **Backing ratio supplied to oracle**: derive `backingRatio() = min(1e18, A / L_effective)` from the same `A` and `L_effective` ([VAULT-FR-016](#vault-fr-016)), and Oracle Layer multiplies it into dToken collateral price ([Oracle Requirements Specification](Oracle.md) `ORCL-FR-014`). This means `A < L_effective` (principal impairment) is not left as unaddressed accounting failure; it **propagates through the oracle as a downward collateral-value adjustment into Liquity core liquidation / shutdown mechanisms** (failure absorbed through price).
+ - **Treatment of replenishment deposits**: `backstopDeposit` does not increase `L_effective` or dToken supply; it increases only protected reserve and `A`. Therefore during impairment it restores `backingRatio()`, but using it as source for claims during buffer shortage requires GOV `releaseBackstopToBuffer`.
+ - **`totalWeightBps` is a derived value**: automatically recalculated by `addStrategy` / `updateStrategy` / `removeStrategy`, with implementation enforcing `<= 10000`. No direct GOV setter.
+@@ -708,7 +708,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ | <a id="vault-inv-003"></a>VAULT-INV-003 | In buffer-insufficient redeem, `immediate payment + WithdrawRequest.underlyingAmount == underlyingNeeded`, and `pendingWithdrawals` increases by `remaining` (first-come-takes-all + delayed rule, [VAULT-FR-002](#vault-fr-002)) | invariant |
+ | <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(unclaimed WithdrawRequest.underlyingAmount)`. Successful claim reduces exactly that amount, and double claim is impossible (`claimed` flag, [VAULT-FR-006](#vault-fr-006)) | invariant |
+ | <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`. Strategies with live valuation readable use `min(estimatedTotalUnderlying_i, principal_i)`; valuation failure uses fresh cache; stale/missing/disabled cache is 0. This raw balance is the sum of liquid buffer and protected backstop reserve, while `bufferBalance()` excludes reserve. If live refresh fails after Vault->Strategy allocation, fallback cache is incremented by known outflow. `receiveFromStrategy` accounts `received` by balance delta, not declared amount, and fallback cache is reduced by actual receipt amount ([VAULT-FR-005](#vault-fr-005) / [VAULT-FR-007](#vault-fr-007)) | invariant |
+-| <a id="vault-inv-006"></a>VAULT-INV-006 | Per-call buffer->Strategy movement by `allocate()` is at most `allocateMaxMove`, and each Strategy allocation is at most cap headroom (`cap_i - est_i`). Amounts reduced by caps or skipped due to valuation/deposit failure are not reallocated and remain in buffer. Deposit rejection is skipped only after exact recovery; any mismatch reverts the whole call ([VAULT-FR-004](#vault-fr-004)) | invariant |
++| <a id="vault-inv-006"></a>VAULT-INV-006 | Per-call buffer->Strategy movement by `allocate()` is at most `allocateMaxMove`, and each Strategy allocation is at most cap headroom (`cap_i - est_i`). A failed managed-assets preflight stops all outbound movement. After a successful preflight, amounts reduced by caps or skipped due to a per-Strategy valuation reread/deposit failure are not reallocated and remain in buffer. Deposit rejection is skipped only after exact recovery; any mismatch reverts the whole call ([VAULT-FR-004](#vault-fr-004)) | invariant |
+ | <a id="vault-inv-007"></a>VAULT-INV-007 | `addToWhitelist` / `addStrategy` reject EOA / undeployed strategy, and `addStrategy` succeeds only when `whitelistedStrategies[strategy] == true`, `vault.underlying() != address(0)`, and `strategy.underlying() == vault.underlying()` ([VAULT-FR-008](#vault-fr-008)) | invariant |
+ | <a id="vault-inv-008"></a>VAULT-INV-008 | `removeStrategy` succeeds only when `strategy.principal() == 0` and live `strategy.estimatedTotalUnderlying() == 0` (remaining principal -> `StrategyHasPrincipal`; live valuation failure or residual assets -> `StrategyHasAssets`, [VAULT-FR-008](#vault-fr-008)) | invariant |
+ | <a id="vault-inv-009"></a>VAULT-INV-009 | Disabled Strategies (`enabled == false`) always have `weightBps == 0`. `totalWeightBps == Σ(registered Strategy weightBps) <= 10000` ([VAULT-FR-009](#vault-fr-009)) | invariant |
+@@ -854,7 +854,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ | VAULT-EVT-001 | `Deposited(user, underlyingAmount, dTokenAmount)` | Track deposit/Mint. `user = msg.sender`. Does not include referralCode (referral recorded on Zapper side) |
+ | VAULT-EVT-002 | `Redeemed(user, receiver, dTokenAmount, underlyingPaidNow, requestId)` | Track redeem. `requestId == 0` means immediate completion |
+ | VAULT-EVT-003 | `WithdrawRequested(user, receiver, requestId, amount, claimableAt)` | Detect delayed redemption (buffer shortage). Reconstruct unclaimed queue by diffing against `WithdrawClaimed` |
+-| VAULT-EVT-004 | `Allocated(bufferBefore, targetBuffer, bufferAfter)` / `StrategyAllocated(strategy, amount)` / `StrategyAllocationSkipped(strategy)` | Buffer before/target/after for `allocate()` aggregate, actual allocation per Strategy, and any Strategy skipped because live valuation was unavailable, its cap was reached, or its rejected deposit was recovered exactly |
++| VAULT-EVT-004 | `Allocated(bufferBefore, targetBuffer, bufferAfter)` / `StrategyAllocated(strategy, amount)` / `StrategyAllocationSkipped(strategy)` | Buffer before/target/after for `allocate()` aggregate, actual allocation per Strategy, and a Strategy skipped because its post-preflight cap valuation reread was unavailable, its cap was reached, or its rejected deposit was recovered exactly. Managed-assets preflight failure returns without an event and is monitored through status availability plus the keeper receipt |
+ | VAULT-EVT-005 | `ReceivedFromStrategy(strategy, declaredAmount, received)` | Push receipt from registered Strategy. Difference between `declaredAmount` and `received` detects fee-on-transfer / token anomalies |
+ | VAULT-EVT-006 | `WithdrawClaimed(user, requestId, amount)` | Receipt of delayed redemption. `user = req.owner`, `amount = req.underlyingAmount` |
+ | VAULT-EVT-007 | `YieldTransferredToTreasury(amount, treasury)` | Treasury transfer of buffer surplus (emitted even when `amount == 0`). Monitor for excessive frequency/amount |
+@@ -949,7 +949,7 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ 
+ - If `estimatedTotalUnderlying()` is overvalued, `transferYieldToTreasury` can inflate `surplus = M - L_effective`.
+ - **Guardrails**:
+-  - Conservative valuation in each Strategy implementation (subtract withdrawal friction and penalties). Vault values Strategy portions of both `A = totalUnderlying()` and `M = managedUnderlying` at live `min(estimatedTotalUnderlying, principal)` and does not include unrealized "paper profit" in `transferYieldToTreasury`. On valuation failure, `A` may use bounded cache, but `M` does not send against cached value and values that Strategy at 0. `M` also excludes protected backstop reserve
++  - Conservative valuation in each Strategy implementation (subtract withdrawal friction and penalties). Vault values Strategy portions of both `A = totalUnderlying()` and `M = managedUnderlying` at live `min(estimatedTotalUnderlying, principal)` and does not include unrealized "paper profit" in `transferYieldToTreasury`. On valuation failure, `A` may use bounded cache, but `M` does not send against cached value or a partial sum and becomes 0 in full. `M` also excludes protected backstop reserve
+   - Add `pendingWithdrawals` to liabilities (`L_effective`) so unclaimed claims do not flow to Treasury
+   - **Transfer is buffer-capped** ([VAULT-FR-007](#vault-fr-007)). `transferYieldToTreasury` can only send on-hand buffer surplus (cannot send assets that do not exist); profit realization is handled by `Strategy.sendProfitToVault` (bounded by `realizedYield()`) plus Strategy-side Vault balance-delta accounting for the yield-only direct transfer. `min(est, principal)` prevents pre-recognition when `est > principal`, but if loss is not reflected in `est` (or writeoff is delayed) and `est` exceeds true recoverable amount, over-transfer risk remains and is mitigated by timely writeoff and conservative valuation
+   - Non-Underlying and non-position reward tokens (Aave incentives / Merkl, etc.) are excluded from `estimatedTotalUnderlying()` and `totalUnderlying()` and are not targets of `transferYieldToTreasury`. If rewards are used for backing repair, they are separately converted to Underlying and explicitly deposited through `backstopDeposit` or similar. Position / receipt / accounting tokens are protected tokens in derived Strategies and rejected from reward sweep
+@@ -1040,7 +1040,7 @@ Pass condition for each requirement = the verification method in the table is sa
+ | VAULT-FR-001 | deposit (pause/ready/zero, conversion, mint) | unit, integration |
+ | VAULT-FR-002 | redeem (immediate/delayed, first-come-takes-all, CEI, exact amount) | unit, integration, invariant=VAULT-INV-002/003/014 |
+ | VAULT-FR-003 | redeemWithPermit (exact check -> permit -> burn(self), each revert) | unit, integration |
+-| VAULT-FR-004 | allocate (cooldown/pause/M==0, cap clamp, fixed weights, valuation/deposit-failure skip, full revert only when exact recovery fails) | unit, invariant=VAULT-INV-006 |
++| VAULT-FR-004 | allocate (cooldown/pause/M==0, all-outbound stop and automatic recovery on partial valuation, cap clamp, fixed weights, deposit-failure skip, full revert only when exact recovery fails) | unit, invariant=VAULT-INV-006 |
+ | VAULT-FR-005 | receiveFromStrategy (registration check, balance delta, zero short-circuit) | unit, invariant=VAULT-INV-005 |
+ | VAULT-FR-006 | claim (existence/ownership/time/buffer, no partial, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 |
+ | VAULT-FR-007 | transferYieldToTreasury (M<=L early path, buffer clamp, min valuation, backstop exclusion) | unit, invariant=VAULT-INV-001/005 |
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-02-Allocation-Valuation-Preflight-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-02-Allocation-Valuation-Preflight-Differential-Review.md
+new file mode 100644
+index 00000000..237bdb76
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Low-02-Allocation-Valuation-Preflight-Differential-Review.md
+@@ -0,0 +1,159 @@
++# External Audit Low 02: Allocation Valuation Preflight 差分レビュー
++
++- 対象 finding: `Low 02 Allocate Mis-Sizes Buffer Target When Strategy View Is Unavailable`
++- 判定: **Low を受理。ただし推奨する cache fallback は不採用**
++- 修正前 baseline: `4535dfedff82d28f4bcb97778ec4da96e8490787`
++- 対象 branch: `agent/audit-low02-fail-closed-allocation`
++- レビュー日: 2026-08-04
++
++## Executive Summary
++
++指摘された availability / liquidity coupling は実在する。修正前の `_managedUnderlying()` は、valuation が読めない
++Strategy だけを 0 として残りを合計した。その部分合計から buffer target を作るため、buffer 100、読取不能 Strategy A 800、
++healthy Strategy B 200、target 20% の再現では、正しい target 220 に対して修正前 target は 60 となり、40 が B へ移った。
++
++ただし、監査推奨の fresh cache fallback は outbound authority として安全ではない。cache は過去の
++`min(estimatedTotalUnderlying, principal)` であり、cache 記録後に損失が発生して live view が失敗した場合、現在の真の回収価値を
++上回り得る。「cache は常に true value 以下」という報告の根拠は時間をまたぐと成立しない。solvency view の一時的な誤清算抑止に
++bounded cache を使う設計と、その値に基づき新規送金する権限は分離する必要がある。
++
++修正は `_managedUnderlying()` を最小変更し、登録中の全 Strategy で live estimate と principal が揃う場合だけ合計を返す。1 件でも
++読めなければ `0` を返し、`allocate` と `transferYieldToTreasury` の outbound 全体を早期 return する。新規 storage、error、event、
++selector、compatibility layer は追加しない。依存が回復すれば次回 call は自動的に通常計算へ戻り、failure path は
++`lastAllocatorTime` を更新しないため cooldown も回復を遅らせない。
++
++## Scope And Baseline
++
++主なレビュー範囲:
++
++- `contracts/src/CollateralVault.sol`
++  - `allocate`
++  - `transferYieldToTreasury`
++  - `_managedUnderlying`
++  - `_strategyConservativeValue`
++  - `_liveStrategyValuation`
++  - `_allocateToStrategies`
++- `contracts/test/CollateralVaultStrategy.t.sol`
++- `contracts/test/CollateralVault.t.sol`
++- JP/EN CollateralVault specification、verification ledger、Strategy incident runbook
++
++比較基準は Low01 merge 後の `develop`、`4535dfed`。修正前 reproduction は同 SHA の独立 worktree で実行した。
++
++## Git History Context
++
++- `deb668422` (`Harden strategy valuation fallback`) は、solvency view 用の bounded last-good cache と、Treasury / yield accounting
++  用の live-only valuation を明示的に分離した。commit comment も「Treasury/yield accounting must not spend against a cached
++  Strategy value」と規定する。
++- `7a59cddd` は allocation 後の live refresh failure に対し、既知 outflow から fallback cache を安全に seed する処理を追加した。
++  これは backing view の連続性を守るもので、cache を新規 outbound の根拠へ昇格させるものではない。
++- `1e47c844` / PR #1396 は deposit reject を exact recovery 後に隔離した。今回の valuation preflight failure と、live valuation
++  成功後の venue deposit reject は別の failure class として扱う。
++
++## A/B Reproduction
++
++修正前 `4535dfed` に専用 test を置き、次を実コードで再現した。
++
++```text
++buffer                           100
++Strategy A live value            800 (weight 0, estimate read fails during allocate)
++Strategy B live value            200 (weight 10000)
++bufferTargetBps                  2000
++
++healthy system M                1100 -> target 220 -> outbound 0
++baseline partial M               300 -> target  60 -> outbound 40 to B
++```
++
++`test_Repro_UnavailableStrategyShrinksTargetAndMovesFortyFromBuffer` は修正前に PASS し、buffer 60、B receipt 40 を確認した。
++
++修正後の同型 test は、A failure 中に buffer 100、A/B receipt 0、`lastAllocatorTime == 0` を確認する。A view 回復後に buffer を
++300 とすると `M = 1300`、target 260、excess 40 が B へ自動的に配分される。
++
++## Claim-By-Claim Assessment
++
++1. **部分合計が buffer target を過小化する**: 正しい。修正前実コードで再現した。
++2. **即時償還 liquidity を不要に Strategy へ移す**: 正しい。fund loss ではないが delayed claim を増やす運用影響がある。
++3. **fresh cache は常に true value 以下**: 誤り。cache 記録後の venue loss、rate低下、accounting故障では過去 cache が現在価値を
++   上回り得る。
++4. **`totalUnderlying` と `_managedUnderlying` は同じ fallback にすべき**: 不採用。前者は bounded solvency view、後者は
++   allocation / Treasury の送金権限であり、failure 時の安全方向が異なる。
++5. **severity Low**: 妥当。直接 loss は確認されず、主影響はbuffer liquidity低下。ただし不確実性発生時のoutbound増加なので修正する。
++
++## What Changed
++
++- `_managedUnderlying()` は全登録 Strategy の `_liveStrategyValuation()` を順に読む。
++- 1 件でも `liveAvailable == false` なら、その Strategy だけを 0 加算せず、即座に `M = 0` を返す。
++- `allocate()` は既存の `M == 0` path で、送金、cooldown消費、`Allocated` 発火なしに return する。
++- `transferYieldToTreasury()` は既存の `M <= liabilities` path で `YieldTransferredToTreasury(0, treasury)` を発火し、送金しない。
++- 不要になった `_strategyConservativeValueLiveOrZero()` を削除した。
++- `totalUnderlying()` と `_strategyConservativeValue()` の bounded cache behavior は変更しない。
++- estimate failure / principal failure、allocation と Treasury の停止、回復後の自動再開を unit test で固定した。
++- JP/EN specification、verification ledger、runbook に monitoring / recovery / alert delivery を反映した。
++
++## Differential Side-Effect Review
++
++- **Backing / oracle**: `totalUnderlying()`、`backingRatio()`、cache TTL / invalidation は無変更。valuation failure 時の bounded
++  solvency view は維持される。
++- **Allocation availability**: 読取不能 Strategy 以外の healthy Strategy も当該 call では受け取らない。これはpartial system
++  viewでbufferを減らさないための意図したfail-closed挙動。
++- **Disabled / zero-weight Strategy**: `strategies[]` に残る限りpreflight対象。無効化後も資産・principalが残り得るため、weightだけで
++  system valuationから除外しない。
++- **Deposit rejection**: 全live preflight後の `_doDeposit` rejectはPR #1396のexact recoveryで当該shareだけ隔離し、後続へ進む。
++  valuation不確実性とdeposit availabilityを混同しない。
++- **Treasury**: 1件でもread failureならTreasury送金全体が0。不完全な部分合計やcacheからsurplusを作らない。
++- **Cooldown / recovery**: preflight failureは`lastAllocatorTime`を更新しない。依存回復後に永久open stateや手動resetなしで再試行できる。
++- **Events / monitoring**: managed-assets preflight failureは既存`M == 0`早期returnを使うため新eventなし。external monitorは
++  `getStrategyStatuses()` availability、keeper receipt、`Allocated`欠落を相関する。
++- **Gas / registry bound**: loopは既存の最大32 Strategy bound内。最初のfailureで早期returnする。storage走査や外部依存を追加しない。
++- **Upgradeability**: storage 34 slotsのslot / offset / type / gapはbaselineと完全一致。external selectorも不変。
++- **Code size**: targeted CI buildでCollateralVault runtime 24,564 bytes、EIP-170 margin 12 bytes。修正前margin 1 byteから改善した。
++
++## Adversarial Safety And Liveness Review
++
++- **Fresh but stale-in-reality cache**: venue loss後にread failureしてもcacheをoutboundに使わない。
++- **Estimate-only / principal-only failure**: いずれもfull live conservative valueを構成できず、outbound全体を0にする。
++- **Repeated failure under concurrent keeper traffic**: 各transactionは同じon-chain statusから0 outboundとなる。retryは資金移動を
++  増幅せず、cooldownも消費しない。clientは固定間隔で同期retryせずbackoffする。
++- **Dependency later healthy**: 次回callがlive合計、buffer target、固定weight配分へ自動復帰するtestを追加した。
++- **Never-settling / gas-exhausting view**: EVM同期callに永続physical workは残らない。gas exhaustion時はtransaction全体がrevertし、
++  caller timeoutだけをcancel/recovery証拠にしない。成功receiptとaffected data path eventで復旧を確認する。
++- **Malicious registered Strategy**: plausibleだが虚偽の値を返すStrategyは既存trusted whitelist境界。今回のavailability判定だけでは
++  Byzantine Strategyを検出しない。
++
++## Verification
++
++```text
++PASS baseline reproduction at 4535dfed
++     buffer 100 -> 60, healthy Strategy receipt 40
++PASS focused estimate/principal/Treasury failure and recovery tests
++     3 passed; 0 failed; 0 skipped
++PASS CollateralVaultStrategy.t.sol
++     120 passed; 0 failed; 0 skipped
++PASS CollateralVault.t.sol
++     55 passed; 0 failed; 0 skipped
++PASS InvariantPushModel.t.sol
++     4 passed; 0 failed; 0 skipped; each 500 runs / 25,000 calls
++PASS full contracts forge test
++     76 suites; 1,434 passed; 0 failed; 1 skipped
++PASS targeted CollateralVault production size build
++     CollateralVault runtime 24,564 bytes (EIP-170 margin 12 bytes)
++PASS storage layout comparison against 4535dfed
++     34 slots; slot / offset / type / gap identical
++PASS git diff --check
++```
++
++remote CI の最終結果は PR status に記録する。
++
++## Residual Risk And Limitations
++
++- preflight failure専用eventはない。新event追加より既存`M == 0` pathとcode-size余裕を優先した。外部monitor設定とtest incident完了前は
++  production-ready扱いにしない。
++- 登録Strategyが恒久的にread不能ならallocation / Treasuryは停止し続ける。Strategy upgrade、venue/RPC回復、live zero確認後のremove
++  が必要であり、cacheで迂回しない。
++- `M == 0`は「真に管理資産0」と「valuation unavailable」を内部で同じsafe no-opとして扱う。原因判定はstatusで行う。
++- live viewが誤った値を正常returnする場合は本修正の対象外。venue固有の保守評価、monitoring、writeoff policyを引き続き使う。
++- external monitor / escalation recipientの実環境設定とdelivery testは本source PRでは実行しない。runbookにactivation gateとして残す。
++
++## Methodology
++
++security-focused differential reviewとして、finding本文、JP source-of-truth、git history / blame、修正前A/B reproduction、変更行の
++blast radius、storage layout、EIP-170、unit / invariant / full suite、monitoringとautomatic recoveryを確認した。
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 072ce6e9..e7ac41a1 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -366,7 +366,7 @@ placeholder 期挙動（各行 = doc §12 の表 1 行。発火実証列に ✅
+ | VAULT-FR-001 | deposit（Underlying→dToken。pause/ready/zero・実着額換算・mint） | unit, integration | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-002 | redeem（即時／遅延・先着総取り・CEI・exact amount 拒否） | unit, integration, invariant=VAULT-INV-002/003/014 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-003 | redeemWithPermit（exact check→permit→burn(self)・各 revert） | unit, integration | ☑ | ☑ | `forge test --match-path test/CollateralVault.t.sol`（V6 / 2026-06-21: 55 passed） | PASS(unit) | round-trip / permit front-run 済み nonce + allowance / invalid permit + allowance 不足 `PermitFailed` / zero amount / zero receiver / non-exact dust before permit を確認。integration は未実施 |
+-| VAULT-FR-004 | allocate（cooldown/pause/M==0・cap クランプ・固定 weights・valuation failure skip・deposit reject は完全回収時のみ skip・回収不一致は全体 revert・再配分なし） | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | 未実施 | |
++| VAULT-FR-004 | allocate（cooldown/pause/M==0・partial valuation 時は全 outbound 停止＋cooldown 非消費＋自動復旧・cap クランプ・固定 weights・deposit reject は完全回収時のみ skip・回収不一致は全体 revert・再配分なし） | unit, invariant=VAULT-INV-006 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-005 | receiveFromStrategy（登録判定・残高差分計上・ゼロ短絡） | unit, invariant=VAULT-INV-005 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-006 | claim（存在/所有権/時刻/buffer 各 revert・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-007 | transferYieldToTreasury（M≤L 早期・buffer クランプ・min 評価・backstop 除外） | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | 未実施 | |
+diff --git a/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md b/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+index 42885b6e..2fa74cc5 100644
+--- a/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
++++ b/documents/jp/protocol/operations/runbooks/Strategy-Incident-Liquidation-Safety-Runbook.md
+@@ -44,7 +44,14 @@
+ - **市場 depeg と canonical 会計の違い**: stETH / wstETH や一部 yield token は、DEX 市場価格が下がっても protocol 内の canonical accounting が同時に毀損するとは限らない。清算価格へ反映するのは JPYdf の oracle / backing policy の対象であり、Strategy principal writeoff とは分ける。
+ - **branch symbol では判断しない**: 預け先が Aave なら Aave、Morpho / Euler なら ERC-4626、Sky なら asset-transforming の判定を使う。
+ 
+-### 2.1 Allocation deposit reject の監視・upgrade
++### 2.1 Allocation valuation preflight の監視・復旧
++
++- allocation keeper の各 call 前後で `getStrategyStatuses()` を外部 monitor から取得し、enabled / weight を問わず登録 Strategy の `estimateAvailable && principalAvailable` を確認する。1 件でも false なら `allocate` と `transferYieldToTreasury` は cached value や部分合計を使わず 0 outbound になる。`allocate` は `Allocated` を発火せず cooldown も消費しないため、keeper receipt 成功だけを正常配分と扱わず、status unavailable と同 call の `Allocated` 欠落を earliest stable machine event として warning/page する。
++- dependency が回復すれば次の keeper call で自動再開できる。復旧 probe は対象 Strategy の両 view、全登録 Strategy の status、buffer target、実際の `Allocated` / `StrategyAllocated`、前後 buffer を同一 block で確認する。never-settling / gas-exhausting view は transaction 全体を revert し得るため、keeper timeout だけで回復と判定せず、affected data path の成功 receipt とイベントを確認する。
++- 連続 failure または 1 keeper 周期を超える failure は on-call へ page し、`pauseAllocation`、外部 venue / RPC / Strategy implementation の調査、回復 probe の順に進める。fresh valuation cache を outbound 再開根拠にしない。
++- production 有効化前に、外部 monitor、escalation policy、実 recipient を接続し、valuation unavailable → 0 outbound → dependency 回復 → 自動再開までの明示した test incident を発報・受信・resolve して incident log に残す。token / webhook URL は記録しない。
++
++### 2.2 Allocation deposit reject の監視・upgrade
+ 
+ - `StrategyAllocationSkipped` を外部 monitor で購読し、同一 block 時点の `getStrategyStatuses()` が live available かつ cap 残ありなら、valuation/cap skip ではなく外部 venue の deposit reject と分類する。1 回目を warning、同一 Strategy の連続発生または keeper 周期内の再発を on-call へ page する。`allocate` が `DepositRecoveryFailed` で revert した場合は、完全回収不能として初回から page し、allocation を pause する。
+ - 構造化 log だけで完了扱いにしない。production 有効化前に外部 monitor、escalation policy、実際の当番 recipient を接続し、明示した test incident の発報・受信・resolve を一巡して incident log に記録する。token / webhook URL は記録しない。
+diff --git a/documents/jp/protocol/product/spec/CollateralVault.md b/documents/jp/protocol/product/spec/CollateralVault.md
+index 92547aba..8a1839c7 100644
+--- a/documents/jp/protocol/product/spec/CollateralVault.md
++++ b/documents/jp/protocol/product/spec/CollateralVault.md
+@@ -34,7 +34,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ 
+ - **コアへの露出は dToken のみ**: コアは dToken を 18dec 担保 ERC-20 として扱い、その裏側（実 Underlying・Strategy 運用・buffer・遅延償還）を一切知らない。Vault がこの裏側を吸収する。
+ - **push モデル**: Strategy → Vault へ戻る資金は Strategy 主導で push する。元本返却・固有緊急回収・汎用 idle 救済など **Strategy valuation cache を減額すべき経路**は `receiveFromStrategy`（[VAULT-FR-005](#vault-fr-005-receivefromstrategystrategy--vault-の-push-受入)）に集約する。一方、`sendProfitToVault` や Underlying reward claim のような **yield-only push** は Strategy が Vault buffer へ直接 `safeTransfer` し、Strategy principal / Vault valuation cache を減らさない。Vault は元本を Strategy から pull せず、Strategy が Vault へ push する。これに伴い approve 方向は反転し、**Strategy が初期化時に Vault を max approve** する（[Strategy 要件定義](./strategies/Strategy.md) の `sendToVault` 等の前提）。同期/非同期の区別は各 Strategy 実装の内部に閉じ、Vault の会計（`StrategyConfig`）はこれを持たない。
+-- **保守的会計（`min(est, principal)`）**: ソルベンシー評価では live `min(estimatedTotalUnderlying, principal)` を使い、valuation failure 時だけ bounded last-good cache に fallback する。収益送付では cached value に対して送金せず、live valuation が読めない Strategy は 0 評価する。配分・収益送付では protected backstop reserve を除いた `managedUnderlying` を使う（[VAULT-INV-005](#vault-inv-005)・[§7](#7-状態変数会計モデル)）。
++- **保守的会計（`min(est, principal)`）**: ソルベンシー評価では live `min(estimatedTotalUnderlying, principal)` を使い、valuation failure 時だけ bounded last-good cache に fallback する。配分・収益送付は cached value や一部 Strategy を 0 とした不完全な全体像に対して送金せず、登録 Strategy の live valuation が 1 件でも読めなければ `managedUnderlying = 0` として outbound 全体を早期 return する。配分・収益送付では protected backstop reserve を除いた `managedUnderlying` を使う（[VAULT-INV-005](#vault-inv-005)・[§7](#7-状態変数会計モデル)）。
+ - **先着総取り＋遅延償還**: redeem は liquid buffer 十分時は 1 Tx で完結し、不足時は現在の liquid buffer を先着で渡し、残りを `WithdrawRequest` として遅延化する。`pendingWithdrawals` で claim 用資金を Strategy への流出から守る（[VAULT-FR-002](#vault-fr-002-redeemdtoken--underlying)・[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)）。
+ - **buffer / backstop の責務分離**: `bufferBalance()` は redeem / claim / allocate / Treasury 送付に使える流動性のみを表す。`backstopDeposit()` は同じ Vault 内の Underlying を protected reserve として記帳し、`totalUnderlying()` / `backingRatio()` には含めるが、GOV が `releaseBackstopToBuffer()` で明示的に解放するまで redeem / claim には使わせない。これにより Strategy 毀損時の補填原資が通常 redeem の先着順で抜かれることを防ぐ（[VAULT-FR-017](#vault-fr-017-backstopdepositdtoken-を-mint-しない補填入金)）。
+ - **収益化の 2 段分離**: 第 1 段＝各 Strategy の Underlying 建て realized 収益を buffer へ引き上げる `Strategy.sendProfitToVault`（[Strategy 要件定義](./strategies/Strategy.md)）、第 2 段＝buffer 余剰を Treasury へ送る `transferYieldToTreasury`（[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)）。Strategy 内に滞留する収益は buffer 上限のため第 2 段だけでは届かないため、ALLOCATOR がまず第 1 段で引き上げる。Aave incentives / Merkl 等の非 Underlying・非 position reward token はこの 2 段会計には入れず、Strategy 共通 `sweepRewardToken` で Treasury へ送る。これにより 1 件の Strategy 障害が他へ波及しない。
+@@ -244,7 +244,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ - **権限**: `ALLOCATOR_ROLE` のみ。`pausedAllocation == false`（`whenNotPausedAllocation`）。
+ - **事前条件（Checks）**: `block.timestamp >= lastAllocatorTime + allocatorCooldown`；`pausedAllocation == false`。
+ - **動作（Effects）**:
+-  1. **managed assets とバッファを計測** — `M = managedUnderlying = bufferBalance() + Σ live min(Strategy_i.estimatedTotalUnderlying(), Strategy_i.principal())`。protected backstop reserve と cached Strategy value は配分対象でも目標 buffer 算出対象でもない。`M == 0` なら何もせず return（`lastAllocatorTime` 更新・`Allocated` 発火もしない）
++  1. **managed assets とバッファを計測** — `M = managedUnderlying = bufferBalance() + Σ live min(Strategy_i.estimatedTotalUnderlying(), Strategy_i.principal())`。protected backstop reserve と cached Strategy value は配分対象でも目標 buffer 算出対象でもない。enabled / weight を問わず登録中の Strategy の live valuation が 1 件でも構成できなければ `M = 0` として outbound 全体を fail-closed にする。`M == 0` なら何もせず return（`lastAllocatorTime` 更新・`Allocated` 発火もしないため、依存回復後に cooldown 待ちなしで再試行できる）
+   2. **目標バッファを算出** — `B_target = max(M * bufferTargetBps / 10000, bufferFloor) + pendingWithdrawals`（`pendingWithdrawals` 加算の根拠: claim 用資金が Strategy へ流出するのを防ぐ、[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)）
+   3. **配分対象量 `excess` を決定** — `excess = min(max(B - B_target, 0), allocateMaxMove)`
+   4. **`excess` を Strategy 群へ配分**（下記「配分ルール」。Strategy ごとの実配分額は `StrategyAllocated(strategy, amount)` で発火）
+@@ -253,17 +253,17 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+   - 対象は `enabled = true` の登録 Strategy のみ
+   - 各 Strategy への配分量は `weightBps_i / totalWeightBps` で按分
+   - 配分は **Vault が `safeTransfer(strategy, share)` で Underlying を送付し、Strategy の純受領額 `received` を残高差分で測った後に `strategy.deposit(share, received)` を呼ぶ**（push モデルの預入）。Strategy は成功時に `received`、完全回収後の skip 時に `0` を返す
+-  - 各 Strategy の cap 残（`cap_i - estimatedTotalUnderlying_i`）を超える分は当該 Strategy へ送らない。`estimatedTotalUnderlying()` または `principal()` が revert し、live `min(est, principal)` を構成できない Strategy は当該回の allocation で skip する
++  - 各 Strategy の cap 残（`cap_i - estimatedTotalUnderlying_i`）を超える分は当該 Strategy へ送らない。managed assets preflight で `estimatedTotalUnderlying()` または `principal()` が 1 件でも読めなければ当該回の allocation 全体を早期 return する。preflight 後の Strategy 別 cap 再読だけが失敗した場合は、その Strategy の share のみ skip する
+   - `BaseStrategy.deposit` は `_doDeposit(received)` を self-only の別 call frame で実行する。非 0 の `share` に対して `received == 0` なら fail-closed とする。非 0 の受取後に外部プロトコルが reject した場合、その frame の protocol 操作を巻き戻し、`share == received`（往路 transfer fee なし）かつ Strategy 減少額・Vault 実増額がともに `received` と一致するときだけ idle Underlying を Vault へ戻して `0` を返す。Vault は `StrategyAllocationSkipped` を発火して後続 Strategy を続行する
+   - `share != received`、返送失敗、fee-on-transfer / rebasing 等で送受残高差が一致しない場合は `DepositRecoveryFailed` で `allocate()` 全体を revert し、最初の `safeTransfer` から巻き戻す。単純な catch 後に Strategy idle へ資金を残す動作は許可しない
+-  - **cap で削られた分・valuation failure または deposit reject で skip された分は他 Strategy へ再配分しない**（残量は Vault buffer に留まる）
++  - **cap で削られた分・preflight 後の Strategy 別 valuation 再読 failure または deposit reject で skip された分は他 Strategy へ再配分しない**（残量は Vault buffer に留まる）
+   - 運用上 `totalWeightBps == 10000` を維持することを推奨。意図的に下げる場合、登録 Strategy 内で按分される量が増えることに注意
+-- **revert / 早期 return**: `block.timestamp < lastAllocatorTime + allocatorCooldown` → `CooldownNotMet`；`pausedAllocation == true` → revert；`M == 0` → 早期 return（イベント・時刻更新なし）；deposit reject 後に exact recovery できない場合 → `DepositRecoveryFailed` で全体 revert。exact recovery できる reject は当該 Strategy のみ skip する。
+-- **発火イベント**: `StrategyAllocated(strategy, amount)`（Strategy ごとの実配分額）/ `StrategyAllocationSkipped(strategy)`（live valuation 不可、cap 到達、または deposit reject 後の完全回収で当該 Strategy へ配分しない場合）/ `Allocated(bufferBefore, targetBuffer, bufferAfter)`（1 回の `allocate()` 前後のバッファ集約、[VAULT-EVT-004](#11-イベント監視要件evt)）。skip の原因切り分けはイベントと `getStrategyStatuses()` の availability / capRemaining / buffer 残を併用し、availability が正常かつ cap 残ありなら deposit reject と判定する。
++- **revert / 早期 return**: `block.timestamp < lastAllocatorTime + allocatorCooldown` → `CooldownNotMet`；`pausedAllocation == true` → revert；`M == 0`（残高 0 または登録 Strategy の live valuation 不可）→ 早期 return（イベント・時刻更新なし）；deposit reject 後に exact recovery できない場合 → `DepositRecoveryFailed` で全体 revert。exact recovery できる reject は当該 Strategy のみ skip する。
++- **発火イベント**: `StrategyAllocated(strategy, amount)`（Strategy ごとの実配分額）/ `StrategyAllocationSkipped(strategy)`（preflight 後の cap 用 valuation 再読不可、cap 到達、または deposit reject 後の完全回収で当該 Strategy へ配分しない場合）/ `Allocated(bufferBefore, targetBuffer, bufferAfter)`（1 回の `allocate()` 前後のバッファ集約、[VAULT-EVT-004](#11-イベント監視要件evt)）。managed assets preflight failure は outbound も cooldown も進めずイベントなしで早期 return するため、外部 monitor は `getStrategyStatuses()` の availability と keeper call 後の `Allocated` 欠落を相関する。availability が正常かつ cap 残ありの `StrategyAllocationSkipped` は deposit reject と判定する。
+ - **設計上のポイント**:
+   - Strategy 別の投下額は `StrategyAllocated` でイベント追跡できる。現在値・AUM・推定損益は `getStrategyStatuses()` を一次ソースにし、subgraph（The Graph）側で時系列スナップショット化する運用とする（[§11](#11-イベント監視要件evt)）。
+-  - 例: `excess = 1000`、A（`weightBps = 5000`、cap 残 200）、B（`weightBps = 5000`、cap 残 1000）、`totalWeightBps = 10000` → A は 500 算出 → cap で 200 に削られ A=200、`remaining=800`；B は 500 算出 → cap 余裕あり B=500、`remaining=300`；**残 300 は Vault buffer に残る**。A の valuation（estimate または principal）が revert した場合は A を skip し、A の算出 share は buffer に残す。
+-- **Verification**: unit（cooldown・pause・M==0・cap クランプ・estimate/principal failure skip・deposit reject の完全回収＋後続継続・transfer fee で exact recovery 不可なら全体 revert・再配分しない）, invariant=[VAULT-INV-006](#vault-inv-006)。
++  - 例: `excess = 1000`、A（`weightBps = 5000`、cap 残 200）、B（`weightBps = 5000`、cap 残 1000）、`totalWeightBps = 10000` → A は 500 算出 → cap で 200 に削られ A=200、B は 500 算出 → cap 余裕あり B=500、**残 300 は Vault buffer に残る**。managed assets preflight で A の valuation（estimate または principal）が revert した場合は allocation 全体を早期 return し、B にも送らない。
++- **Verification**: unit（cooldown・pause・M==0・cap クランプ・estimate/principal failure 時の全 outbound 停止＋cooldown 非消費＋自動復旧・deposit reject の完全回収＋後続継続・transfer fee で exact recovery 不可なら全体 revert・再配分しない）, invariant=[VAULT-INV-006](#vault-inv-006)。
+ 
+ ### VAULT-FR-005: receiveFromStrategy（Strategy → Vault の push 受入）
+ 
+@@ -324,7 +324,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ - **事前条件（Checks）**: ALLOCATOR_ROLE 保有；`pausedAllocation == false`。
+ - **会計原則**:
+   - `A = totalUnderlying()`: backing / oracle 用の総資産。Vault raw Underlying balance（liquid buffer + backstop reserve）に、各 Strategy の保守評価を加算
+-  - `M = managedUnderlying`: allocation / Treasury 用の管理対象資産。`bufferBalance() + Σ live min(estimatedTotalUnderlying, principal)` で、protected backstop reserve を除外する。Strategy valuation が読めない場合は cached value で送金せず、その Strategy を 0 評価する
++  - `M = managedUnderlying`: allocation / Treasury 用の管理対象資産。`bufferBalance() + Σ live min(estimatedTotalUnderlying, principal)` で、protected backstop reserve を除外する。登録 Strategy の valuation が 1 件でも読めない場合は cached value や部分合計で送金せず、`M = 0` として outbound 全体を早期 return する
+   - `L_user = actual dToken liabilities`: `convertToUnderlying(dToken.totalSupply())` を基本とし、legacy / migration 等で総供給が Underlying base unit に exact 対応しない dust を含む場合は 1 base unit へ切り上げる
+   - `L_pending = pendingWithdrawals`: 既発行の遅延償還の未 claim 残（[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)）
+   - `L_effective = L_user + L_pending`
+@@ -340,7 +340,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ - **設計上のポイント**:
+   - **2 段に分離した理由**: Strategy 内に滞留している収益は本関数だけでは Treasury へ届かない（buffer 上限のため）。ALLOCATOR はまず Strategy の `sendProfitToVault`（[Strategy 要件定義](./strategies/Strategy.md)）で収益を buffer へ引き上げ、続けて本関数で Treasury へ送る。
+   - **取りすぎの抑制**: `M` は `min(estimatedTotalUnderlying, principal)` の保守評価で未実現収益（est > principal）の前計上を防ぎ、送金は buffer 上限のため Strategy 内資産と backstop reserve を取り崩さない。ただし **損失が est に未反映で est が principal を下回っていない**（または writeoff が遅延した）場合は surplus が過大評価され、buffer から取りすぎが起こり得る。適時の `writeoffStrategyPrincipal`（[VAULT-FR-009](#vault-fr-009-updatestrategy--writeoffstrategyprincipal登録-strategy-の調整と元本毀損確定)）と保守的 est で軽減する（[§9](#9-セキュリティ要件sec) / [§12](#12-失敗時異常系挙動err)）。
+-  - **個別 Strategy 障害の隔離**: push モデルでは ALLOCATOR が Strategy を 1 件ずつ `sendProfitToVault` で呼ぶため、1 件の失敗が他へ波及しない。本関数は Strategy の valuation view を読むが、取得不能な Strategy は 0 評価し、cached value に対して Treasury 送金しない。
++  - **個別 Strategy 障害の隔離**: push モデルでは ALLOCATOR が Strategy を 1 件ずつ `sendProfitToVault` で呼ぶため、1 件の失敗が他へ波及しない。本関数は全登録 Strategy の valuation view を preflight し、1 件でも取得不能なら `managedUnderlying = 0` として Treasury 送金全体を早期 return する。cached value や不完全な部分合計に対して送金しない。
+   - **非 Underlying・非 position reward token は対象外**: `transferYieldToTreasury` は Vault liquid buffer 内の Underlying だけを扱い、backstop reserve には触れない。Aave incentives / Merkl 等の別トークン報酬は `totalUnderlying()` / `backingRatio()` に含めず、Strategy 側の `sweepRewardToken` で Treasury へ送る。Aave aToken、Morpho vault share、Euler eToken / vault share 等の position / receipt / accounting token は reward ではなく、派生 Strategy 側で protected token として sweep を拒否する。backing を修復する場合は Treasury / backstop が報酬を Underlying に換金して `backstopDeposit` 等で明示的に入金する。
+   - 例: Strategy A（principal=1000、est=1080）、buffer=50、backstop reserve=0、`L_effective=1000` → 第 1 段前の `M = 50 + min(1080,1000) = 1050`、`surplus=50`（Strategy 内の収益 80 は保守評価で隠れている）。ALLOCATOR が `A.sendProfitToVault()`（Strategy 関数）: realized 80 が buffer へ積まれ buffer=130、principal 不変。ALLOCATOR が `transferYieldToTreasury()`: `M = 130 + min(1000,1000) = 1130`、`surplus=130`、`transferred = min(130,130) = 130` → Treasury へ 130（本例は `bufferTargetBps=0`・`pendingWithdrawals=0` ゆえ `B_reserve=0`＝予約控除なし。`pendingWithdrawals>0` または `bufferTargetBps>0` では送金は `min(surplus, max(bufferBalance()-B_reserve,0))` まで縮む）。backstop reserve が存在しても `M` から除外されるため、reserve 入金だけでは Treasury surplus は生まれない。
+ - **Verification**: unit（M<=L 早期・buffer クランプ・min 評価・backstop 除外）, invariant=[VAULT-INV-005](#vault-inv-005)。
+@@ -692,10 +692,10 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ 
+ ### 会計原則
+ 
+-- **保守評価（`min(est, principal)`）**: ソルベンシー（`totalUnderlying`）では各 Strategy を live `min(estimatedTotalUnderlying, principal)` で評価し、未実現収益（est > principal）の前計上を防ぐ。Strategy valuation view が revert した場合は、`strategyValuationMaxAge` 内の last-good conservative cache を一時的に使い、stale/missing/無効 cache は 0 評価する。一方、収益送付の `managedUnderlying` は cached value に対して送金せず、live valuation が読めない Strategy を 0 評価する。`getAllStrategies` は監視のため、読める場合は `est` 生値、読めない場合は 0 を返す。
++- **保守評価（`min(est, principal)`）**: ソルベンシー（`totalUnderlying`）では各 Strategy を live `min(estimatedTotalUnderlying, principal)` で評価し、未実現収益（est > principal）の前計上を防ぐ。Strategy valuation view が revert した場合は、`strategyValuationMaxAge` 内の last-good conservative cache を一時的に使い、stale/missing/無効 cache は 0 評価する。一方、outbound 用の `managedUnderlying` は cached value や一部 Strategy の live 値だけに対して送金せず、登録 Strategy の live valuation が 1 件でも読めなければ全体を 0 とする。`getAllStrategies` は監視のため、読める場合は `est` 生値、読めない場合は 0 を返す。
+ - **負債の定義**: `L_user = convertToUnderlying(dToken.totalSupply())` を基本とし、dToken 総供給が Underlying base unit に exact 対応しない dust を含む場合は 1 base unit へ切り上げる（`actualLiabilities()` と同一）。`L_pending = pendingWithdrawals`、`L_effective = L_user + L_pending`。
+ - **A/L 判定は価格 oracle ではなく Underlying 建て会計**: `A = totalUnderlying()` と `L_effective` はどちらも当該 Vault の Underlying 単位で比較する。`A < L_effective` は「JPY 建て市場価格が下がった」という判定ではなく、Strategy から見た回収可能 Underlying と dToken/pending 請求権の同一資産建て会計比較である。dToken 自体に価格 oracle は持たせず、Oracle Layer は Vault が返す `backingRatio()` を市場価格へ乗じるだけ。
+-- **ソルベンシー原則**: 常に `A = totalUnderlying() >= L_effective` を維持することを目標にする。ここで `A` は backing / `backingRatio()` 用であり、protected backstop reserve を含む。一方、送金可能な収益は内部の `M = managedUnderlying = bufferBalance() + Σ live min(est, principal)` から `surplus = max(M - L_effective, 0)` で算出し、Treasury 送付は liquid buffer のうち `allocate` と同じ流動性予約 `B_reserve`（buffer target + `pendingWithdrawals`、[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)）を超える分を上限にクランプする。Strategy valuation failure 時、`A` は fresh cache を使い得るが、`M` は cache を使わず 0 評価する。したがって backstop reserve や cached Strategy value は Treasury surplus にならない（[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付) / [VAULT-INV-001](#vault-inv-001)）。
++- **ソルベンシー原則**: 常に `A = totalUnderlying() >= L_effective` を維持することを目標にする。ここで `A` は backing / `backingRatio()` 用であり、protected backstop reserve を含む。一方、送金可能な収益は内部の `M = managedUnderlying = bufferBalance() + Σ live min(est, principal)` から `surplus = max(M - L_effective, 0)` で算出し、Treasury 送付は liquid buffer のうち `allocate` と同じ流動性予約 `B_reserve`（buffer target + `pendingWithdrawals`、[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)）を超える分を上限にクランプする。Strategy valuation failure 時、`A` は fresh cache を使い得るが、`M` は cache や部分合計を使わず全体を 0 とする。したがって backstop reserve、cached Strategy value、不完全な system view は allocation / Treasury surplus にならない（[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付) / [VAULT-INV-001](#vault-inv-001)）。
+ - **backing 比のオラクル供給**: 同じ `A` と `L_effective` から `backingRatio() = min(1e18, A / L_effective)` を導き（[VAULT-FR-016](#vault-fr-016-backingratiodtoken-裏付け率の供給)）、Oracle Layer がこれを dToken 担保価格に乗じる（[Oracle 要件定義](./Oracle.md) `ORCL-FR-014`）。これにより `A < L_effective`（元本毀損）は「会計上の破綻」として放置されず、**担保価値の下方修正としてオラクル経由で Liquity コアの清算・shutdown 機構に伝播**する（破綻を価格で吸収する経路）。
+ - **補填入金の扱い**: `backstopDeposit` は `L_effective` や dToken 供給量を増やさず、protected reserve と `A` だけを増やす。したがって毀損時は `backingRatio()` を回復させるが、buffer 不足時の `claim` 原資として使うには GOV の `releaseBackstopToBuffer` が必要である。
+ - **`totalWeightBps` は派生値**: `addStrategy` / `updateStrategy` / `removeStrategy` で自動集計し `<= 10000` を実装が強制。GOV の直接 setter は持たない。
+@@ -711,7 +711,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | <a id="vault-inv-003"></a>VAULT-INV-003 | buffer 不足 redeem では `即時支払い + WithdrawRequest.underlyingAmount == underlyingNeeded` かつ `pendingWithdrawals` が `remaining` だけ増える（先着総取り＋遅延ルール、[VAULT-FR-002](#vault-fr-002-redeemdtoken--underlying)） | invariant |
+ | <a id="vault-inv-004"></a>VAULT-INV-004 | `pendingWithdrawals == Σ(未 claim の WithdrawRequest.underlyingAmount)`。claim 成功で当該分だけ減り、二重 claim はできない（`claimed` フラグ、[VAULT-FR-006](#vault-fr-006-claimwithdrawrequest-の遅延償還受領)） | invariant |
+ | <a id="vault-inv-005"></a>VAULT-INV-005 | `totalUnderlying() == underlying.balanceOf(vault) + Σ strategyConservativeValue_i`。live valuation が読める Strategy は `min(estimatedTotalUnderlying_i, principal_i)`、valuation failure 時は fresh cache、stale/missing/無効 cache は 0 評価する。この raw balance は liquid buffer と protected backstop reserve の合計であり、`bufferBalance()` は reserve を除外する。Vault→Strategy allocation 後に live refresh が失敗した場合、fallback cache は投下前に読めた live 保守値へ既知 outflow 分を足した値で seed し、古い/stale cache を fresh 化しない。`receiveFromStrategy` の `received` は declared でなく残高差分で計上され、fallback cache は実着額分だけ減額される（[VAULT-FR-005](#vault-fr-005-receivefromstrategystrategy--vault-の-push-受入) / [VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)） | invariant |
+-| <a id="vault-inv-006"></a>VAULT-INV-006 | `allocate()` の 1 回の buffer→Strategy 移動量は `allocateMaxMove` 以下、かつ各 Strategy への配分は cap 残（`cap_i - est_i`）以下。cap で削られた分・valuation/deposit failure で skip された分は再配分されず buffer に留まる。deposit reject 時は完全回収できた場合だけ skip し、不一致は全体 revert する（[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)） | invariant |
++| <a id="vault-inv-006"></a>VAULT-INV-006 | `allocate()` の 1 回の buffer→Strategy 移動量は `allocateMaxMove` 以下、かつ各 Strategy への配分は cap 残（`cap_i - est_i`）以下。managed-assets preflight failure は outbound 全体を停止する。preflight 成功後、cap で削られた分・Strategy 別 valuation 再読/deposit failure で skip された分は再配分されず buffer に留まる。deposit reject 時は完全回収できた場合だけ skip し、不一致は全体 revert する（[VAULT-FR-004](#vault-fr-004-allocatebuffer-余剰を-strategy-へ配分)） | invariant |
+ | <a id="vault-inv-007"></a>VAULT-INV-007 | `addToWhitelist` / `addStrategy` は EOA / 未デプロイ strategy を拒否し、`addStrategy` は `whitelistedStrategies[strategy] == true` かつ `vault.underlying() != address(0)` かつ `strategy.underlying() == vault.underlying()` のときのみ成功する（[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)） | invariant |
+ | <a id="vault-inv-008"></a>VAULT-INV-008 | `removeStrategy` は `strategy.principal() == 0` かつ live `strategy.estimatedTotalUnderlying() == 0` のときのみ成功する（残元本があれば `StrategyHasPrincipal`、live valuation 失敗または残余資産があれば `StrategyHasAssets`、[VAULT-FR-008](#vault-fr-008-strategy-whitelist登録解除addtowhitelist--removefromwhitelist--addstrategy--removestrategy)） | invariant |
+ | <a id="vault-inv-009"></a>VAULT-INV-009 | 無効化済み Strategy（`enabled == false`）は必ず `weightBps == 0`。`totalWeightBps == Σ(登録 Strategy の weightBps) <= 10000`（[VAULT-FR-009](#vault-fr-009-updatestrategy--writeoffstrategyprincipal登録-strategy-の調整と元本毀損確定)） | invariant |
+@@ -857,7 +857,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | VAULT-EVT-001 | `Deposited(user, underlyingAmount, dTokenAmount)` | deposit/Mint 追跡。`user = msg.sender`。referralCode は含めない（referral は Zapper 側で記録） |
+ | VAULT-EVT-002 | `Redeemed(user, receiver, dTokenAmount, underlyingPaidNow, requestId)` | redeem 追跡。`requestId == 0` は即時完了 |
+ | VAULT-EVT-003 | `WithdrawRequested(user, receiver, requestId, amount, claimableAt)` | 遅延償還発生（buffer 不足）の検知。`WithdrawClaimed` との差分で未 claim キューを再構成 |
+-| VAULT-EVT-004 | `Allocated(bufferBefore, targetBuffer, bufferAfter)` / `StrategyAllocated(strategy, amount)` / `StrategyAllocationSkipped(strategy)` | `allocate()` の前バッファ・目標バッファ・後バッファ（集約）、Strategy ごとの実配分額、および live valuation 不可・cap 到達・deposit reject 後の完全回収で配分しなかった Strategy |
++| VAULT-EVT-004 | `Allocated(bufferBefore, targetBuffer, bufferAfter)` / `StrategyAllocated(strategy, amount)` / `StrategyAllocationSkipped(strategy)` | `allocate()` の前バッファ・目標バッファ・後バッファ（集約）、Strategy ごとの実配分額、および preflight 後の cap 用 valuation 再読不可・cap 到達・deposit reject 後の完全回収で配分しなかった Strategy。managed assets preflight failure はイベントなしの早期 return のため status availability と keeper receipt で監視する |
+ | VAULT-EVT-005 | `ReceivedFromStrategy(strategy, declaredAmount, received)` | 登録 Strategy からの push 受入。`declaredAmount` と `received` の差分で fee-on-transfer / トークン異常を検出 |
+ | VAULT-EVT-006 | `WithdrawClaimed(user, requestId, amount)` | 遅延償還の受領。`user = req.owner`、`amount = req.underlyingAmount` |
+ | VAULT-EVT-007 | `YieldTransferredToTreasury(amount, treasury)` | buffer 余剰の Treasury 送付（`amount == 0` でも発火）。頻度・金額が過大でないか監視 |
+@@ -953,7 +953,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ 
+ - `estimatedTotalUnderlying()` が過大評価だと `transferYieldToTreasury` の `surplus = M - L_effective` が水増しされる恐れ。
+ - **ガードレール**:
+-  - 各 Strategy 実装で保守的評価（引出し摩擦・ペナルティを差し引く）。Vault は `A = totalUnderlying()` と `M = managedUnderlying` の Strategy 部分をどちらも live `min(estimatedTotalUnderlying, principal)` で評価し、未実現の「見かけ収益」を `transferYieldToTreasury` の対象に含めない。valuation failure 時、`A` は bounded cache を使い得るが、`M` は cached value に対して送金せず当該 Strategy を 0 評価する。さらに `M` は protected backstop reserve を除外する
++  - 各 Strategy 実装で保守的評価（引出し摩擦・ペナルティを差し引く）。Vault は `A = totalUnderlying()` と `M = managedUnderlying` の Strategy 部分をどちらも live `min(estimatedTotalUnderlying, principal)` で評価し、未実現の「見かけ収益」を `transferYieldToTreasury` の対象に含めない。valuation failure 時、`A` は bounded cache を使い得るが、`M` は cached value や部分合計に対して送金せず全体を 0 とする。さらに `M` は protected backstop reserve を除外する
+   - `pendingWithdrawals` を負債側（`L_effective`）に加算し claim 未受領分を Treasury に流出させない
+   - **送金は buffer を上限**（[VAULT-FR-007](#vault-fr-007-transferyieldtotreasury収益の-treasury-送付)）。`transferYieldToTreasury` は手元の buffer 余剰しか送らず（実在しない資産は送れない）、収益実現は `Strategy.sendProfitToVault`（`realizedYield()` 上限）＋ Strategy 側の Vault 残高差分計上（yield-only direct transfer）が担う。`min(est, principal)` は est > principal の前計上を防ぐが、**損失が est に反映されず（または writeoff 遅延で）est が真の回収可能額を上回る**場合は surplus 過大評価による取りすぎが残るため、適時 writeoff と保守評価で軽減する
+   - 非 Underlying・非 position reward token（Aave incentives / Merkl 等）は `estimatedTotalUnderlying()` と `totalUnderlying()` に含めず、`transferYieldToTreasury` の対象外とする。報酬を backing 修復へ使う場合は、別途 Underlying に換金して `backstopDeposit` 等で明示的に補填する。position / receipt / accounting token は派生 Strategy の protected token として reward sweep を拒否する
+@@ -1020,7 +1020,7 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ | VAULT-FR-001 | deposit（pause/ready/zero・換算・mint） | unit, integration |
+ | VAULT-FR-002 | redeem（即時／遅延・先着総取り・CEI・exact amount） | unit, integration, invariant=VAULT-INV-002/003/014 |
+ | VAULT-FR-003 | redeemWithPermit（exact check→permit→burn(self)・各 revert） | unit, integration |
+-| VAULT-FR-004 | allocate（cooldown/pause/M==0・cap クランプ・固定 weights・valuation/deposit failure skip・exact recovery 不可時のみ全体 revert） | unit, invariant=VAULT-INV-006 |
++| VAULT-FR-004 | allocate（cooldown/pause/M==0・partial valuation 時の outbound 全停止と自動復旧・cap クランプ・固定 weights・deposit failure skip・exact recovery 不可時のみ全体 revert） | unit, invariant=VAULT-INV-006 |
+ | VAULT-FR-005 | receiveFromStrategy（登録判定・残高差分・ゼロ短絡） | unit, invariant=VAULT-INV-005 |
+ | VAULT-FR-006 | claim（存在/所有権/時刻/buffer・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 |
+ | VAULT-FR-007 | transferYieldToTreasury（M<=L 早期・buffer クランプ・min 評価・backstop 除外） | unit, invariant=VAULT-INV-001/005 |

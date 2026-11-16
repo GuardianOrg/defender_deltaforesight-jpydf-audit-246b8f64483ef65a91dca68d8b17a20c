@@ -1,0 +1,31 @@
+{
+  "finding": "L-01",
+  "pr": 125,
+  "reviewedHead": "3e9a625f4fbd4b1c9c31fce7f90dc4010e243b01",
+  "mergeCommit": "f7409c5d505468934a6f468524814646c82598d8",
+  "reviewer": "Claude Fable (claude-fable-5-1), read-only; approved, no blockers",
+  "checks": {
+    "focusedTestsPassed": 50,
+    "lifecycleFuzzRuns": 256,
+    "fastGate": {
+      "passed": 1810,
+      "failed": 1,
+      "skipped": 1,
+      "failure": "Expected error changed from CapExceeded to DToken__RiskParamsNotFinalized; assertion corrected and the sole failed test rerun successfully (1 passed)."
+    },
+    "productionSizeGate": "passed",
+    "solc": "0.8.24",
+    "evm": "cancun",
+    "optimizerRuns": 200,
+    "viaIR": false,
+    "runtimeBytes": {
+      "DToken": 12108,
+      "CollateralVault": 23193,
+      "TroveManager": 24568,
+      "BorrowerOperations": 24559
+    },
+    "storage": "30 existing fields preserved; registry at slot 362 consumes one gap slot, 48 -> 47",
+    "slither": "Direct solc scan completed: 6 reviewed non-blocking findings (ownership cancellation zero-check, imported dead helpers, storage gap). Foundry adapter could not parse build-info."
+  },
+  "limits": "Fresh deployment only; existing-supply upgrades require separate migration. Not Guardian-verified."
+}

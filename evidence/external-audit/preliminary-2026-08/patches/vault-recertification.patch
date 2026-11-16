@@ -1,0 +1,270 @@
+diff --git a/contracts/test/InvariantPushModel.t.sol b/contracts/test/InvariantPushModel.t.sol
+index 3a1b72fa..46120e1f 100644
+--- a/contracts/test/InvariantPushModel.t.sol
++++ b/contracts/test/InvariantPushModel.t.sol
+@@ -15,6 +15,7 @@ import "./PushModelMocks.sol";
+ import "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+ import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+ import "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
++import "openzeppelin-contracts/contracts/utils/math/Math.sol";
+ import "openzeppelin-contracts-upgradeable/token/ERC20/extensions/IERC20MetadataUpgradeable.sol";
+ 
+ /// @notice Local 8-decimal mintable token used by the invariant suite.
+@@ -178,6 +179,45 @@ contract PushModelHandler is Test {
+         try vault.allocate() {} catch {}
+     }
+ 
++    /// @notice Exercise valid governance configuration transitions while keeping
++    ///         the aggregate weight within the Vault's 10,000 bps bound.
++    function h_updateStrategy(uint8 stratSel, uint256 weightSeed, uint256 capSeed, bool enabled) public {
++        IStrategy strat = _strategyOf(stratSel);
++        (, uint256 oldWeight,) = vault.strategyConfigs(strat);
++        uint256 totalWithoutSelected = vault.totalWeightBps() - oldWeight;
++        uint256 maxWeight = 10_000 - totalWithoutSelected;
++        uint256 newWeight = enabled ? bound(weightSeed, 0, maxWeight) : 0;
++        uint256 newCap = bound(capSeed, 0, 1e15);
++
++        vm.prank(admin);
++        try vault.updateStrategy(strat, newWeight, newCap, enabled) {} catch {}
++    }
++
++    /// @notice Exercise the guardian's immediate risk-reduction path.
++    function h_emergencyDisableStrategy(uint8 stratSel) public {
++        vm.prank(admin);
++        try vault.emergencyDisableStrategy(_strategyOf(stratSel)) {} catch {}
++    }
++
++    /// @notice Recover from the incident pauses created by emergency disable so
++    ///         sustained fuzz traffic can continue proving liveness.
++    function h_unpauseAll() public {
++        vm.startPrank(admin);
++        if (vault.pausedDeposit()) {
++            try vault.unpauseDeposit() {} catch {}
++        }
++        if (vault.pausedRedeem()) {
++            try vault.unpauseRedeem() {} catch {}
++        }
++        if (vault.pausedClaim()) {
++            try vault.unpauseClaim() {} catch {}
++        }
++        if (vault.pausedAllocation()) {
++            try vault.unpauseAllocation() {} catch {}
++        }
++        vm.stopPrank();
++    }
++
+     function h_sendToVault(uint8 stratSel, uint256 amt) public {
+         IStrategy strat = _strategyOf(stratSel);
+         uint256 prin = strat.principal();
+@@ -317,8 +357,9 @@ contract InvariantPushModelTest is StdInvariant, Test {
+ 
+     function _deployMockStrategy() internal returns (MockStrategy s) {
+         MockStrategy impl = new MockStrategy();
+-        bytes memory data =
+-            abi.encodeWithSelector(MockStrategy.initialize.selector, address(vault), IERC20(address(underlying)), admin);
++        bytes memory data = abi.encodeWithSelector(
++            MockStrategy.initialize.selector, address(vault), IERC20(address(underlying)), admin
++        );
+         s = MockStrategy(address(new ERC1967Proxy(address(impl), data)));
+     }
+ 
+@@ -377,4 +418,49 @@ contract InvariantPushModelTest is StdInvariant, Test {
+             assertEq(vault.backingRatio(), 1e18, "solvent backing ratio not capped at one");
+         }
+     }
++
++    /// @notice VAULT-INV-009: every disabled Strategy has zero weight and the
++    ///         cached aggregate equals the sum of all registered weights.
++    function invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches() public view {
++        uint256 strategyCount = vault.getStrategiesCount();
++        uint256 summedWeight;
++
++        for (uint256 i; i < strategyCount; i++) {
++            IStrategy strategy = vault.strategies(i);
++            (bool enabled, uint256 weightBps,) = vault.strategyConfigs(strategy);
++            if (!enabled) assertEq(weightBps, 0, "disabled strategy retained weight");
++            summedWeight += weightBps;
++        }
++
++        assertLe(summedWeight, 10_000, "strategy weights exceed BPS denominator");
++        assertEq(vault.totalWeightBps(), summedWeight, "cached strategy weight sum drifted");
++    }
++
++    /// @notice VAULT-INV-012: operational and pricing ratios implement the
++    ///         same downward-only min(1, A/L) definition while valuation is live.
++    function invariant_backingRatioMatchesDefinition() public view {
++        uint256 liabilities = vault.actualLiabilities();
++        uint256 totalAssets = vault.totalUnderlying();
++        uint256 expected =
++            liabilities == 0 || totalAssets >= liabilities ? 1e18 : Math.mulDiv(totalAssets, 1e18, liabilities);
++
++        assertEq(vault.backingRatio(), expected, "operational backing ratio formula drifted");
++        (uint256 pricingRatio, bool available) = vault.backingRatioForPricing();
++        assertTrue(available, "live invariant fixture unexpectedly unavailable");
++        assertEq(pricingRatio, expected, "pricing backing ratio formula drifted");
++    }
++
++    /// @notice VAULT-INV-014: dToken supply is converted to Underlying with
++    ///         ceiling semantics, then queued claims are added exactly once.
++    function invariant_actualLiabilitiesUseCeilingAndIncludePending() public view {
++        uint256 supply = dToken.totalSupply();
++        uint256 userLiabilities = dToken.convertToUnderlying(supply);
++        if (dToken.convertToDToken(userLiabilities) < supply) userLiabilities += 1;
++
++        assertEq(
++            vault.actualLiabilities(),
++            userLiabilities + vault.pendingWithdrawals(),
++            "actual liabilities did not use ceil(supply) plus pending"
++        );
++    }
+ }
+diff --git a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 613b69c0..1a013fbb 100644
+--- a/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/en/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -87,6 +87,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ 
+ | Campaign | Date run | repo / branch | commit SHA | forge / environment | fork RPC (type only) | Commands / logs | Executor | Result summary |
+ | --- | --- | --- | --- | --- | --- | --- | --- | --- |
++| VAULT-RECERT-20260812 | 2026-08-12 | jpydf-v2 / `agent/recertify-vault-audit-invariants` | develop `8c8b4e31` + invariant / ledger overlay | forge 1.7.1 local | none | 6 focused suites; `FOUNDRY_PROFILE=ci forge test -vv --no-match-contract 'Mainnet\|Invariant\|Anchored\|Initiative\|LocalParityDrill'`; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 263 and fast 1,572, all with 0 failed / 0 skipped. All 7 push-model invariants ran 500 runs / 25,000 calls / 0 reverts each. Added Strategy update / emergency-disable actions and recertified VAULT-INV-009/012/014. MAINNET_RPC was not used, so VAULT-FR-016's specified fork evidence remains outstanding |
+ | V1 | 2026-06-20 | jpydf-v2 / develop | 28808fd + working tree | forge 0.8.24 local | none | `forge test --match-contract 'SkyUsdcSUsdsStrategyTest\|EtherfiWeETHStrategyTest\|DeployLiquity2StrategySelectorTest\|DFGovernanceHandoverXAUTGateTest'`; `forge build`; `git diff --check` | Codex | PASS: focused 44 tests, build, diff check |
+ | V2 | 2026-06-21 | jpydf-v2 / develop | b7280145 + working tree | forge 0.8.24 local | none | `forge test --match-contract 'LidoStrategyTest\|EtherfiWeETHStrategyTest\|SkyUsdcSUsdsStrategyTest\|AaveV3StrategyTest\|ERC4626StrategyTest\|DeployLiquity2StrategySelectorTest'`; `git diff --check` | Codex | PASS: focused 115 tests, diff check |
+ | V3 | 2026-06-21 | jpydf-v2 / develop | 923b39d + working tree | node / pnpm local | none | `pnpm --filter @jpydf/console build`; static `writeoffStrategyPrincipal` calldata-shape check; `git diff --check` | Codex | PASS: console build, calldata shape, diff check |
+@@ -116,7 +117,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | §4 System sources (Product Overview / Launch Risk Gate / ADR) | 8 | 5 | - | - | - | - | CON 5, NFR 6, RISK 9, ARCH 6, ADR 7 | 0 | 46 | 0 | 0 |
+ | §5 Liquity-v2-Core-Spec (🔵 Core Inheritance) | - | - | - | - | - | - | `CORE-*` uses the dedicated Core ledger as source of truth | 0 | 0 | 13 | 0 |
+ | §6 dToken (DTKN) | 10 | 10 | 7 | 5 | 5 | 0 | - | 3 | 40 | 13 | 0 |
+-| §7 CollateralVault (VAULT) | 19 | 14 | 9 | 4 | 15 | 0 | - | 3 | 64 | 40 | 3 |
++| §7 CollateralVault (VAULT) | 19 | 14 | 9 | 4 | 15 | 0 | - | 3 | 64 | 40 | 8 |
+ | §8 Strategy (STGY) | 12 | 11 | 8 | 5 | 12 | 2 | - | 2 | 52 | 0 | 0 |
+ | §9 AaveV3Strategy (AAVE) | 7 | 5 | 5 | 3 | 4 | 5 | - | 8 | 37 | 0 | 0 |
+ | §9A ERC4626Strategy (E4626) | - | - | 8 | - | - | - | - | - | 8 | 0 | 0 |
+@@ -132,7 +133,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ | §13D InterestRouter (IRTR) | 5 | 6 | 5 | 5 | 3 | 0 | - | 6 | 30 | 1 | 0 |
+ | §13E PILAllocator / UniV4MerklInitiative (PILA) | 16 | 8 | 6 | 6 | 7 | 0 | - | 8 | 51 | 0 | 38 |
+ | §14 Frontend (FRNT) | 36 | 4 | 8 | 5 | 3 | 6 | - | 9 | 71 | 3 | 1 |
+-| **Total (active)** | **185** | **127** | **88** | **41** | **89** | **13** | **48** | **72** | **663** | **117** | **112** |
++| **Total (active)** | **185** | **127** | **88** | **41** | **89** | **13** | **48** | **72** | **663** | **117** | **117** |
+ | §9B LidoStrategy (LIDO, archived) | 9 | 10 | 8 | 3 | 5 | 5 | - | 7 | 47 | 0 | 39 |
+ | §9D EtherfiWeETHStrategy (EFWEETH, archived) | - | - | 13 | - | - | - | - | 0 | 13 | 0 | 13 |
+ | §15 Multichain (MCHN, excluded) | 13 | 8 | 6 | 5 | 6 | - | - | 3 | 41 | 1 | - |
+@@ -144,6 +145,7 @@ Add one row per verification campaign (a set of runs on the same commit SHA), an
+ - **PRELIM-L01 update (2026-08-12)**: Refined VAULT-FR-006 for preliminary finding L-01. A retry for an existing, settled request returns `0` without a second transfer, accounting mutation, or event; an unissued ID still reverts with `RequestNotFound`. Permissionless triggering and fixed owner payout remain unchanged. Re-certifying VAULT-FR-006 updates §7 / active Verified from **2 to 3 / 110 to 111**; requirement-ID totals are unchanged.
+ - **PRELIM-L02 update (2026-08-12)**: Added ORCL-INV-012, requiring every active DF feed constructor to seed a primary, nonzero `lastGoodPrice`. An unhealthy expired shared-JPY episode rejects deployment even when an unregistered feed's shutdown call is caught, and fresh recovery restores deployability. §10 INV / IDs / non-ID checks / Verified change **11→12 / 53→54 / 14→15 / 5→6**; active totals change **126→127 / 662→663 / 116→117 / 111→112**. The stale base in the IDs-under-verification formula is also reconciled to the dashboard total, **663**.
+ - **PRELIM-L03 update (2026-08-12)**: Rejected preliminary L-03's timestamp-refresh proposal. A partial receipt is not a full valuation of the remaining Strategy position; advancing `updatedAt` would let repeated small recoveries indefinitely renew an old high cache that may include unobserved loss. VAULT-FR-005 / VAULT-INV-005 now state that TTL remains anchored to the last full valuation, expiry fails closed, availability returns immediately when both live valuation reads recover, and permissionless full refresh repopulates the cache. Incident writeoff reflects confirmed accounting loss but does not restore availability while valuation remains unreadable; a follow-up unit test fixes that boundary. Requirement-ID and dashboard Verified totals are unchanged.
++- **VAULT-RECERT-20260812 update**: Recertified five IDs—VAULT-FR-009 / FR-019 / INV-009 / INV-012 / INV-014—with unit and invariant evidence, raising VAULT Verified from 3 to 8 and the active total from 112 to 117. VAULT-FR-016 has complete unit/invariant evidence and remains PARTIAL only for its pinned-mainnet-fork requirement.
+ - **V10 update (2026-07-07)**: Added EFWEETH-SEC-014 and updated the active ID total from **615 to 616**. `WeETHWithdrawAdapter` is now included as first-party production source / audit scope and marked PASS based on Etherfi focused tests, deploy selector tests, build, and diff check.
+ - **V11 update (2026-07-07)**: Active ID total remains **616**. Added a DF-specific identity marker to `WeETHWithdrawAdapter` and marked the `EtherfiWeETHStrategy.initialize` marker-less ABI-compatible adapter rejection PASS based on focused tests, deploy selector tests, build, fmt, and diff check.
+ - **Artifact-boundary sync (2026-07-31)**: Added the existing missing `SYS-RISK-008`, the new `SYS-RISK-009`, and `ADR-007`, updating the active ID total from **616 to 619**. The rows remain Not run because operational Evidence has not been collected.
+@@ -408,17 +410,17 @@ Source of truth: [CollateralVault.md](../../protocol/product/spec/CollateralVaul
+ | VAULT-FR-006 | claim (permissionless trigger, fixed owner payout, settled retry returns 0, unissued/time/buffer reverts, no partial claim, no expiry, pausedClaim stop) | unit, invariant=VAULT-INV-004 | ☑ | ☑ | `test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent`; `test_Claim_PermissionlessTriggerPaysContractRequestOwner`; `test_Claim_UnknownId_Reverts`; `forge test --match-path test/InvariantPushModel.t.sol` | PASS(PRELIM-L01) | An owner retry after prior settlement does not mutate state/balances or emit another event; it cannot prevent gas expenditure by an already-submitted no-op transaction |
+ | VAULT-FR-007 | transferYieldToTreasury (M<=L early return, buffer clamp, min valuation, backstop excluded) | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-008 | whitelist / addStrategy / removeStrategy (guards, Underlying invariant, principal==0, add=GOV / remove=GUARDIAN) | unit, invariant=VAULT-INV-007/008 | ☐ | ☐ | | Not run | |
+-| VAULT-FR-009 | updateStrategy (GOV) / writeoffStrategyPrincipal and forceDeallocateMorphoV2 (WRITEOFF, atomic incident pause, penalty/backing guards, tracked-loss cache reflection) | unit, invariant=VAULT-INV-009 | ☐ | ☐ | `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `MorphoV2StrategyTest` force-deallocation suite | PARTIAL(PRELIM-L03-FU/unit) | In addition to the Morpho incident path, a stale-cache full writeoff reflects confirmed loss but does not restore pricing availability while valuation remains unreadable; full update/writeoff requirement recertification and invariant not run |
++| VAULT-FR-009 | updateStrategy (GOV) / writeoffStrategyPrincipal and forceDeallocateMorphoV2 (WRITEOFF, atomic incident pause, penalty/backing guards, tracked-loss cache reflection) | unit, invariant=VAULT-INV-009 | ☑ | ☑ | `CollateralVaultStrategyTest::test_UpdateStrategy_ReEnableAfterDisable`; `test_UpdateStrategy_DisableWithNonZeroWeight_Reverts`; `test_WriteoffStrategyPrincipal_RevertsWhileEnabledAndAllocationUnpaused`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `MorphoV2StrategyTest` force-deallocation suite; `InvariantPushModelTest::invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches` | PASS(VAULT-RECERT-20260812) | Recertified update / disable / writeoff / Morpho force-deallocation success and authorization/protection guards, plus sustained weight accounting over 500 runs / 25,000 calls |
+ | VAULT-FR-010 | initialize (placeholder mode, grant 4 roles, defaults, zero/reinitialize revert) | unit, manual | ☐ | ☐ | | Not run | |
+ | VAULT-FR-011 | setUnderlying (one-time, dToken-first, bidirectional whenUnderlyingReady guard) | unit, invariant=VAULT-INV-010/011, manual | ☐ | ☐ | | Not run | |
+ | VAULT-FR-012 | GOV configuration setters (setBufferConfig / setAllocatorConfig / setStrategyValuationMaxAge / setWithdrawDelay / setTreasury; restricted, validated, immediate effect) | unit | ☐ | ☐ | | Not run | |
+ | VAULT-FR-013 | View group (bufferBalance / backstopBalance / totalUnderlying / Strategy enumeration; placeholder-safe, index, raw value vs min) | unit, manual | ☐ | ☐ | | Not run | |
+ | VAULT-FR-014 | Pause / Unpause (GUARDIAN/GOV asymmetry, 4 independent lines, claim stop) | unit | ☐ | ☐ | | Not run | |
+ | VAULT-FR-015 | Upgrade (UUPS, GOV-only, storage append-only) | unit, manual | ☐ | ☐ | | Not run | |
+-| VAULT-FR-016 | operational backingRatio and pricing availability (unavailable vs measured zero, downward-only, L_eff==0 -> 1e18, liability dust rounded up, placeholder-safe) | unit, fork, invariant=VAULT-INV-012/014 | ☐ | ☐ | `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_backingValuationUnavailableShutsDownAtLastGoodPrice`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing` | PARTIAL(PRELIM-L03-FU/unit) | An unavailable valuation remains unavailable after full writeoff and is distinct from live-read recovery, which restores availability immediately; full refresh repopulates the cache. Fork / invariant and full requirement recertification not run |
++| VAULT-FR-016 | operational backingRatio and pricing availability (unavailable vs measured zero, downward-only, L_eff==0 -> 1e18, liability dust rounded up, placeholder-safe) | unit, fork, invariant=VAULT-INV-012/014 | ☑ | ☑ | `CollateralVaultTest::test_BackingRatio_ZeroLiabilitiesAndHealthyReturnOne`; `test_BackingRatio_ImpairmentReturnsAssetOverLiability`; `test_ActualLiabilities_RoundsUpDTokenDust`; `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `InvariantPushModelTest::invariant_backingRatioMatchesDefinition`; `invariant_actualLiabilitiesUseCeilingAndIncludePending` | PARTIAL(VAULT-RECERT-20260812/unit+invariant) | Unit and invariant verification are complete, including the unavailable/live-recovery boundary. Only the specified pinned-mainnet-fork evidence remains outstanding |
+ | VAULT-FR-017 | backstopDeposit / releaseBackstopToBuffer (actual-received accounting, no mint, backing recovery, explicit GOV release) | unit, integration, invariant=VAULT-INV-013 | ☐ | ☐ | | Not run | |
+ | VAULT-FR-018 | backing ops views (liability / shortfall / amount to top up target ratio, rounded up, target>1e18 revert) | unit, integration, invariant=VAULT-INV-014 | ☐ | ☐ | | Not run | |
+-| VAULT-FR-019 | emergencyDisableStrategy (GUARDIAN immediate, weight set to 0, idempotent, backing unchanged, re-enable only by updateStrategy) | unit, invariant=VAULT-INV-009 | ☐ | ☐ | | Not run | |
++| VAULT-FR-019 | emergencyDisableStrategy (GUARDIAN immediate, weight set to 0, idempotent, backing unchanged, re-enable only by updateStrategy) | unit, invariant=VAULT-INV-009 | ☑ | ☑ | `CollateralVaultStrategyTest::test_EmergencyDisableStrategy_ZeroesWeightPausesAllocationWithoutChangingBacking`; `test_EmergencyDisableStrategy_RevertsForUnregisteredStrategy`; `test_UpdateStrategy_ReEnableAfterDisable`; `InvariantPushModelTest::invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches` | PASS(VAULT-RECERT-20260812) | Recertified guardian incident response and governance recovery in sustained operation sequences |
+ 
+ ### 7.2 Invariants (VAULT-INV)
+ 
+@@ -432,12 +434,12 @@ Source of truth: [CollateralVault.md](../../protocol/product/spec/CollateralVaul
+ | VAULT-INV-006 | allocate movement <= allocateMaxMove; allocation <= cap remaining; reduction stays in buffer | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-007 | Guards for addToWhitelist / addStrategy (EOA rejection, whitelist, vault.underlying finalized, Underlying match) | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-008 | removeStrategy only when principal==0 (StrategyHasPrincipal) | invariant | ☐ | ☐ | | Not run | |
+-| VAULT-INV-009 | Disabled Strategy has weightBps==0; totalWeightBps == sum <= 10000 | invariant | ☐ | ☐ | | Not run | |
++| VAULT-INV-009 | Disabled Strategy has weightBps==0; totalWeightBps == sum <= 10000 | invariant | ☑ | ☑ | `InvariantPushModelTest::invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches`; `CollateralVaultStrategyTest::test_UpdateStrategy_DisableWithNonZeroWeight_Reverts`; `test_EmergencyDisableStrategy_ZeroesWeightPausesAllocationWithoutChangingBacking` | PASS(VAULT-RECERT-20260812) | 500 runs / 25,000 calls / 0 reverts including update, emergency-disable, and unpause transitions |
+ | VAULT-INV-010 | setUnderlying one-time only; in active phase, dToken.underlying == vault.underlying is enforced at use time | invariant | ☐ | ☐ | | Not run | |
+ | VAULT-INV-011 | Full containment in placeholder phase (deposit/redeem/backstop/addStrategy revert, views return 0, allocate early return) | invariant | ☐ | ☐ | | Not run | |
+-| VAULT-INV-012 | backingRatio definition (L_eff==0 -> 1e18; min(1e18, A/L); view does not revert) | invariant | ☐ | ☐ | | Not run | |
++| VAULT-INV-012 | backingRatio definition (L_eff==0 -> 1e18; min(1e18, A/L); view does not revert) | invariant | ☑ | ☑ | `InvariantPushModelTest::invariant_backingRatioMatchesDefinition`; `CollateralVaultTest::test_BackingRatio_ZeroLiabilitiesAndHealthyReturnOne`; `test_BackingRatio_ImpairmentReturnsAssetOverLiability`; `test_BackingOpsViews_StrategyValuationRevertUsesFreshCacheThenExpires` | PASS(VAULT-RECERT-20260812) | Confirmed operational/pricing view agreement over 500 runs / 25,000 calls / 0 reverts |
+ | VAULT-INV-013 | Accounting effect of backstopDeposit/release (supply and pendingWithdrawals unchanged; backing non-decreasing) | invariant | ☐ | ☐ | | Not run | |
+-| VAULT-INV-014 | Underlying base-unit rounding up of liability dust (no underestimation) | unit / invariant | ☐ | ☐ | | Not run | |
++| VAULT-INV-014 | Underlying base-unit rounding up of liability dust (no underestimation) | unit / invariant | ☑ | ☑ | `InvariantPushModelTest::invariant_actualLiabilitiesUseCeilingAndIncludePending`; `CollateralVaultTest::test_ActualLiabilities_RoundsUpDTokenDust`; `test_BackingOpsViews_IncludePendingWithdrawalsAndRoundUp` | PASS(VAULT-RECERT-20260812) | 500 runs / 25,000 calls / 0 reverts across supply changes and queued claims |
+ 
+ ### 7.3 Security Requirements (VAULT-SEC)
+ 
+diff --git a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+index 5500c80f..f977dbda 100644
+--- a/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
++++ b/documents/jp/engineering/verification-ledgers/Requirements-Verification-Ledger.md
+@@ -87,6 +87,7 @@ source ~/.config/deltaforesight/rpc.env
+ 
+ | キャンペーン | 実施日 | repo / branch | commit SHA | forge / 環境 | fork RPC（種別のみ） | 実行コマンド・ログ | 実施者 | 結果サマリ |
+ | --- | --- | --- | --- | --- | --- | --- | --- | --- |
++| VAULT-RECERT-20260812 | 2026-08-12 | jpydf-v2 / `agent/recertify-vault-audit-invariants` | develop `8c8b4e31` + invariant / ledger overlay | forge 1.7.1 local | なし | focused 6 suites; `FOUNDRY_PROFILE=ci forge test -vv --no-match-contract 'Mainnet\|Invariant\|Anchored\|Initiative\|LocalParityDrill'`; `forge fmt --check`; `git diff --check` | Codex | PASS: focused 263、fast 1,572、全て 0 failed / 0 skipped。push-model invariant 7 本は各 500 runs / 25,000 calls / 0 reverts。Strategy update / emergency disable を操作列に加え、VAULT-INV-009/012/014 を再認証。MAINNET_RPC は未使用のため VAULT-FR-016 の fork 指定は未実施 |
+ | V1 | 2026-06-20 | jpydf-v2 / develop | 28808fd + working tree | forge 0.8.24 local | なし | `forge test --match-contract 'SkyUsdcSUsdsStrategyTest\|EtherfiWeETHStrategyTest\|DeployLiquity2StrategySelectorTest\|DFGovernanceHandoverXAUTGateTest'`; `forge build`; `git diff --check` | Codex | PASS: focused 44 tests、build、diff check |
+ | V1-MAP | 2026-06-20 | deltaforesight/jpydf-v2 / develop | `30d078b`（origin/develop HEAD・clean） | forge 1.7.1 / macOS | archive（`DFPriceFeed` 42 PASS・`OracleMainnet` は `rpc_endpoints` alias 未解決で skip） | 意味マッピング（全21 component・**per-row PASS 確認**）= [`reviews/2026-06-20-V1-mapping/`](../historical-reviews/2026-06-20-V1-mapping/) ／ baseline = [`_baseline-summary.md`](../historical-reviews/2026-06-20-V1-mapping/_baseline-summary.md) ／ 集約 = [`campaign-V1`](../historical-reviews/2026-06-20-requirements-verification-campaign-V1.md) ／ メタ監査 = [`completeness-audit`](../historical-reviews/2026-06-20-ledger-completeness-audit.md) | Claude（21エージェント並列） | **1170 passed / 0 failed / 2 skipped**。要件→テストを per-row で **`PASS`（ログの [PASS] 実在）まで確認**（約 592 ID）。**SKY は Day-1 に Sky 連携が確定した場合に採用する条件付き Strategy で、本キャンペーン対象外（別途検証）・TRSY は Day-2 未実装**、異常系/expectEmit/fork(mainnet) に系統的 GAP。Tier C（anvil 実デプロイ）で SYS 4/5 PASS。（Codex focused 検証 V1〜V3 とは別系統＝要件網羅マッピング。本表の `PASS(V1/V2)` 等は Codex 系を指す） |
+ | V2 | 2026-06-21 | jpydf-v2 / develop | b7280145 + working tree | forge 0.8.24 local | なし | `forge test --match-contract 'LidoStrategyTest\|EtherfiWeETHStrategyTest\|SkyUsdcSUsdsStrategyTest\|AaveV3StrategyTest\|ERC4626StrategyTest\|DeployLiquity2StrategySelectorTest'`; `git diff --check` | Codex | PASS: focused 115 tests、diff check |
+@@ -123,7 +124,7 @@ source ~/.config/deltaforesight/rpc.env
+ | §4 System sources（Product Overview / Launch Risk Gate / ADR） | 8 | 5 | — | — | — | — | CON 5・NFR 6・RISK 9・ARCH 6・ADR 7 | 0 | 46 | 0 | 0 |
+ | §5 Liquity-v2-Core-Spec（🔵 CORE） | — | — | — | — | — | — | `CORE-*` は Core 専用台帳を正本 | 0 | 0 | 13 | 0 |
+ | §6 dToken（DTKN） | 10 | 10 | 7 | 5 | 5 | 0 | — | 3 | 40 | 13 | 0 |
+-| §7 CollateralVault（VAULT） | 19 | 14 | 9 | 4 | 15 | 0 | — | 3 | 64 | 40 | 3 |
++| §7 CollateralVault（VAULT） | 19 | 14 | 9 | 4 | 15 | 0 | — | 3 | 64 | 40 | 8 |
+ | §8 Strategy（STGY） | 12 | 11 | 8 | 5 | 12 | 2 | — | 2 | 52 | 0 | 0 |
+ | §9 AaveV3Strategy（AAVE） | 7 | 5 | 5 | 3 | 4 | 5 | — | 8 | 37 | 0 | 0 |
+ | §9A ERC4626Strategy（E4626） | — | — | 8 | — | — | — | — | — | 8 | 0 | 0 |
+@@ -139,7 +140,7 @@ source ~/.config/deltaforesight/rpc.env
+ | §13D InterestRouter（IRTR） | 5 | 6 | 5 | 5 | 3 | 0 | — | 6 | 30 | 1 | 0 |
+ | §13E PILAllocator / UniV4MerklInitiative（PILA） | 16 | 8 | 6 | 6 | 7 | 0 | — | 8 | 51 | 0 | 38 |
+ | §14 Frontend（FRNT） | 36 | 4 | 8 | 5 | 3 | 6 | — | 9 | 71 | 3 | 1 |
+-| **合計（active）** | **185** | **127** | **88** | **41** | **89** | **13** | **48** | **72** | **663** | **117** | **112** |
++| **合計（active）** | **185** | **127** | **88** | **41** | **89** | **13** | **48** | **72** | **663** | **117** | **117** |
+ | §9B LidoStrategy（LIDO・archived） | 9 | 10 | 8 | 3 | 5 | 5 | — | 7 | 47 | 0 | 39 |
+ | §9D EtherfiWeETHStrategy（EFWEETH・archived） | — | — | 13 | — | — | — | — | 0 | 13 | 0 | 13 |
+ | §15 Multichain（MCHN・対象外） | 13 | 8 | 6 | 5 | 6 | — | — | 3 | 41 | 1 | — |
+@@ -153,6 +154,7 @@ source ~/.config/deltaforesight/rpc.env
+ - **PRELIM-L01 更新（2026-08-12）**: VAULT-FR-006 を予備監査 L-01 に合わせて精緻化した。実在する settlement 済み request の再 claim は二重送金・二重減算・追加 event を行わず `0` を返し、未発行 ID は従来どおり `RequestNotFound` とする。permissionless trigger と owner 固定送金は維持する。VAULT-FR-006 の再認定により §7 / active 検証済を **2 → 3 / 110 → 111** に更新し、要件 ID 数は不変。
+ - **PRELIM-L02 更新（2026-08-12）**: active DF feed の初期 fetch が `primary` かつ nonzero `lastGoodPrice` を seed する constructor invariant を ORCL-INV-012 として追加した。shared JPY provider の unhealthy expiry 中は未登録 feed の shutdown call が catch されても deployment を拒否し、fresh recovery 後は再開する。§10 INV / ID / 非 ID check / 検証済を **11→12 / 53→54 / 14→15 / 5→6**、active 合計を **126→127 / 662→663 / 116→117 / 111→112** に更新し、stale だった検証対象 ID 式の基数も dashboard と同じ **663** に同期した。
+ - **PRELIM-L03 更新（2026-08-12）**: 予備監査 L-03 の timestamp refresh 提案は不採用。partial receipt は残存 Strategy position の full valuation ではなく、これで `updatedAt` を進めると未観測損失を含み得る古い高値 cache を少額回収で反復延命できる。VAULT-FR-005 / VAULT-INV-005 を精緻化し、TTL は最後の full valuation を基準に維持、期限後は fail-closed、両 live valuation read の復旧で availability が直ちに回復し、permissionless full refresh が cache を再格納する方針を回帰テストで固定した。incident writeoff は確定損失を会計へ反映するが、valuation が読取不能な間は availability を回復しない境界も follow-up unit test で固定した。要件 ID・dashboard 検証済集計は不変。
++- **VAULT-RECERT-20260812 更新**: VAULT-FR-009 / FR-019 / INV-009 / INV-012 / INV-014 の 5 ID を unit + invariant で再認証し、VAULT 検証済を 3 → 8、active 合計を 112 → 117 に更新。VAULT-FR-016 は unit / invariant 完了、pinned mainnet fork のみ未実施の PARTIAL。
+ - **V1-MAP（2026-06-20）件数訂正**: メタ監査（[ledger-completeness-audit](../historical-reviews/2026-06-20-ledger-completeness-audit.md)）により Product-Overview（ARCH/ADR）・LIDO（INV/EVT）・Parameters（bridge-minter-timelock）の欠落 **5 行**を反映。develop の §3 集計（566）に +5 し ID 計 **571**。追加行 = **ARCH-006 / ADR-006 / LIDO-INV-010 / LIDO-EVT-005 / PRM-BRIDGE-MINTER-TIMELOCK**（うち bridge-minter は commit `756a736` 由来）。**合計行はセル和と一致するよう全面再計算済**。
+ - **台帳同期（2026-06-24）**: Strategy / Etherfi の追補 ID **6 行**（STGY-INV-011 / STGY-EVT-012 / EFWEETH-SEC-008..011）を反映し、active ID 計を **571 → 577** に更新。追加時点では検証実体未確認のため PASS にせず、未実施として扱った。
+ - **V8 更新（2026-06-24）**: EFWEETH-SEC-012 を追加し、active ID 計を **577 → 578** に更新。`test/*Strategy*.t.sol` の実走で EFWEETH-SEC-008..012 を PASS に更新した。
+@@ -416,17 +418,17 @@ placeholder 期挙動（各行 = doc §12 の表 1 行。発火実証列に ✅
+ | VAULT-FR-006 | claim（permissionless trigger・owner 固定送金・settlement 済み retry は 0・未発行/時刻/buffer 各 revert・部分不可・無期限・pausedClaim 停止） | unit, invariant=VAULT-INV-004 | ☑ | ☑ | `test_Claim_FrontRunSettlementMakesOwnerRetryIdempotent`; `test_Claim_PermissionlessTriggerPaysContractRequestOwner`; `test_Claim_UnknownId_Reverts`; `forge test --match-path test/InvariantPushModel.t.sol` | PASS(PRELIM-L01) | 先行 settlement 後の owner retry は state / balance / event を再変更しない。ただし送信済み no-op tx のガス消費自体は防げない |
+ | VAULT-FR-007 | transferYieldToTreasury（M≤L 早期・buffer クランプ・min 評価・backstop 除外） | unit, invariant=VAULT-INV-001/005 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-008 | whitelist / addStrategy / removeStrategy（ガード・Underlying 不変条件・principal==0・add=GOV / remove=GUARDIAN） | unit, invariant=VAULT-INV-007/008 | ☐ | ☐ | | 未実施 | |
+-| VAULT-FR-009 | updateStrategy（GOV）/ writeoffStrategyPrincipal・forceDeallocateMorphoV2（WRITEOFF・atomic incident pause・penalty / backing guard・tracked-loss cache 反映） | unit, invariant=VAULT-INV-009 | ☐ | ☐ | `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `MorphoV2StrategyTest` force-deallocation 群 | PARTIAL(PRELIM-L03-FU/unit) | Morpho incident path に加え、stale cache の全額 writeoff は損失を会計反映しても pricing availability を回復しない境界を実走。update/writeoff を含む要件全体の ledger 再認定と invariant は未実施 |
++| VAULT-FR-009 | updateStrategy（GOV）/ writeoffStrategyPrincipal・forceDeallocateMorphoV2（WRITEOFF・atomic incident pause・penalty / backing guard・tracked-loss cache 反映） | unit, invariant=VAULT-INV-009 | ☑ | ☑ | `CollateralVaultStrategyTest::test_UpdateStrategy_ReEnableAfterDisable`; `test_UpdateStrategy_DisableWithNonZeroWeight_Reverts`; `test_WriteoffStrategyPrincipal_RevertsWhileEnabledAndAllocationUnpaused`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `test_ForceDeallocateMorphoV2_ReducesFallbackCacheByTrackedLossOnly`; `MorphoV2StrategyTest` force-deallocation 群; `InvariantPushModelTest::invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches` | PASS(VAULT-RECERT-20260812) | update / disable / writeoff / Morpho force-deallocation の正常系・権限/保護ガードと、重み合計の持続を 500 runs / 25,000 calls で再認証 |
+ | VAULT-FR-010 | initialize（placeholder 化・4 ロール付与・既定値・ゼロ/再初期化 revert） | unit, manual | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-011 | setUnderlying（一度きり・dToken-first・whenUnderlyingReady 双方向ガード） | unit, invariant=VAULT-INV-010/011, manual | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-012 | GOV 設定 setter（setBufferConfig / setAllocatorConfig / setStrategyValuationMaxAge / setWithdrawDelay / setTreasury。限定・検証・即時反映） | unit | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-013 | View 群（bufferBalance / backstopBalance / totalUnderlying / Strategy 列挙。placeholder-safe・index・生値 vs min） | unit, manual | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-014 | Pause / Unpause（GUARDIAN/GOV 非対称・4 系統独立・claim 停止） | unit | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-015 | アップグレード（UUPS・GOV 限定・storage 追記のみ） | unit, manual | ☐ | ☐ | | 未実施 | |
+-| VAULT-FR-016 | operational backingRatio と pricing availability（取得不能 vs 実測0・下方専用・L_eff==0→1e18・liability dust 切り上げ・placeholder-safe） | unit, fork, invariant=VAULT-INV-012/014 | ☐ | ☐ | `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_backingValuationUnavailableShutsDownAtLastGoodPrice`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing` | PARTIAL(PRELIM-L03-FU/unit) | unavailable valuation は全額 writeoff 後も unavailable のままで、即時 availability を回復する live read 復旧と区別される。full refresh は cache 再格納を担う。fork / invariant と要件全体の再認定は未実施 |
++| VAULT-FR-016 | operational backingRatio と pricing availability（取得不能 vs 実測0・下方専用・L_eff==0→1e18・liability dust 切り上げ・placeholder-safe） | unit, fork, invariant=VAULT-INV-012/014 | ☑ | ☑ | `CollateralVaultTest::test_BackingRatio_ZeroLiabilitiesAndHealthyReturnOne`; `test_BackingRatio_ImpairmentReturnsAssetOverLiability`; `test_ActualLiabilities_RoundsUpDTokenDust`; `test_PricingViewDistinguishesUnavailableValuationFromMeasuredZero`; `test_WriteoffStrategyPrincipal_DoesNotRestoreUnavailablePricing`; `InvariantPushModelTest::invariant_backingRatioMatchesDefinition`; `invariant_actualLiabilitiesUseCeilingAndIncludePending` | PARTIAL(VAULT-RECERT-20260812/unit+invariant) | unit / invariant は完了。pricing unavailable と live recovery の境界も維持。規定された pinned mainnet fork 証跡のみ未実施 |
+ | VAULT-FR-017 | backstopDeposit / releaseBackstopToBuffer（実着額計上・mint なし・backing 回復・GOV 明示解放） | unit, integration, invariant=VAULT-INV-013 | ☐ | ☐ | | 未実施 | |
+ | VAULT-FR-018 | backing ops views（liability / shortfall / 目標比率補填額・切り上げ・target>1e18 revert） | unit, integration, invariant=VAULT-INV-014 | ☐ | ☐ | | 未実施 | |
+-| VAULT-FR-019 | emergencyDisableStrategy（GUARDIAN 即時・weight 0 化・冪等・backing 不変・再有効化は updateStrategy のみ） | unit, invariant=VAULT-INV-009 | ☐ | ☐ | | 未実施 | |
++| VAULT-FR-019 | emergencyDisableStrategy（GUARDIAN 即時・weight 0 化・冪等・backing 不変・再有効化は updateStrategy のみ） | unit, invariant=VAULT-INV-009 | ☑ | ☑ | `CollateralVaultStrategyTest::test_EmergencyDisableStrategy_ZeroesWeightPausesAllocationWithoutChangingBacking`; `test_EmergencyDisableStrategy_RevertsForUnregisteredStrategy`; `test_UpdateStrategy_ReEnableAfterDisable`; `InvariantPushModelTest::invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches` | PASS(VAULT-RECERT-20260812) | guardian incident path と governance recovery を持続的な操作列で再認証 |
+ 
+ ### 7.2 不変条件（VAULT-INV）
+ 
+@@ -440,12 +442,12 @@ placeholder 期挙動（各行 = doc §12 の表 1 行。発火実証列に ✅
+ | VAULT-INV-006 | allocate の移動量 ≤ allocateMaxMove・配分 ≤ cap 残・削減分は buffer 残置 | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-007 | addToWhitelist / addStrategy のガード（EOA 拒否・whitelist・vault.underlying 確定・underlying 一致） | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-008 | removeStrategy は principal==0 のみ（StrategyHasPrincipal） | invariant | ☐ | ☐ | | 未実施 | |
+-| VAULT-INV-009 | disabled Strategy は weightBps==0・totalWeightBps == Σ ≤ 10000 | invariant | ☐ | ☐ | | 未実施 | |
++| VAULT-INV-009 | disabled Strategy は weightBps==0・totalWeightBps == Σ ≤ 10000 | invariant | ☑ | ☑ | `InvariantPushModelTest::invariant_disabledStrategiesHaveZeroWeightAndWeightSumMatches`; `CollateralVaultStrategyTest::test_UpdateStrategy_DisableWithNonZeroWeight_Reverts`; `test_EmergencyDisableStrategy_ZeroesWeightPausesAllocationWithoutChangingBacking` | PASS(VAULT-RECERT-20260812) | update / emergency disable / unpause を含む 500 runs / 25,000 calls / 0 reverts |
+ | VAULT-INV-010 | setUnderlying 一度のみ・active 期は dToken.underlying == vault.underlying を利用時点強制 | invariant | ☐ | ☐ | | 未実施 | |
+ | VAULT-INV-011 | placeholder 期の全面封じ込め（deposit/redeem/backstop/addStrategy revert・view 0・allocate 早期 return） | invariant | ☐ | ☐ | | 未実施 | |
+-| VAULT-INV-012 | backingRatio の定義（L_eff==0→1e18・min(1e18, A/L)・view 非 revert） | invariant | ☐ | ☐ | | 未実施 | |
++| VAULT-INV-012 | backingRatio の定義（L_eff==0→1e18・min(1e18, A/L)・view 非 revert） | invariant | ☑ | ☑ | `InvariantPushModelTest::invariant_backingRatioMatchesDefinition`; `CollateralVaultTest::test_BackingRatio_ZeroLiabilitiesAndHealthyReturnOne`; `test_BackingRatio_ImpairmentReturnsAssetOverLiability`; `test_BackingOpsViews_StrategyValuationRevertUsesFreshCacheThenExpires` | PASS(VAULT-RECERT-20260812) | operational / pricing view の定義一致を 500 runs / 25,000 calls / 0 reverts で確認 |
+ | VAULT-INV-013 | backstopDeposit/release の会計効果（supply・pendingWithdrawals 不変・backing 非低下） | invariant | ☐ | ☐ | | 未実施 | |
+-| VAULT-INV-014 | liability dust の Underlying base unit 切り上げ（過小評価しない） | unit / invariant | ☐ | ☐ | | 未実施 | |
++| VAULT-INV-014 | liability dust の Underlying base unit 切り上げ（過小評価しない） | unit / invariant | ☑ | ☑ | `InvariantPushModelTest::invariant_actualLiabilitiesUseCeilingAndIncludePending`; `CollateralVaultTest::test_ActualLiabilities_RoundsUpDTokenDust`; `test_BackingOpsViews_IncludePendingWithdrawalsAndRoundUp` | PASS(VAULT-RECERT-20260812) | supply 変動と queued claim を含む 500 runs / 25,000 calls / 0 reverts |
+ 
+ ### 7.3 セキュリティ要件（VAULT-SEC）
+ 

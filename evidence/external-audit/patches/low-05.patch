@@ -1,0 +1,738 @@
+diff --git a/contracts/script/AcceptDFGovernanceHandover.s.sol b/contracts/script/AcceptDFGovernanceHandover.s.sol
+index a2bf92ba..b70c1175 100644
+--- a/contracts/script/AcceptDFGovernanceHandover.s.sol
++++ b/contracts/script/AcceptDFGovernanceHandover.s.sol
+@@ -2,6 +2,7 @@
+ pragma solidity 0.8.24;
+ 
+ import {Script, console2} from "forge-std/Script.sol";
++import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
+ 
+ interface ITwoStepOwnableAccept {
+     function owner() external view returns (address);
+@@ -92,14 +93,16 @@ contract AcceptDFGovernanceHandover is Script {
+         require(interestRouter.code.length != 0, "DF accept: codeless interest router");
+ 
+         IAcceptInterestRouterForwarderView forwarder = IAcceptInterestRouterForwarderView(interestRouter);
+-        try forwarder.jpydfToken() returns (address token) {
+-            require(token == _root(manifest, "jpydfToken"), "DF accept: interest router token");
++        address token = _root(manifest, "jpydfToken");
++        try forwarder.jpydfToken() returns (address actualToken) {
++            require(actualToken == token, "DF accept: interest router token");
+         } catch {
+             revert("DF accept: not interest router forwarder");
+         }
+ 
+         try forwarder.recipient() returns (address recipient) {
+             require(recipient == expectedRecipient, "DF accept: interest router recipient");
++            IJpydfToken(token).requireValidRecipient(recipient);
+         } catch {
+             revert("DF accept: not interest router forwarder");
+         }
+diff --git a/contracts/script/DeployLiquity2.s.sol b/contracts/script/DeployLiquity2.s.sol
+index 15611201..7de33cfd 100644
+--- a/contracts/script/DeployLiquity2.s.sol
++++ b/contracts/script/DeployLiquity2.s.sol
+@@ -1638,6 +1638,7 @@ contract DeployLiquity2Script is StdCheats, MetadataDeployment, Logging {
+ 
+         try router.recipient() returns (address recipient) {
+             require(recipient == vm.envAddress("DF_INTEREST_ROUTER_RECIPIENT"), "DF: router recipient mismatch");
++            r.jpydfToken.requireValidRecipient(recipient);
+         } catch {
+             revert("DF: router not forwarder");
+         }
+diff --git a/contracts/script/PrepareDFGovernanceHandover.s.sol b/contracts/script/PrepareDFGovernanceHandover.s.sol
+index 17ed6d1d..31c15224 100644
+--- a/contracts/script/PrepareDFGovernanceHandover.s.sol
++++ b/contracts/script/PrepareDFGovernanceHandover.s.sol
+@@ -5,6 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
+ 
+ import {CollateralVault} from "src/CollateralVault.sol";
+ import {DToken} from "src/DToken.sol";
++import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
+ 
+ interface IStrategyGovernance {
+     function owner() external view returns (address);
+@@ -133,14 +134,16 @@ contract PrepareDFGovernanceHandover is Script {
+         require(interestRouter.code.length != 0, "DF handover: codeless interest router");
+ 
+         IPrepareInterestRouterForwarderView forwarder = IPrepareInterestRouterForwarderView(interestRouter);
+-        try forwarder.jpydfToken() returns (address token) {
+-            require(token == _root(manifest, "jpydfToken"), "DF handover: interest router token");
++        address token = _root(manifest, "jpydfToken");
++        try forwarder.jpydfToken() returns (address actualToken) {
++            require(actualToken == token, "DF handover: interest router token");
+         } catch {
+             revert("DF handover: not interest router forwarder");
+         }
+ 
+         try forwarder.recipient() returns (address recipient) {
+             require(recipient == expectedRecipient, "DF handover: interest router recipient");
++            IJpydfToken(token).requireValidRecipient(recipient);
+         } catch {
+             revert("DF handover: not interest router forwarder");
+         }
+diff --git a/contracts/script/VerifyDFGovernanceHandover.s.sol b/contracts/script/VerifyDFGovernanceHandover.s.sol
+index ea5b666d..f4a197f4 100644
+--- a/contracts/script/VerifyDFGovernanceHandover.s.sol
++++ b/contracts/script/VerifyDFGovernanceHandover.s.sol
+@@ -5,6 +5,7 @@ import {Script} from "forge-std/Script.sol";
+ 
+ import {CollateralVault} from "src/CollateralVault.sol";
+ import {DToken} from "src/DToken.sol";
++import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
+ 
+ interface IStrategyGovernanceView {
+     function owner() external view returns (address);
+@@ -183,14 +184,16 @@ contract VerifyDFGovernanceHandover is Script {
+         require(interestRouter.code.length != 0, "DF verify: codeless interest router");
+ 
+         IVerifyInterestRouterForwarderView forwarder = IVerifyInterestRouterForwarderView(interestRouter);
+-        try forwarder.jpydfToken() returns (address token) {
+-            require(token == _root(manifest, "jpydfToken"), "DF verify: interest router token");
++        address token = _root(manifest, "jpydfToken");
++        try forwarder.jpydfToken() returns (address actualToken) {
++            require(actualToken == token, "DF verify: interest router token");
+         } catch {
+             revert("DF verify: not interest router forwarder");
+         }
+ 
+         try forwarder.recipient() returns (address recipient) {
+             require(recipient == expectedRecipient, "DF verify: interest router recipient");
++            IJpydfToken(token).requireValidRecipient(recipient);
+         } catch {
+             revert("DF verify: not interest router forwarder");
+         }
+diff --git a/contracts/src/InterestRouterForwarder.sol b/contracts/src/InterestRouterForwarder.sol
+index 735452a0..78ad4075 100644
+--- a/contracts/src/InterestRouterForwarder.sol
++++ b/contracts/src/InterestRouterForwarder.sol
+@@ -3,6 +3,7 @@ pragma solidity 0.8.24;
+ 
+ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+ import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
++import {IJpydfToken} from "./Interfaces/IJpydfToken.sol";
+ 
+ /**
+  * @title InterestRouterForwarder
+@@ -39,6 +40,7 @@ contract InterestRouterForwarder {
+         if (address(_jpydfToken) == address(0)) revert ZeroAddress();
+         if (_recipient == address(0)) revert ZeroAddress();
+         if (_owner == address(0)) revert ZeroAddress();
++        IJpydfToken(address(_jpydfToken)).requireValidRecipient(_recipient);
+ 
+         jpydfToken = _jpydfToken;
+         recipient = _recipient;
+@@ -58,6 +60,7 @@ contract InterestRouterForwarder {
+ 
+     function setRecipient(address _newRecipient) external onlyOwner {
+         if (_newRecipient == address(0)) revert ZeroAddress();
++        IJpydfToken(address(jpydfToken)).requireValidRecipient(_newRecipient);
+ 
+         address oldRecipient = recipient;
+         recipient = _newRecipient;
+diff --git a/contracts/test/DFGovernanceHandoverXAUTGate.t.sol b/contracts/test/DFGovernanceHandoverXAUTGate.t.sol
+index a1ceaca5..34d42a20 100644
+--- a/contracts/test/DFGovernanceHandoverXAUTGate.t.sol
++++ b/contracts/test/DFGovernanceHandoverXAUTGate.t.sol
+@@ -9,6 +9,7 @@ import {CollateralVault} from "src/CollateralVault.sol";
+ import {DToken} from "src/DToken.sol";
+ import {InterestRouterForwarder} from "src/InterestRouterForwarder.sol";
+ import {IDToken} from "src/Interfaces/IDToken.sol";
++import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
+ import {IStrategy} from "src/Interfaces/IStrategy.sol";
+ import {AcceptDFGovernanceHandover} from "script/AcceptDFGovernanceHandover.s.sol";
+ import {PrepareDFGovernanceHandover} from "script/PrepareDFGovernanceHandover.s.sol";
+@@ -152,17 +153,28 @@ contract NonForwarderInterestRouter {
+     }
+ }
+ 
++contract MockJpydfRecipientValidator {
++    mapping(address recipient => bool invalid) internal invalidRecipients;
++
++    function setInvalidRecipient(address recipient, bool invalid) external {
++        invalidRecipients[recipient] = invalid;
++    }
++
++    function requireValidRecipient(address recipient) external view {
++        if (invalidRecipients[recipient]) revert IJpydfToken.JpydfToken__CannotTransferToProtocolContract();
++    }
++}
++
+ contract DFGovernanceHandoverXAUTGateTest is Test {
+     uint256 internal constant DXAUT_BRANCH_INDEX = 4;
+     uint256 internal constant DAY1_DXAUT_CAP = 156_250_000_000_000_000_000;
+     uint256 internal constant DAY1_XAUT_ALLOCATE_MAX_MOVE = 156_250_000;
+-    address internal constant JPYDF_TOKEN = address(0xB01D);
+-
+     PrepareDFGovernanceHandoverHarness internal prepare;
+     VerifyDFGovernanceHandoverHarness internal verifyHandover;
+     AcceptDFGovernanceHandoverHarness internal acceptHandover;
+     address internal pilRecipient;
+     address internal routerOwner;
++    MockJpydfRecipientValidator internal tokenValidator;
+ 
+     function setUp() public {
+         prepare = new PrepareDFGovernanceHandoverHarness();
+@@ -170,6 +182,7 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+         acceptHandover = new AcceptDFGovernanceHandoverHarness();
+         pilRecipient = makeAddr("pilRecipient");
+         routerOwner = makeAddr("routerOwner");
++        tokenValidator = new MockJpydfRecipientValidator();
+ 
+         vm.setEnv("DF_XAUT_DAY1_MAX_DTOKEN_CAP", vm.toString(DAY1_DXAUT_CAP));
+         vm.setEnv("DF_XAUT_DAY1_MAX_ALLOCATE_MAX_MOVE", vm.toString(DAY1_XAUT_ALLOCATE_MAX_MOVE));
+@@ -221,8 +234,9 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+     }
+ 
+     function test_InterestRouterVerifierAcceptsForwarder() public {
+-        InterestRouterForwarder forwarder = new InterestRouterForwarder(IERC20(JPYDF_TOKEN), pilRecipient, routerOwner);
+-        string memory manifest = _manifest(JPYDF_TOKEN);
++        InterestRouterForwarder forwarder =
++            new InterestRouterForwarder(IERC20(address(tokenValidator)), pilRecipient, routerOwner);
++        string memory manifest = _manifest(address(tokenValidator));
+ 
+         prepare.verifyInterestRouterForwarder(manifest, address(forwarder), pilRecipient);
+         verifyHandover.verifyInterestRouterForwarder(manifest, address(forwarder), pilRecipient);
+@@ -231,7 +245,7 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+ 
+     function test_InterestRouterVerifierRejectsDirectOwnableReceiver() public {
+         NonForwarderInterestRouter router = new NonForwarderInterestRouter(routerOwner);
+-        string memory manifest = _manifest(JPYDF_TOKEN);
++        string memory manifest = _manifest(address(tokenValidator));
+ 
+         vm.expectRevert(bytes("DF handover: not interest router forwarder"));
+         prepare.verifyInterestRouterForwarder(manifest, address(router), pilRecipient);
+@@ -244,20 +258,41 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+     }
+ 
+     function test_InterestRouterVerifierRejectsWrongTokenOrRecipient() public {
+-        InterestRouterForwarder forwarder = new InterestRouterForwarder(IERC20(JPYDF_TOKEN), pilRecipient, routerOwner);
++        InterestRouterForwarder forwarder =
++            new InterestRouterForwarder(IERC20(address(tokenValidator)), pilRecipient, routerOwner);
+ 
+         vm.expectRevert(bytes("DF handover: interest router token"));
+         prepare.verifyInterestRouterForwarder(_manifest(address(0xBAD)), address(forwarder), pilRecipient);
+ 
+         vm.expectRevert(bytes("DF verify: interest router recipient"));
+-        verifyHandover.verifyInterestRouterForwarder(_manifest(JPYDF_TOKEN), address(forwarder), makeAddr("other"));
++        verifyHandover.verifyInterestRouterForwarder(
++            _manifest(address(tokenValidator)), address(forwarder), makeAddr("other")
++        );
+ 
+         vm.expectRevert(bytes("DF accept: interest router recipient"));
+-        acceptHandover.verifyInterestRouterForwarder(_manifest(JPYDF_TOKEN), address(forwarder), makeAddr("other2"));
++        acceptHandover.verifyInterestRouterForwarder(
++            _manifest(address(tokenValidator)), address(forwarder), makeAddr("other2")
++        );
++    }
++
++    function test_InterestRouterVerifierRejectsRecipientThatJpydfNoLongerAccepts() public {
++        InterestRouterForwarder forwarder =
++            new InterestRouterForwarder(IERC20(address(tokenValidator)), pilRecipient, routerOwner);
++        string memory manifest = _manifest(address(tokenValidator));
++        tokenValidator.setInvalidRecipient(pilRecipient, true);
++
++        vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++        prepare.verifyInterestRouterForwarder(manifest, address(forwarder), pilRecipient);
++
++        vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++        verifyHandover.verifyInterestRouterForwarder(manifest, address(forwarder), pilRecipient);
++
++        vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++        acceptHandover.verifyInterestRouterForwarder(manifest, address(forwarder), pilRecipient);
+     }
+ 
+     function test_HandoverPreflightRejectsSplitRoutersBeforeMutation() public {
+-        string memory manifest = _manifestWithRouters(JPYDF_TOKEN, address(0xA11CE), address(0xB0B));
++        string memory manifest = _manifestWithRouters(address(tokenValidator), address(0xA11CE), address(0xB0B));
+ 
+         vm.expectRevert(bytes("DF handover: mixed interest router"));
+         prepare.verifiedSharedInterestRouter(manifest, 2);
+@@ -268,7 +303,7 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+ 
+     function test_HandoverPreflightReturnsSharedRouter() public view {
+         address router = address(0xA11CE);
+-        string memory manifest = _manifestWithRouters(JPYDF_TOKEN, router, router);
++        string memory manifest = _manifestWithRouters(address(tokenValidator), router, router);
+ 
+         assertEq(prepare.verifiedSharedInterestRouter(manifest, 2), router);
+         assertEq(acceptHandover.verifiedSharedInterestRouter(manifest, 2), router);
+@@ -348,7 +383,8 @@ contract DFGovernanceHandoverXAUTGateTest is Test {
+ 
+     function test_VerifyRejectsFinalGenericPendingOwner() public {
+         address stalePendingOwner = makeAddr("staleRouterPendingOwner");
+-        InterestRouterForwarder forwarder = new InterestRouterForwarder(IERC20(JPYDF_TOKEN), pilRecipient, routerOwner);
++        InterestRouterForwarder forwarder =
++            new InterestRouterForwarder(IERC20(address(tokenValidator)), pilRecipient, routerOwner);
+ 
+         verifyHandover.verifyTwoStepOwnerForHarness(
+             address(forwarder), routerOwner, routerOwner, false, "interest router"
+diff --git a/contracts/test/InterestRouterForwarder.t.sol b/contracts/test/InterestRouterForwarder.t.sol
+index 96335402..b620cf5c 100644
+--- a/contracts/test/InterestRouterForwarder.t.sol
++++ b/contracts/test/InterestRouterForwarder.t.sol
+@@ -4,23 +4,39 @@ pragma solidity 0.8.24;
+ import {Test} from "forge-std/Test.sol";
+ 
+ import {InterestRouterForwarder} from "src/InterestRouterForwarder.sol";
++import {IJpydfToken} from "src/Interfaces/IJpydfToken.sol";
++import {JpydfToken} from "src/JpydfToken.sol";
+ import {ERC20Faucet} from "test/TestContracts/ERC20Faucet.sol";
+ 
++contract RecipientCheckedERC20 is ERC20Faucet {
++    mapping(address recipient => bool invalid) internal invalidRecipients;
++
++    constructor() ERC20Faucet("JPYdf", "JPYdf", 0, type(uint256).max) {}
++
++    function setInvalidRecipient(address _recipient, bool _invalid) external {
++        invalidRecipients[_recipient] = _invalid;
++    }
++
++    function requireValidRecipient(address _recipient) external view {
++        if (invalidRecipients[_recipient]) revert IJpydfToken.JpydfToken__CannotTransferToProtocolContract();
++    }
++}
++
+ contract InterestRouterForwarderTest is Test {
+-    ERC20Faucet internal token;
++    RecipientCheckedERC20 internal token;
+     InterestRouterForwarder internal forwarder;
+ 
+     address internal owner = makeAddr("owner");
+     address internal recipient = makeAddr("recipient");
+ 
+     function setUp() public {
+-        token = new ERC20Faucet("JPYdf", "JPYdf", 0, type(uint256).max);
++        token = new RecipientCheckedERC20();
+         forwarder = new InterestRouterForwarder(token, recipient, owner);
+     }
+ 
+     function test_RevertWhen_ConstructorArgsAreZero() public {
+         vm.expectRevert(InterestRouterForwarder.ZeroAddress.selector);
+-        new InterestRouterForwarder(ERC20Faucet(address(0)), recipient, owner);
++        new InterestRouterForwarder(RecipientCheckedERC20(address(0)), recipient, owner);
+ 
+         vm.expectRevert(InterestRouterForwarder.ZeroAddress.selector);
+         new InterestRouterForwarder(token, address(0), owner);
+@@ -66,6 +82,29 @@ contract InterestRouterForwarderTest is Test {
+         forwarder.setRecipient(address(0));
+     }
+ 
++    function test_RevertWhen_ConstructorRecipientIsInvalidForJpydf() public {
++        address invalidRecipient = makeAddr("protocolContract");
++        token.setInvalidRecipient(invalidRecipient, true);
++
++        vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++        new InterestRouterForwarder(token, invalidRecipient, owner);
++    }
++
++    function test_RevertWhen_NewRecipientIsInvalidForJpydfAndKeepCurrentRouteLive() public {
++        address invalidRecipient = makeAddr("protocolContract");
++        token.setInvalidRecipient(invalidRecipient, true);
++
++        vm.prank(owner);
++        vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++        forwarder.setRecipient(invalidRecipient);
++
++        assertEq(forwarder.recipient(), recipient, "recipient unchanged");
++
++        token.mint(address(forwarder), 1e18);
++        assertEq(forwarder.route(), 1e18, "route remains live");
++        assertEq(token.balanceOf(recipient), 1e18, "current recipient receives balance");
++    }
++
+     function test_OwnershipTransferIsTwoStepAndRenounceDisabled() public {
+         address nextOwner = makeAddr("nextOwner");
+ 
+@@ -109,3 +148,55 @@ contract InterestRouterForwarderTest is Test {
+         forwarder.acceptOwnership();
+     }
+ }
++
++contract RecipientContract {}
++
++contract InterestRouterForwarderJpydfIntegrationTest is Test {
++    JpydfToken internal token;
++    InterestRouterForwarder internal forwarder;
++
++    address internal owner = makeAddr("owner");
++    address internal recipient = makeAddr("recipient");
++    address[6] internal blockedRecipients;
++
++    function setUp() public {
++        RecipientContract bridgeAdmin = new RecipientContract();
++        RecipientContract troveManager = new RecipientContract();
++        RecipientContract stabilityPool = new RecipientContract();
++        RecipientContract borrowerOperations = new RecipientContract();
++        RecipientContract activePool = new RecipientContract();
++        RecipientContract collateralRegistry = new RecipientContract();
++
++        token = new JpydfToken(address(this), address(bridgeAdmin));
++        token.setBranchAddresses(
++            address(troveManager), address(stabilityPool), address(borrowerOperations), address(activePool)
++        );
++        token.setCollateralRegistry(address(collateralRegistry));
++
++        blockedRecipients = [
++            address(token),
++            address(collateralRegistry),
++            address(troveManager),
++            address(stabilityPool),
++            address(borrowerOperations),
++            address(activePool)
++        ];
++        forwarder = new InterestRouterForwarder(token, recipient, owner);
++    }
++
++    function test_RevertWhen_ConstructorRecipientIsAnyJpydfProtocolAddress() public {
++        for (uint256 i; i < blockedRecipients.length; ++i) {
++            vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++            new InterestRouterForwarder(token, blockedRecipients[i], owner);
++        }
++    }
++
++    function test_RevertWhen_SetRecipientIsAnyJpydfProtocolAddress() public {
++        for (uint256 i; i < blockedRecipients.length; ++i) {
++            vm.prank(owner);
++            vm.expectRevert(IJpydfToken.JpydfToken__CannotTransferToProtocolContract.selector);
++            forwarder.setRecipient(blockedRecipients[i]);
++            assertEq(forwarder.recipient(), recipient, "recipient unchanged");
++        }
++    }
++}
+diff --git a/documents/en/protocol/product/spec/InterestRouter.md b/documents/en/protocol/product/spec/InterestRouter.md
+index 253255e3..2d28705f 100644
+--- a/documents/en/protocol/product/spec/InterestRouter.md
++++ b/documents/en/protocol/product/spec/InterestRouter.md
+@@ -89,7 +89,7 @@ They are separate env values and separate addresses, allowing PIL and collateral
+ ### 3.2 Trusted External Dependencies
+ 
+ - **ActivePool (Core, per branch)**: sole mint source of PIL JPYdf. Forwarder never calls ActivePool.
+-- **JpydfToken (JPYdf, Core)**: token transferred by `route()`, fixed immutably in constructor. Assumes standard ERC-20 with no transfer hook (IRTR-SEC-004).
++- **JpydfToken (JPYdf, Core)**: token transferred by `route()`, fixed immutably in constructor. `constructor` and `setRecipient` reject current blocked Core destinations through `requireValidRecipient`. Assumes standard ERC-20 with no transfer hook (IRTR-SEC-004).
+ - **Shared TimelockController (DF)**: post-handover owner. Applies 24h delay to `setRecipient` ([Governance-Roles-Timelock](../policies/Governance-Roles-Timelock.md)).
+ 
+ ### 3.3 Assumptions
+@@ -119,15 +119,15 @@ Behavior is normative in §6; this table is a terse non-normative visibility sum
+ 
+ | Function / element | Visibility | Summary | Requirements |
+ | --- | --- | --- | --- |
+-| `constructor(IERC20 _jpydfToken, address _recipient, address _owner)` | - | Set immutable `jpydfToken`, initial `recipient`, and initial `owner`; reject zeroes; emit initial events | IRTR-FR-001 |
++| `constructor(IERC20 _jpydfToken, address _recipient, address _owner)` | - | Set immutable `jpydfToken`, initial `recipient`, and initial `owner`; reject zeroes and JPYdf-blocked Core recipients; emit initial events | IRTR-FR-001 |
+ | `route() returns (uint256 amount)` | external permissionless | Transfer the full held JPYdf balance to current `recipient`, returning amount | IRTR-FR-002 |
+-| `setRecipient(address newRecipient)` | external onlyOwner | Change final destination; reject zero | IRTR-FR-003 |
++| `setRecipient(address newRecipient)` | external onlyOwner | Change final destination; reject zero and JPYdf-blocked Core recipients | IRTR-FR-003 |
+ | `transferOwnership(address newOwner)` | external onlyOwner | Start 2-step transfer. `newOwner = 0` cancels pending transfer | IRTR-FR-004 |
+ | `acceptOwnership()` | external onlyPendingOwner | Complete 2-step transfer | IRTR-FR-004 |
+ | `renounceOwnership()` | external view onlyOwner | Disabled. Owner call reverts `RenounceOwnershipDisabled`; non-owner reverts `Unauthorized` | IRTR-FR-004 |
+ | `owner()` / `pendingOwner()` / `recipient()` / `jpydfToken()` | external view | Observable state | IRTR-FR-005 |
+ 
+-Errors: `ZeroAddress` / `Unauthorized` / `RenounceOwnershipDisabled`. This is a self-implemented 2-step ownership pattern, not OZ `Ownable2Step`.
++Errors: `ZeroAddress` / `Unauthorized` / `RenounceOwnershipDisabled`. This is a self-implemented 2-step ownership pattern, not OZ `Ownable2Step`. `JpydfToken__CannotTransferToProtocolContract` bubbles from JpydfToken when a recipient is a blocked Core destination.
+ 
+ ---
+ 
+@@ -139,9 +139,9 @@ Errors: `ZeroAddress` / `Unauthorized` / `RenounceOwnershipDisabled`. This is a
+ - **Signature**: `constructor(IERC20 _jpydfToken, address _recipient, address _owner)`
+ - **Purpose**: Establish the PIL receiver. Fix the transferred token (JPYdf) immutably, and set initial `recipient` and `owner`.
+ - **Permission**: deploy only.
+-- **Preconditions (Checks)**: `_jpydfToken != 0`, `_recipient != 0`, `_owner != 0`; zero reverts `ZeroAddress`.
++- **Preconditions (Checks)**: `_jpydfToken != 0`, `_recipient != 0`, `_owner != 0`; zero reverts `ZeroAddress`. `IJpydfToken(_jpydfToken).requireValidRecipient(_recipient)` must also succeed.
+ - **Behavior (Effects)**: store immutable `jpydfToken`; set `recipient` and `owner`; emit `RecipientUpdated(0, _recipient)` and `OwnershipTransferred(0, _owner)`.
+-- **Design notes**: initial values come from deploy env (IRTR-GOV-002). Forwarder has deterministic CREATE2 address. The only mutable item is `recipient`; redeploying would require branch rewiring.
++- **Design notes**: initial values come from deploy env (IRTR-GOV-002). A missing or currently JPYdf-blocked recipient stops deployment. Forwarder has deterministic CREATE2 address. The only mutable item is `recipient`; redeploying would require branch rewiring. Because Core address registration continues after Forwarder construction, deploy-tail verification repeats recipient validation.
+ - **Verification**: unit.
+ 
+ ### IRTR-FR-002: route (transfer PIL funds, permissionless)
+@@ -166,9 +166,9 @@ Errors: `ZeroAddress` / `Unauthorized` / `RenounceOwnershipDisabled`. This is a
+ - **Signature**: `setRecipient(address newRecipient)`
+ - **Purpose**: Change the final destination of PIL funds (for example Day-1 PIL address -> Day-2 Distributor/governance).
+ - **Permission**: `onlyOwner` (after handover, shared Timelock with 24h delay).
+-- **Preconditions (Checks)**: `newRecipient != 0`, otherwise `ZeroAddress`.
++- **Preconditions (Checks)**: `newRecipient != 0`, otherwise `ZeroAddress`; `IJpydfToken(jpydfToken).requireValidRecipient(newRecipient)` must also succeed.
+ - **Behavior (Effects)**: set `recipient = newRecipient`; emit `RecipientUpdated(oldRecipient, newRecipient)`.
+-- **revert**: non-owner -> `Unauthorized`; zero -> `ZeroAddress`.
++- **revert**: non-owner -> `Unauthorized`; zero -> `ZeroAddress`; a currently blocked JPYdf Core destination -> `JpydfToken__CannotTransferToProtocolContract`. A failed update preserves the current `recipient`.
+ - **Design notes**: ActivePool immutable still points to Forwarder; only the delivery destination changes. Change is future-effective from the next `route()`.
+ - **Verification**: unit.
+ 
+@@ -209,7 +209,7 @@ Accounting model: no budget, ratio, claim, or distribution accounting. Held bala
+ | --- | --- | --- |
+ | IRTR-INV-001 | Funds can exit only to `recipient`; there is no destination-argument transfer function and no rescue function | unit / manual |
+ | IRTR-INV-002 | `route()` sends the full held JPYdf balance to current `recipient`; there is no partial-send or alternate-destination path | unit / invariant |
+-| IRTR-INV-003 | Only `owner` (after handover = Timelock) can change `recipient`, and zero recipient is forbidden | unit |
++| IRTR-INV-003 | Only `owner` (after handover = Timelock) can change `recipient`; zero and destinations currently blocked by JPYdf are forbidden | unit |
+ | IRTR-INV-004 | `owner` cannot renounce; a live owner always exists so update ability is not permanently stranded | unit |
+ | IRTR-INV-005 | No state-changing calls to Core (does not call ActivePool; receive only; core no-modification CI guard has zero diff because this is a new file) | manual / CI |
+ | IRTR-INV-006 | In DF dToken wiring, every branch's `interestRouter` points to the same single Forwarder | deploy / handover verification |
+@@ -229,9 +229,9 @@ Accounting model: no budget, ratio, claim, or distribution accounting. Held bala
+ - **Statement**: anyone can call `route()`, but the caller controls neither destination nor amount (always full balance to current `recipient`). Third-party calls must not create misdirection or MEV theft. Zero-balance calls are no-op.
+ - **Verification**: unit.
+ 
+-### IRTR-SEC-003: Prevent strand through zero recipient or renounce
++### IRTR-SEC-003: Prevent strand through invalid recipient or renounce
+ 
+-- **Statement**: `recipient` cannot be zero (IRTR-FR-003) and owner cannot renounce (IRTR-FR-004). This structurally prevents PIL funds from becoming permanently undeliverable.
++- **Statement**: `recipient` cannot be zero or a JPYdf-blocked Core destination (IRTR-FR-001/003), and owner cannot renounce (IRTR-FR-004). A rejected update preserves the current recipient and its live `route()` path. This structurally prevents known configuration errors from making PIL funds undeliverable.
+ - **Verification**: unit.
+ 
+ ### IRTR-SEC-004: Reentrancy / CEI
+@@ -257,8 +257,8 @@ Accounting model: no budget, ratio, claim, or distribution accounting. Held bala
+ 
+ ### IRTR-GOV-002: Deploy inputs and fail-fast
+ 
+-- DF dToken wiring (IRTR-GOV-005) requires env `DF_INTEREST_ROUTER_RECIPIENT` (initial `recipient`, Day-1 PIL-dedicated address) and `DF_INTEREST_ROUTER_OWNER` (initial `owner`). If either is zero, deploy stops. One CREATE2 Forwarder is deployed and bound to every branch's `interestRouter`.
+-- Deploy-tail and handover/verify/accept scripts fail-fast on binding consistency (`interestRouter == Forwarder`, `recipient` / `owner` match env; IRTR-TBD-006 is resolved).
++- DF dToken wiring (IRTR-GOV-005) requires env `DF_INTEREST_ROUTER_RECIPIENT` (initial `recipient`, Day-1 PIL-dedicated address) and `DF_INTEREST_ROUTER_OWNER` (initial `owner`). If either is zero or the recipient is rejected by JPYdf, deploy stops. One CREATE2 Forwarder is deployed and bound to every branch's `interestRouter`.
++- Deploy-tail and handover/verify/accept scripts fail-fast on binding consistency (`interestRouter == Forwarder`, `recipient` / `owner` match env) and repeat `requireValidRecipient(recipient)` after Core address registration (IRTR-TBD-006 is resolved).
+ 
+ ### IRTR-GOV-003: Day-1 -> Day-2 delivery migration
+ 
+@@ -292,6 +292,7 @@ Monitoring metrics: Forwarder held balance (aggregate PIL across all branches),
+ | Event | Behavior |
+ | --- | --- |
+ | `route()` with zero balance | `return 0` without revert or event; safe for anyone to call |
++| Constructor or `setRecipient` receives a current JPYdf-blocked Core destination | Revert with `JpydfToken__CannotTransferToProtocolContract`; a setter failure preserves the current recipient and route path |
+ | Malicious `setRecipient` by owner-key compromise | After handover, runs through Timelock (24h delay). Detect/respond during the delay via `RecipientUpdated`/Timelock events (IRTR-SEC-001) |
+ | `recipient` is a nonfunctional contract | Standard ERC-20 `transfer` does not depend on receiver logic, so Forwarder send succeeds. Retention at recipient is recipient-management issue and can be corrected by owner `setRecipient` |
+ | Non-JPYdf token mistakenly sent | No rescue function; token remains stuck. `route()` transfers only `jpydfToken`. ETH cannot be received (IRTR-TBD-003) |
+@@ -304,9 +305,9 @@ Monitoring metrics: Forwarder held balance (aggregate PIL across all branches),
+ 
+ | ID | Requirement summary | Verification |
+ | --- | --- | --- |
+-| IRTR-FR-001 | constructor (zero rejection, initial values, initial events) | unit |
++| IRTR-FR-001 | constructor (zero / JPYdf-blocked recipient rejection, initial values, initial events) | unit |
+ | IRTR-FR-002 | route (full amount, fixed destination, zero-balance no-op, permissionless, return value) | unit, invariant=IRTR-INV-001/002, integration |
+-| IRTR-FR-003 | setRecipient (owner-only, zero rejection, future-effective) | unit |
++| IRTR-FR-003 | setRecipient (owner-only, zero / JPYdf-blocked recipient rejection, preserve live route on failure, future-effective) | unit |
+ | IRTR-FR-004 | 2-step ownership, pending cancellation, renounce disabled | unit |
+ | IRTR-FR-005 | view functions | unit |
+ | IRTR-INV-001..006 | §8 invariants | unit / invariant / manual / CI / deploy-handover |
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Low-05-Interest-Router-Recipient-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Low-05-Interest-Router-Recipient-Differential-Review.md
+new file mode 100644
+index 00000000..09337389
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-03-External-Audit-Low-05-Interest-Router-Recipient-Differential-Review.md
+@@ -0,0 +1,115 @@
++# External Audit Low 05: InterestRouter recipient 検証差分レビュー
++
++> Historical / Evidence snapshot (2026-08-03)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/InterestRouter.md` の `IRTR-FR-001/003` と `IRTR-SEC-003` を参照する。
++
++## Executive Summary
++
++外部監査 Low 05 の設定不整合は再現する。修正前の `InterestRouterForwarder.setRecipient` は非ゼロだけを確認するため、
++owner は JPYdf が送金先として拒否する Token 自身、CollateralRegistry、TroveManager、StabilityPool、
++BorrowerOperations、ActivePool を保存できた。その後の `route()` は JpydfToken 側で revert する。
++
++判定は **Low accepted with impact correction** とする。「永久に bricked」は正確ではない。owner は有効な recipient へ
++再設定でき、滞留した JPYdf を損失なく route できる。handover 後は Timelock delay のため復旧まで滞留し得るが、
++恒久停止ではない。修正は `constructor` と `setRecipient` の effects より前に JpydfToken の
++`requireValidRecipient` を実行し、失敗時に既存 recipient と route の liveness を維持する。
++
++| Severity | New finding count |
++| -------- | ----------------: |
++| Critical |                 0 |
++| High     |                 0 |
++| Medium   |                 0 |
++| Low      |                 0 |
++
++**Recommendation**: 修正と回帰試験を merge 可。非 upgradeable Forwarder のため、既存 deploy へ bytecode は反映されない。
++production activation は修正版を含む deployment と deploy-tail / handover 検証の成功を条件とする。
++
++## Scope And Baseline
++
++- 外部指摘: Low 05 — `setRecipient` missing `requireValidRecipient`
++- review baseline: `origin/develop` at `789466eec74c956880e7854fa893e03326569267`
++- production contract: `contracts/src/InterestRouterForwarder.sol`
++- deployment / governance verification:
++  - `contracts/script/DeployLiquity2.s.sol`
++  - `contracts/script/{Prepare,Verify,Accept}DFGovernanceHandover.s.sol`
++- tests:
++  - `contracts/test/InterestRouterForwarder.t.sol`
++  - `contracts/test/DFGovernanceHandoverXAUTGate.t.sol`
++- normative sources: JP / EN `documents/*/protocol/product/spec/InterestRouter.md`
++
++## Claim-By-Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| `setRecipient` は非ゼロしか検証しない | True | baseline source は JpydfToken helper を呼ばず storage を更新 |
++| Core protocol address を recipient に保存できる | True | JpydfToken の禁止集合と Forwarder の setter 条件が不一致 |
++| その状態で `route()` は revert する | True | `safeTransfer` は JpydfToken `transfer` の `_requireValidRecipient` に到達 |
++| 資金は永久に bricked する | False | owner が有効な recipient に戻せば同じ残高を route 可能 |
++| Timelock 下では復旧が遅延する | True | recipient 修正は owner=Timelock の governance delay を受ける |
++| token helper による設定時検証が妥当 | True | transfer と同じ正本判定を再利用し、禁止集合の重複を作らない |
++
++## What Changed
++
++- Forwarder constructor はゼロ引数確認後、初期 recipient を `IJpydfToken.requireValidRecipient` で検証する。
++- `setRecipient` は state/event 更新前に同じ helper を呼び、禁止宛先なら token の既存 custom error を伝播する。
++- ゼロ recipient は従来どおり Forwarder の `ZeroAddress` を返し、既存 error contract を維持する。
++- deploy 順では Forwarder 構築後にも branch Core address が JpydfToken へ登録されるため、deploy-tail で最終 recipient を再検証する。
++- prepare / verify / accept handover も current recipient を token に照会し、後から無効になった設定を権限移譲前に fail-fast する。
++- JP 正本と EN support translation を、constructor / setter / deploy / failure semantics に合わせて更新した。
++
++## Differential Side-Effect Review
++
++| Surface | Assessment | Result |
++| --- | --- | --- |
++| Valid recipient update | 追加 view call 後の state/event 順は同じ | Behavior preserved |
++| Invalid update | effects 前に revert | Current recipient and route remain live |
++| Zero-address error | local zero check is helper より先 | `ZeroAddress` selector preserved |
++| Non-owner call | `onlyOwner` is function modifier | `Unauthorized` occurs before token call |
++| Routing/accounting | `route()` implementation and full-balance transfer unchanged | No amount/destination change |
++| Token policy drift | Forwarder duplicates no address list | JpydfToken remains source of truth |
++| Deploy ordering | constructor-time registration set can be incomplete | Deploy-tail repeats validation after branch wiring |
++| Governance handover | prepare / verify / accept are read-only before ownership action | Invalid current recipient blocks handover early |
++| ABI/selectors | Existing constructor ABI and all public functions/events unchanged | Consumer ABI unchanged |
++| Storage | No state variable added/reordered | Layout unchanged |
++| Bytecode | One trusted static validation call added | Runtime 2,185 bytes, below EIP-170 limit |
++
++## Adversarial Safety And Liveness Review
++
++- 禁止 recipient への constructor / setter は Token 自身を含む全6分類で同じ custom error を返す。
++- 失敗した setter は `recipient` を変更せず、残高は旧 recipient へ permissionless に route できる。
++- owner 以外は helper の外部 call 前に拒否され、token call を gas griefing に利用できない。
++- `requireValidRecipient` は trusted immutable JpydfToken への `view` call であり、禁止集合を Forwarder に複製しない。
++- recipient が設定後に Core address として登録される順序を constructor だけでは防げないため、deploy-tail と handover で再照合する。
++- 将来 JpydfToken の禁止集合が増えた場合も、新規設定と運用 preflight は token の現行判定へ自動追従する。
++- 既存 Forwarder は non-upgradeable であり、source merge だけでは既存 instance を変更しない。既存 deployment がある場合は
++  新 bytecode を含む protocol deployment / migration の明示的な証跡が必要である。
++
++## Verification
++
++実行済み:
++
++```text
++PASS InterestRouterForwarder focused unit + production-token integration
++     13 passed; 0 failed; 0 skipped
++PASS governance handover recipient validation
++     16 passed; 0 failed; 0 skipped
++PASS DeployLiquity2 strategy-selector/deploy support suite
++     32 passed; 0 failed; 0 skipped
++PASS full Foundry suite
++     1,449 passed; 0 failed; 1 skipped
++PASS method-selector inspection
++     all public function selectors unchanged
++PASS production runtime bytecode inspection
++     InterestRouterForwarder 2,185 bytes
++PASS git diff --check
++```
++
++remote CI の最終結果は PR status に追記する。
++
++## Methodology
++
++- baseline の setter 条件と JpydfToken の transfer 禁止集合を照合し、設定受理→route revert の到達性を確認した。
++- `route()` が唯一の出口であることと、owner が setter を再実行できることを分けて評価し、「永久」claim を訂正した。
++- mock token で失敗時の state rollback / route liveness、実 JpydfToken で全 Core 禁止宛先と error selector を検証した。
++- constructor 時点と全 branch wiring 後で token の禁止集合が異なり得る deploy 順を確認し、終端 preflight を追加した。
++- ABI、storage、bytecode size、ownership ordering、valid route、deploy/handover scripts、JP/EN仕様を副作用面として確認した。
+diff --git a/documents/jp/protocol/product/spec/InterestRouter.md b/documents/jp/protocol/product/spec/InterestRouter.md
+index e27ca52e..a06f7cbd 100644
+--- a/documents/jp/protocol/product/spec/InterestRouter.md
++++ b/documents/jp/protocol/product/spec/InterestRouter.md
+@@ -100,7 +100,7 @@ deploy では受け皿が 2 系統に分かれる。
+ ### 3.2 外部依存（信頼する外部）
+ 
+ - **ActivePool（🔵 Core・各ブランチ）** — PIL 原資（JPYdf）の唯一の mint 元。Forwarder は ActivePool を呼ばない（受領のみ・コールバックなし）。
+-- **JpydfToken（JPYdf・🔵 Core）** — `route()` の転送対象。constructor で immutable 保持。標準 ERC-20（転送フックなし）であることに依拠（[IRTR-SEC-004](#irtr-sec-004-reentrancy--cei)）。
++- **JpydfToken（JPYdf・🔵 Core）** — `route()` の転送対象。constructor で immutable 保持。`constructor` / `setRecipient` は `requireValidRecipient` で現在の Core 禁止宛先を拒否する。標準 ERC-20（転送フックなし）であることに依拠（[IRTR-SEC-004](#irtr-sec-004-reentrancy--cei)）。
+ - **共通 TimelockController（🟢 DF）** — handover 後の `owner`。`setRecipient` に公示遅延を課す（[Governance-Roles-Timelock](../policies/Governance-Roles-Timelock.md)）。
+ 
+ ### 3.3 前提
+@@ -130,15 +130,15 @@ deploy では受け皿が 2 系統に分かれる。
+ 
+ | 関数 / 要素 | 可視性 | 要約 | 規定要件 |
+ | --- | --- | --- | --- |
+-| `constructor(IERC20 _jpydfToken, address _recipient, address _owner)` | — | immutable `jpydfToken`・初期 `recipient`・初期 `owner` を設定（いずれもゼロ拒否）。初期値を `RecipientUpdated`/`OwnershipTransferred` で発火 | IRTR-FR-001 |
++| `constructor(IERC20 _jpydfToken, address _recipient, address _owner)` | — | immutable `jpydfToken`・初期 `recipient`・初期 `owner` を設定（いずれもゼロ拒否、recipient は JPYdf Core 禁止宛先も拒否）。初期値を `RecipientUpdated`/`OwnershipTransferred` で発火 | IRTR-FR-001 |
+ | `route() returns (uint256 amount)` | external（permissionless） | 保持 JPYdf 全額を現 `recipient` へ転送し転送額を返す | IRTR-FR-002 |
+-| `setRecipient(address newRecipient)` | external（onlyOwner） | 最終配送先の変更（ゼロ拒否） | IRTR-FR-003 |
++| `setRecipient(address newRecipient)` | external（onlyOwner） | 最終配送先の変更（ゼロおよび JPYdf Core 禁止宛先を拒否） | IRTR-FR-003 |
+ | `transferOwnership(address newOwner)` | external（onlyOwner） | 2-step 移譲の開始。`newOwner = 0` は pending の取消 | IRTR-FR-004 |
+ | `acceptOwnership()` | external（onlyPendingOwner） | 2-step 移譲の確定 | IRTR-FR-004 |
+ | `renounceOwnership()` | external view onlyOwner | 無効化（owner 呼出で `RenounceOwnershipDisabled`・非 owner は `Unauthorized`） | IRTR-FR-004 |
+ | `owner()` / `pendingOwner()` / `recipient()` / `jpydfToken()` | external view | 状態の可観測化 | IRTR-FR-005 |
+ 
+-- **エラー集合**: `ZeroAddress` / `Unauthorized` / `RenounceOwnershipDisabled`（OZ `Ownable2Step` ではなく自前の 2-step 実装）。
++- **エラー集合**: `ZeroAddress` / `Unauthorized` / `RenounceOwnershipDisabled`（OZ `Ownable2Step` ではなく自前の 2-step 実装）に加え、recipient が JPYdf Core 禁止宛先なら `JpydfToken__CannotTransferToProtocolContract` を JpydfToken から伝播する。
+ 
+ ---
+ 
+@@ -150,9 +150,9 @@ deploy では受け皿が 2 系統に分かれる。
+ - **シグネチャ**: `constructor(IERC20 _jpydfToken, address _recipient, address _owner)`
+ - **目的**: PIL 原資の受け口を確立する。転送対象トークン（JPYdf）を immutable 固定し、承認済みの初期 `recipient` と初期 `owner` を設定する。
+ - **権限**: デプロイ時のみ。
+-- **事前条件（Checks）**: `_jpydfToken != 0` / `_recipient != 0` / `_owner != 0`（いずれもゼロは `ZeroAddress`）。
++- **事前条件（Checks）**: `_jpydfToken != 0` / `_recipient != 0` / `_owner != 0`（いずれもゼロは `ZeroAddress`）。さらに `IJpydfToken(_jpydfToken).requireValidRecipient(_recipient)` が成功すること。
+ - **動作（Effects）**: `jpydfToken` を immutable 保存、`recipient`・`owner` を設定。初期値を `RecipientUpdated(0, _recipient)` と `OwnershipTransferred(0, _owner)` で発火。
+-- **設計上のポイント**: 初期値は deploy env（[IRTR-GOV-002](#irtr-gov-002-deploy-入力と-fail-fast)）由来で、未指定なら deploy が停止する。Forwarder は CREATE2 で決定論アドレス。再デプロイは全ブランチ再配線を伴うため、可変なのは `recipient` のみ。
++- **設計上のポイント**: 初期値は deploy env（[IRTR-GOV-002](#irtr-gov-002-deploy-入力と-fail-fast)）由来で、未指定または JPYdf が現在拒否する recipient なら deploy が停止する。Forwarder は CREATE2 で決定論アドレス。再デプロイは全ブランチ再配線を伴うため、可変なのは `recipient` のみ。Core アドレス登録は Forwarder 構築後にも進むため、deploy 末尾でも同じ recipient 妥当性を再検証する。
+ - **Verification**: unit。
+ 
+ ### IRTR-FR-002: route（PIL 原資の転送・permissionless）
+@@ -177,9 +177,9 @@ deploy では受け皿が 2 系統に分かれる。
+ - **シグネチャ**: `setRecipient(address newRecipient)`
+ - **目的**: PIL 原資の最終送付先を変更する（holding address、`PILAllocator`、将来の Distributor / governance 等）。
+ - **権限**: `onlyOwner`（handover 後は共通 Timelock 経由）。
+-- **事前条件（Checks）**: `newRecipient != 0`（`ZeroAddress`）。
++- **事前条件（Checks）**: `newRecipient != 0`（`ZeroAddress`）かつ `IJpydfToken(jpydfToken).requireValidRecipient(newRecipient)` が成功すること。
+ - **動作（Effects）**: `recipient = newRecipient` → `RecipientUpdated(oldRecipient, newRecipient)` を発火。
+-- **revert**: 非 owner → `Unauthorized`；ゼロ → `ZeroAddress`。
++- **revert**: 非 owner → `Unauthorized`；ゼロ → `ZeroAddress`；現在の JPYdf Core 禁止宛先 → `JpydfToken__CannotTransferToProtocolContract`。失敗時は既存 `recipient` を保持する。
+ - **設計上のポイント**: ActivePool の immutable は Forwarder のままで配送先だけが変わる（再デプロイ不要）。変更は将来効のみ（変更後の最初の `route()` から新 recipient へ）。
+ - **Verification**: unit。
+ 
+@@ -220,7 +220,7 @@ deploy では受け皿が 2 系統に分かれる。
+ | --- | --- | --- |
+ | IRTR-INV-001 | 資金流出先は `recipient` のみ。宛先を引数に取る送金関数は存在しない（rescue も無い） | unit / manual |
+ | IRTR-INV-002 | `route()` は保持 JPYdf 全額を現 `recipient` へ送る（部分送金・他宛先送金の経路がない） | unit / invariant |
+-| IRTR-INV-003 | `recipient` の変更は `owner`（handover 後 = Timelock）のみ・ゼロ不可 | unit |
++| IRTR-INV-003 | `recipient` の変更は `owner`（handover 後 = Timelock）のみ。ゼロおよび変更時点で JPYdf が拒否する Core 宛先は不可 | unit |
+ | IRTR-INV-004 | `owner` は renounce 不可（常に有効な owner が存在し、付け替え能力が恒久 strand しない） | unit |
+ | IRTR-INV-005 | 🔵 core への状態変更呼び出しを行わない（ActivePool を呼ばず受領のみ。Core 側の差分は Core spec の `CORE-MOD-*` 台帳でのみ扱う） | manual / static review |
+ | IRTR-INV-006 | DF dToken wiring では全ブランチの `interestRouter` が同一の単一 Forwarder を指す | deploy（構築時保証）/ handover 検証 |
+@@ -240,9 +240,9 @@ deploy では受け皿が 2 系統に分かれる。
+ - **Statement**: 誰でも呼べるが、送金先・送金額（全額）に呼出者の裁量が無く、常に現 `recipient` へ全額が向かう。第三者呼出による不利益（誤送・MEV 横取り）が発生してはならない。残高 0 の呼出は no-op。
+ - **Verification**: unit。
+ 
+-### IRTR-SEC-003: recipient ゼロ・renounce による strand 防止
++### IRTR-SEC-003: 無効 recipient・renounce による strand 防止
+ 
+-- **Statement**: `recipient` をゼロにできず（FR-003）、owner を renounce できない（FR-004）。これにより PIL 原資が誰にも送れず恒久滞留する状態を構造的に防ぐ。
++- **Statement**: `recipient` をゼロまたは JPYdf Core 禁止宛先にできず（FR-001/003）、owner を renounce できない（FR-004）。拒否された変更は現 recipient を維持するため `route()` の既存経路を止めない。これにより既知の設定ミスで PIL 原資が送れず滞留する状態を構造的に防ぐ。
+ - **Verification**: unit。
+ 
+ ### IRTR-SEC-004: reentrancy / CEI
+@@ -269,7 +269,7 @@ deploy では受け皿が 2 系統に分かれる。
+ ### IRTR-GOV-002: deploy 入力と fail-fast
+ 
+ - DF dToken wiring（[IRTR-GOV-005](#irtr-gov-005-チェーン別配線ゲート)）では必須 env `DF_INTEREST_ROUTER_RECIPIENT`（承認済み initial `recipient`）と `DF_INTEREST_ROUTER_OWNER`（初期 `owner`）を要求し、いずれかゼロなら deploy を停止する（fail-fast）。Forwarder は CREATE2 で 1 個 deploy し、全ブランチの `interestRouter` に束縛する。
+-- 束縛整合（`interestRouter == Forwarder`・`recipient`/`owner` が env と一致）は deploy 末尾と handover/verify/accept scripts で fail-fast 検証する（[IRTR-TBD-006](#irtr-tbd-006) は解決済み）。
++- 束縛整合（`interestRouter == Forwarder`・`recipient`/`owner` が env と一致）と、全 Core アドレス登録後の `requireValidRecipient(recipient)` 成功を deploy 末尾および handover/verify/accept scripts で fail-fast 検証する（[IRTR-TBD-006](#irtr-tbd-006) は解決済み）。
+ 
+ ### IRTR-GOV-003: PIL 配送先移行
+ 
+@@ -302,6 +302,7 @@ deploy では受け皿が 2 系統に分かれる。
+ | 事象 | 挙動 |
+ | --- | --- |
+ | `route()` を残高 0 で呼出 | `return 0`（revert せず・イベントなし）。誰でも安全に呼べる |
++| constructor / `setRecipient` に現在の JPYdf Core 禁止宛先を指定 | `JpydfToken__CannotTransferToProtocolContract` で revert。setter の場合は既存 recipient を保持し、既存の `route()` 経路は継続 |
+ | owner 鍵侵害による不正 `setRecipient` | handover 後は Timelock 経由。`RecipientUpdated`/Timelock イベントの即時アラートで delay 中に検知・対応（[IRTR-SEC-001](#irtr-sec-001-owner-鍵侵害の被害境界)） |
+ | `recipient` が受領拒否コントラクト等で機能不全 | 標準 ERC-20 `transfer` は受領側ロジックに依存しないため Forwarder からの送付は成立。recipient 側の滞留は recipient 管理の問題（owner が `setRecipient` で是正可能） |
+ | JPYdf 以外のトークン誤送付 | rescue 関数が無いため当該トークンは滞留（救済不可）。`route()` は `jpydfToken` のみ転送。ETH は受領不可（[IRTR-TBD-003](#irtr-tbd-003)） |
+@@ -314,9 +315,9 @@ deploy では受け皿が 2 系統に分かれる。
+ 
+ | ID | 要件（要約） | 検証手段 |
+ | --- | --- | --- |
+-| IRTR-FR-001 | constructor（ゼロ拒否・初期値・初期イベント） | unit |
++| IRTR-FR-001 | constructor（ゼロ / JPYdf Core 禁止宛先拒否・初期値・初期イベント） | unit |
+ | IRTR-FR-002 | route（全額・固定宛先・残高 0 no-op・permissionless・戻り値） | unit, invariant=IRTR-INV-001/002, integration |
+-| IRTR-FR-003 | setRecipient（owner 限定・ゼロ拒否・将来効） | unit |
++| IRTR-FR-003 | setRecipient（owner 限定・ゼロ / JPYdf Core 禁止宛先拒否・失敗時の現経路維持・将来効） | unit |
+ | IRTR-FR-004 | 2-step ownership・pending 取消・renounce 無効 | unit |
+ | IRTR-FR-005 | View 群 | unit |
+ | IRTR-INV-001..006 | §8 各不変条件 | unit / invariant / manual / CI / deploy・handover |

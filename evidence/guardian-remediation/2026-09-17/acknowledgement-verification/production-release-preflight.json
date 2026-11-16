@@ -1,0 +1,13 @@
+{
+  "observedAtUtc": "2026-09-17T06:38:26.457155+00:00",
+  "productionBranch": "main",
+  "productionCommit": "3877bdba200b5b55876ef00b94f41f1cdcd4d206",
+  "ssmKeyCount": 38,
+  "configuredKeyNamesAbsentFromMainAllowlist": [
+    "JPYDF_LIQUIDATOR_READ_PRIMARY_RPC_URL"
+  ],
+  "readOnly": true,
+  "configurationValuesPrinted": false,
+  "deploymentExecuted": false,
+  "conclusion": "Current main loader rejects the existing JPYDF_LIQUIDATOR_READ_PRIMARY_RPC_URL setting. Integrate/review the production monitor release before diff/deploy; do not enable the old schedule as a shortcut."
+}

@@ -1,0 +1,411 @@
+diff --git a/contracts/test/ExternalAuditGas01BackingRatio.t.sol b/contracts/test/ExternalAuditGas01BackingRatio.t.sol
+new file mode 100644
+index 00000000..b5f64e43
+--- /dev/null
++++ b/contracts/test/ExternalAuditGas01BackingRatio.t.sol
+@@ -0,0 +1,232 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.24;
++
++import "forge-std/Test.sol";
++
++import "../src/CollateralVault.sol";
++import "../src/DToken.sol";
++import "../src/Interfaces/IDToken.sol";
++import "../src/Interfaces/ISkyUsdcSUsdsConverter.sol";
++import "../src/Interfaces/IStrategy.sol";
++import "../src/Strategies/SkyUsdcSUsdsStrategy.sol";
++import "./mocks/MockERC20.sol";
++
++import "openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
++import "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
++import "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
++import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
++import "openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
++import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
++import "openzeppelin-contracts-upgradeable/token/ERC20/extensions/IERC20MetadataUpgradeable.sol";
++
++contract ExternalAuditGas01SUsdsVault is ERC4626 {
++    constructor(IERC20 asset_) ERC20("Gas 01 sUSDS", "gSUSDS") ERC4626(asset_) {}
++}
++
++contract ExternalAuditGas01SkyConverter is ISkyUsdcSUsdsConverter {
++    using SafeERC20 for IERC20;
++
++    MockERC20 public immutable usdc;
++    MockERC20 public immutable usds;
++
++    constructor(MockERC20 _usdc, MockERC20 _usds) {
++        usdc = _usdc;
++        usds = _usds;
++    }
++
++    function usdcToken() external view returns (IERC20) {
++        return IERC20(address(usdc));
++    }
++
++    function usdsToken() external view returns (IERC20) {
++        return IERC20(address(usds));
++    }
++
++    function psmWrapper() external pure returns (ISkyLitePsmWrapper) {
++        return ISkyLitePsmWrapper(address(0));
++    }
++
++    function convertUsdcToUsds(uint256 usdcAmount, uint256 minUsdsOut, address receiver)
++        external
++        returns (uint256 usdsOut)
++    {
++        IERC20(address(usdc)).safeTransferFrom(msg.sender, address(this), usdcAmount);
++        usdc.burn(address(this), usdcAmount);
++        usdsOut = usdcAmount * 1e12;
++        require(usdsOut >= minUsdsOut, "USDS_MIN");
++        usds.mint(receiver, usdsOut);
++    }
++
++    function convertUsdsToUsdc(uint256 maxUsdsIn, uint256 minUsdcOut, address receiver)
++        external
++        returns (uint256 usdcOut)
++    {
++        IERC20(address(usds)).safeTransferFrom(msg.sender, address(this), maxUsdsIn);
++        usds.burn(address(this), maxUsdsIn);
++        usdcOut = maxUsdsIn / 1e12;
++        require(usdcOut >= minUsdcOut, "USDC_MIN");
++        usdc.mint(receiver, usdcOut);
++    }
++
++    function previewUsdsToUsdc(uint256 maxUsdsIn) external pure returns (uint256 usdcOut) {
++        return maxUsdsIn / 1e12;
++    }
++}
++
++contract ExternalAuditGas01BackingRatioTest is Test {
++    uint256 internal constant STRATEGY_COUNT = 32;
++    uint256 internal constant CURRENT_DF_BRANCH_COUNT = 8;
++    uint256 internal constant COLLATERAL_REGISTRY_MAX_BRANCHES = 10;
++    uint256 internal constant DEPOSIT_AMOUNT = 1_000_000e6;
++    uint256 internal constant PER_BRANCH_GAS_CEILING = 2_000_000;
++    uint256 internal constant MAX_BRANCH_TWO_PASS_VALUATION_CEILING = 20_000_000;
++
++    address internal treasury;
++    MockERC20 internal usdc;
++    CollateralVault internal emptyVault;
++    CollateralVault internal singleStrategyVault;
++    CollateralVault internal fiveStrategyVault;
++    CollateralVault internal maxStrategyVault;
++
++    function setUp() public {
++        treasury = makeAddr("treasury");
++        usdc = new MockERC20("Mock USDC", "mUSDC", 6);
++
++        emptyVault = _deployVault();
++        singleStrategyVault = _deployVault();
++        fiveStrategyVault = _deployVault();
++        maxStrategyVault = _deployVault();
++
++        _registerSkyStrategies(singleStrategyVault, 1);
++        _registerSkyStrategies(fiveStrategyVault, 5);
++        _registerSkyStrategies(maxStrategyVault, STRATEGY_COUNT);
++
++        _depositAndAllocate(emptyVault);
++        _depositAndAllocate(singleStrategyVault);
++        _depositAndAllocate(fiveStrategyVault);
++        _depositAndAllocate(maxStrategyVault);
++
++        assertEq(maxStrategyVault.getStrategiesCount(), STRATEGY_COUNT, "max Strategy count reached");
++        for (uint256 i; i < STRATEGY_COUNT; ++i) {
++            (IStrategy strategy,) = maxStrategyVault.getStrategyAt(i);
++            assertGt(SkyUsdcSUsdsStrategy(address(strategy)).ownSUsdsShares(), 0, "Strategy has a live position");
++        }
++    }
++
++    function test_Max32SupportedSkyStrategiesBackingRatioStaysWithinBoundedGas() public {
++        // Measure the max-size path first so every Strategy proxy and every
++        // distinct sUSDS/converter venue begins cold in this transaction.
++        (uint256 maxRatio, uint256 maxGas) = _measureBackingRatio(maxStrategyVault);
++        (, uint256 maxWarmGas) = _measureBackingRatio(maxStrategyVault);
++        (uint256 fiveRatio, uint256 fiveGas) = _measureBackingRatio(fiveStrategyVault);
++        (uint256 singleRatio, uint256 singleGas) = _measureBackingRatio(singleStrategyVault);
++        (uint256 emptyRatio, uint256 emptyGas) = _measureBackingRatio(emptyVault);
++
++        uint256 loopGas = maxGas - emptyGas;
++        uint256 marginalGasPerStrategy = loopGas / STRATEGY_COUNT;
++        uint256 eightBranchColdPassUpperBound = maxGas * CURRENT_DF_BRANCH_COUNT;
++        uint256 eightBranchTwoPassUpperBound = (maxGas + maxWarmGas) * CURRENT_DF_BRANCH_COUNT;
++        uint256 maxBranchTwoPassUpperBound = (maxGas + maxWarmGas) * COLLATERAL_REGISTRY_MAX_BRANCHES;
++
++        emit log_named_uint("Gas01 empty backingRatio gas", emptyGas);
++        emit log_named_uint("Gas01 one Sky Strategy backingRatio gas", singleGas);
++        emit log_named_uint("Gas01 five distinct Sky Strategies backingRatio gas", fiveGas);
++        emit log_named_uint("Gas01 32 distinct Sky Strategies backingRatio gas", maxGas);
++        emit log_named_uint("Gas01 warm repeat of 32-Strategy backingRatio gas", maxWarmGas);
++        emit log_named_uint("Gas01 32-Strategy loop gas above empty baseline", loopGas);
++        emit log_named_uint("Gas01 marginal gas per Strategy", marginalGasPerStrategy);
++        emit log_named_uint("Gas01 conservative 8-branch cold-pass upper bound", eightBranchColdPassUpperBound);
++        emit log_named_uint("Gas01 conservative 8-branch two-pass upper bound", eightBranchTwoPassUpperBound);
++        emit log_named_uint("Gas01 conservative 10-branch two-pass upper bound", maxBranchTwoPassUpperBound);
++
++        assertEq(emptyRatio, 1e18, "empty Vault fully backed");
++        assertEq(singleRatio, 1e18, "single-Strategy Vault fully backed");
++        assertEq(fiveRatio, 1e18, "five-Strategy Vault fully backed");
++        assertEq(maxRatio, 1e18, "max-Strategy Vault fully backed");
++        assertLt(maxGas, PER_BRANCH_GAS_CEILING, "32 supported Strategies exceed per-branch gas ceiling");
++        assertLt(
++            maxBranchTwoPassUpperBound,
++            MAX_BRANCH_TWO_PASS_VALUATION_CEILING,
++            "max-branch two-pass valuation exceeds gas ceiling"
++        );
++    }
++
++    function _measureBackingRatio(CollateralVault vault) internal view returns (uint256 ratio, uint256 gasUsed) {
++        uint256 gasBefore = gasleft();
++        ratio = vault.backingRatio();
++        gasUsed = gasBefore - gasleft();
++    }
++
++    function _deployVault() internal returns (CollateralVault vault) {
++        DToken dTokenImplementation = new DToken();
++        CollateralVault vaultImplementation = new CollateralVault();
++        address predictedVault = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
++        DToken dToken = DToken(
++            address(
++                new ERC1967Proxy(
++                    address(dTokenImplementation),
++                    abi.encodeWithSelector(DToken.initialize.selector, predictedVault, address(this))
++                )
++            )
++        );
++        dToken.setAllowedUnderlying(address(usdc), true);
++        vault = CollateralVault(
++            address(
++                new ERC1967Proxy(
++                    address(vaultImplementation),
++                    abi.encodeWithSelector(
++                        CollateralVault.initialize.selector,
++                        IERC20(address(usdc)),
++                        IDToken(address(dToken)),
++                        treasury,
++                        address(this)
++                    )
++                )
++            )
++        );
++        dToken.setTokenInfo("dUSDC", "dUSDC", IERC20MetadataUpgradeable(address(usdc)));
++    }
++
++    function _registerSkyStrategies(CollateralVault vault, uint256 strategyCount) internal {
++        uint256 assignedWeight;
++        for (uint256 i; i < strategyCount; ++i) {
++            MockERC20 usds = new MockERC20("Mock USDS", "mUSDS", 18);
++            ExternalAuditGas01SUsdsVault susdsVault = new ExternalAuditGas01SUsdsVault(IERC20(address(usds)));
++            ExternalAuditGas01SkyConverter converter = new ExternalAuditGas01SkyConverter(usdc, usds);
++            SkyUsdcSUsdsStrategy implementation = new SkyUsdcSUsdsStrategy();
++            SkyUsdcSUsdsStrategy strategy = SkyUsdcSUsdsStrategy(
++                address(
++                    new ERC1967Proxy(
++                        address(implementation),
++                        abi.encodeWithSelector(
++                            SkyUsdcSUsdsStrategy.initialize.selector,
++                            address(vault),
++                            IERC20(address(usdc)),
++                            address(this),
++                            address(this),
++                            IERC20(address(usds)),
++                            IERC4626(address(susdsVault)),
++                            ISkyUsdcSUsdsConverter(address(converter)),
++                            0
++                        )
++                    )
++                )
++            );
++
++            uint256 weight =
++                strategyCount == 1 ? 10_000 : i + 1 == strategyCount ? 10_000 - assignedWeight : 10_000 / strategyCount;
++            assignedWeight += weight;
++            vault.addToWhitelist(address(strategy));
++            vault.addStrategy(IStrategy(address(strategy)), weight, type(uint256).max);
++        }
++        assertEq(assignedWeight, 10_000, "weights sum to 100%");
++    }
++
++    function _depositAndAllocate(CollateralVault vault) internal {
++        usdc.mint(address(this), DEPOSIT_AMOUNT);
++        usdc.approve(address(vault), DEPOSIT_AMOUNT);
++        vault.deposit(DEPOSIT_AMOUNT);
++        vault.setBufferConfig(0, 0);
++        vault.allocate();
++    }
++}
+diff --git a/documents/en/protocol/product/spec/CollateralVault.md b/documents/en/protocol/product/spec/CollateralVault.md
+index 31a87f24..3a4985b8 100644
+--- a/documents/en/protocol/product/spec/CollateralVault.md
++++ b/documents/en/protocol/product/spec/CollateralVault.md
+@@ -365,8 +365,10 @@ Specified interface `ICollateralVault`. Behavior is defined in §6 Functional Re
+ - **Design notes**:
+   - **Whitelist removal != Strategy removal**: recovery of funds from existing Strategies (`Strategy.sendToVault`, [Strategy Requirements Specification](strategies/Strategy.md)) and principal zeroing (`writeoffStrategyPrincipal`, [VAULT-FR-009](#vault-fr-009)) are preconditions for `removeStrategy`. Before removal, any unrecoverable amount must be written off to zero `principal`, and any recoverable residual assets/uncollected yield must be returned until live `estimatedTotalUnderlying() == 0`. Strategies whose live valuation cannot be read fail closed on removal to avoid erroneous deletion. Completion emits `StrategyRemoved` (there is no failed-removal retry rescue mechanism; withdrawal failures are handled by push recovery + writeoff).
+   - **Underlying invariant in `addStrategy` (restores pre-activation guard)**: In the push model, the Underlying approval direction is reversed (**Strategy approves Vault at initialization**, [VAULT-FR-005](#vault-fr-005)), and `addStrategy` does not touch Underlying. Therefore the implicit pre-activation guard that a placeholder Vault (`underlying == address(0)`) would revert on `underlying.safeApprove` is lost. It is restored through **explicit preconditions** (`underlying != address(0)` and `strategy.underlying() == vault.underlying()`). Effects: (1) force activation order (`setUnderlying` ([VAULT-FR-011](#vault-fr-011)) -> `addStrategy`), (2) guarantee Vault/Strategy **collateral asset equality** at registration (preventing accidental registration of a Strategy for a different asset and later sending/pulling the wrong Underlying).
+-  - **Strategy count bound**: `MAX_STRATEGIES = 32` is an explicit gas and operability bound for all strategy-list loops (`allocate`, `getStrategyStatuses`, `removeStrategy`, and registered checks). More venues require replacing/removing an existing Strategy after funds are recovered or written off, rather than growing the registry unbounded.
+-- **Verification**: unit (whitelist guard, guardian remove, Underlying invariant, already registered, max strategy count, weight limit, removal rejection for `principal != 0` / live `estimatedTotalUnderlying != 0` / valuation failure), invariant=[VAULT-INV-007](#vault-inv-007) / [VAULT-INV-008](#vault-inv-008).
++  - **Strategy count bound**: `MAX_STRATEGIES = 32` is an explicit gas and operability bound for every strategy-list loop (`totalUnderlying` / `backingRatio`, `allocate`, `getStrategyStatuses`, `removeStrategy`, and registered checks). More venues require replacing/removing an existing Strategy after funds are recovered or written off, rather than growing the registry unbounded.
++  - **Valuation gas regression bound**: `ExternalAuditGas01BackingRatioTest` registers up to 32 independent real `SkyUsdcSUsdsStrategy` proxies, implementations, sUSDS vaults, and converters with live positions in a real `CollateralVault`. Under the baseline compiler configuration, `backingRatio()` costs 1,332,387 gas for a cold 32-Strategy read, 261,884 gas for the warm repeat in the same transaction, and 237,535 gas for a cold five-Strategy read. The test enforces a per-branch cold bound below 2,000,000 gas and a valuation-only bound below 20,000,000 gas for the cold + warm two-pass path when the protocol maximum of ten `CollateralRegistry.redeemCollateral` branches each contain 32 Strategies (12,754,168 gas for the current eight-branch DF topology; 15,942,710 gas for ten branches). This extrapolation is not a full-transaction bound: it excludes surrounding PriceFeed / TroveManager work and the actual Trove redemption loop. Activating a new Strategy type requires rerunning the same maximum-count replay and estimating the target-chain block gas together with `_maxIterationsPerCollateral`; configurations exceeding the regression bound are not approved.
++  - **Why there is no within-block cache**: `backingRatio()` is a solvency read propagated into borrowing, redemption, and liquidation prices. It can change within one block after a Strategy loss, recovery, writeoff, or backstop deposit in an earlier transaction. A block cache added only for gas would create additional invalidation surfaces and a stale-price window, so it is not adopted.
++- **Verification**: unit (whitelist guard, guardian remove, Underlying invariant, already registered, max strategy count, weight limit, removal rejection for `principal != 0` / live `estimatedTotalUnderlying != 0` / valuation failure, real Sky valuation gas at 32 Strategies, maximum ten-branch two-pass extrapolation), invariant=[VAULT-INV-007](#vault-inv-007) / [VAULT-INV-008](#vault-inv-008).
+ 
+ ### <a id="vault-fr-009"></a>VAULT-FR-009: `updateStrategy` / `emergencyDisableStrategy` / `writeoffStrategyPrincipal` (adjust registered Strategy and finalize principal impairment)
+ 
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Gas-01-Backing-Ratio-Gas-Bound-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Gas-01-Backing-Ratio-Gas-Bound-Differential-Review.md
+new file mode 100644
+index 00000000..3d32f337
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Gas-01-Backing-Ratio-Gas-Bound-Differential-Review.md
+@@ -0,0 +1,133 @@
++# External Audit Gas 01: backingRatio Strategy valuation gas 上限 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/CollateralVault.md` VAULT-FR-008 / FR-013 / FR-016 を参照する。
++
++## Executive Summary
++
++外部監査 Gas 01「Gas Exhaustion In Strategy Valuation Loop Can Revert All Redemptions」のうち、`backingRatio()` が登録
++Strategy 数に比例して重くなり、`CollateralRegistry.redeemCollateral()` の全 branch price path から呼ばれるというコード観測は
++正しい。gas 不足なら transaction 全体が revert する点も EVM の一般的な性質として正しい。
++
++一方、現行 registry は `MAX_STRATEGIES = 32` で既に bounded であり、「最大構成が block gas を超えて全 redemption を実行不能に
++する」との影響は報告内で計測されていない。実 `CollateralVault` と、supported path の中で外部 view graph が重い
++`SkyUsdcSUsdsStrategy` を用いて 1 / 5 / 32 件を計測した。32 件 cold は 1,332,387 gas、同じ branch の warm 再評価は
++261,884 gas、現行DFの8 branch が各32件を持つ cold + warm 2-pass valuation 外挿は 12,754,168 gas だった。さらに
++`CollateralRegistry` の protocol 上限10 branch でも 15,942,710 gas である。
++
++**判定**: gas-growth concern は受理するが、global redemption DoS の実証は不成立。`MAX_STRATEGIES = 32` を維持し、production code、
++ABI、storage は変更しない。実 Strategy 最大構成の回帰 test、JP/EN specification の定量上限、将来 Strategy activation 時の
++再計測 gate を追加する。block cache は同一 block 内の backing 変化を stale にし得るため不採用。
++
++## Scope And Baseline
++
++- 外部指摘: Gas 01 — `backingRatio` Strategy valuation loop の gas exhaustion
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象 call graph: `CollateralRegistry.redeemCollateral` → `TroveManager.getUnbackedPortionPriceAndRedeemability` →
++  `PriceFeed.fetchPrice` → `DFPriceFeedBase._applyBackingRatio` → `CollateralVault.backingRatio` → `totalUnderlying`
++- 上限: 現行DFは8 collateral branches、`CollateralRegistry` は最大10、各 Vault `MAX_STRATEGIES = 32`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| `backingRatio` は最大32 Strategyを線形走査する | True | 各 Strategy の `estimatedTotalUnderlying` と `principal` を fail-soft に読む |
++| redeem は全 branch の price / backing を読む | True | 通常1 pass、全 unbacked が0なら redeemability の2 pass目がある |
++| gas 不足で redemption transaction 全体が revert する | True but generic | branch単位の gas隔離はない。ただし最大構成の必要gasを別途立証する必要がある |
++| 3–5 Strategy の追加分は約75,000 gas | Underestimated for tested mix | 5 distinct live Sky Strategies は empty 比 +202,285 gas、total 237,535 gas |
++| 現行最大構成が全 redemption を実行不能にする | Not demonstrated | 現行8 branchで12,754,168 gas、protocol上限10 branchでも15,942,710 gas（いずれも2-pass valuation-only） |
++| loop cap を追加すべき | Already bounded | `addStrategy` は32件目の次を `TooManyStrategies` で拒否する |
++| block 内 cache を追加すべき | Rejected | 同一blockの先行txでもloss / recovery / writeoff / backstopにより backing は変化する |
++
++## Measurement Fixture
++
++`ExternalAuditGas01BackingRatioTest` は軽量 mock Strategy の `SLOAD` だけを測らない。各 Strategy ごとに次を独立 deploy する。
++
++- 実 `CollateralVault` / `DToken` proxy
++- 実 `SkyUsdcSUsdsStrategy` proxy と別 implementation
++- 別 ERC-4626 sUSDS vault
++- 別 USDS token と Sky converter
++- weight 合計 10,000 bps、cap unlimited、全 Strategy に nonzero live position
++
++Sky valuation は proxy delegatecall 後、sUSDS `balanceOf` / `convertToAssets` と converter `previewUsdsToUsdc` を通り、Vault はさらに
++Strategy `principal()` を読む。32件計測を test transaction の最初に置くため、各 proxy、implementation、token、vault、converter は
++cold から開始する。続けて同じ32件を再読し、`redeemCollateral` fallback の2 pass目に相当する warm cost を測る。
++
++## Results
++
++| Configuration | `backingRatio()` gas | empty baseline との差 |
++| --- | ---: | ---: |
++| 0 Strategy | 35,250 | 0 |
++| 1 live Sky Strategy | 75,707 | 40,457 |
++| 5 distinct live Sky Strategies | 237,535 | 202,285 |
++| 32 distinct live Sky Strategies, cold | 1,332,387 | 1,297,137 |
++| 同じ32件、同一tx内 warm repeat | 261,884 | n/a |
++
++32件 loop の平均増分は 40,535 gas / Strategy。単純な最大 branch 外挿は次のとおり。
++
++| `CollateralRegistry` valuation shape | Gas |
++| --- | ---: |
++| 8 branches × cold 32-Strategy backing read | 10,659,096 |
++| 8 branches × (cold + warm) 2-pass backing read | 12,754,168 |
++| protocol maximum 10 branches × (cold + warm) 2-pass backing read | 15,942,710 |
++
++これは **valuation 部分だけ**の保守的外挿である。PriceFeed / TroveManager の周辺処理、配列生成、debt / TCR read、base-rate 更新、
++実 Trove redemption loop は含まないため、full redemption transaction の gas 上限とは主張しない。実運用では
++`_maxIterationsPerCollateral` を明示的に制限し、対象 chain / block の gas estimate を activation package で確認する。
++
++## Decision And Regression Boundary
++
++- `MAX_STRATEGIES = 32` を追加縮小しない。32は既に全 loop の compile-time operational bound で、将来の venue replacement を含む
++  一時的な新旧 Strategy 併存余地でもある。
++- test は cold 32-Strategy branch `< 2,000,000 gas` を固定する。
++- test は protocol 上限10 branch の cold + warm 2-pass **valuation-only** 外挿 `< 20,000,000 gas` を固定する。
++- 新しい Strategy 型はその外部 call graph を最大32件へ展開して再測定する。test ceiling を超える implementation は、cap縮小、view
++  最適化、または別 architecture の追加レビューなしに activation しない。
++- cache は追加しない。gas optimization が前 transaction の loss/writeoff/recovery/backstop を無視する価格状態を作ってはならない。
++
++20m は chain gas limit の代用ではなく、compiler / implementation drift を検出する repo 内 regression budget である。target chain の
++実際の block limit、deployment 時の branch 数、Strategy mix、redemption iteration は別の launch evidence として確認する。
++
++## Side-Effect Review
++
++- **Production semantics**: 変更なし。`backingRatio` の live-first / bounded-cache fallback と PriceFeed failure handling は維持する。
++- **Solvency freshness**: block cacheを追加しないため、同一blockの state transition 後も次のcallは最新 backingを読む。
++- **Availability**: Strategy view failure は既存どおり fresh bounded cache、なければ0 valuation。今回の証拠はrevert behaviorを変更しない。
++- **Governance**: 32件 cap、whitelist、weight/cap、remove precondition は無変更。
++- **Upgradeability**: production storage、selector、runtime bytecodeへの変更なし。
++- **Gas scope**: supported Sky path の量的境界を固定するが、任意の将来 Strategy や full redemption の無条件安全証明ではない。
++
++## Verification
++
++```text
++forge test --match-contract ExternalAuditGas01BackingRatioTest -vv
++forge test -q --summary --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++forge fmt --check test/ExternalAuditGas01BackingRatio.t.sol
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- focused gas replay 1 passed / 0 failed
++- 0 / 1 / 5 / 32 Strategy の backing ratio はすべて 1e18
++- cold 32件 1,332,387 gas、warm repeat 261,884 gas
++- 現行8 branch 2-pass valuation-only 外挿 12,754,168 gas、protocol上限10 branchは15,942,710 gas
++- forkless broad gate 71 suites / 1,413 passed / 0 failed / 0 skipped
++- production source diff 0、changed Solidity test format / whitespace clean
++
++## Residual Risk
++
++- Solidity compiler、proxy implementation、外部 venue view の変更で gas は増える。absolute値ではなく regression ceiling の継続検査が必要。
++- actual mainnet venue の cold-access costや将来の Strategy型が fixtureより重い可能性がある。activation前にfork replayを追加する。
++- 32件×8 branchのvaluationがbound内でも、Trove traversalを大きく設定したfull redemptionはcaller gas / block gasを超え得る。
++- 1 Strategyが意図的に大量gasを消費して正常returnする場合、try/catchはgas budgetを隔離しない。trusted whitelistとactivation gas gateが
++  境界であり、任意external Strategyを登録しない。
++- branchごとのcall gas capは、正常だが重いviewを0 valuation扱いにして全Trove価格を下げ得るため、単純なremediationではない。
++
++## Methodology
++
++finding本文、現行spec、`CollateralRegistry`の1/2-pass分岐、TroveManager→PriceFeed→Vault call graph、Vault valuation cache、
++Sky Strategyの外部view graphを追跡した。mock-only estimateを避け、最大件数のactual production contractsでcold/warm gasを測定し、
++production差分0、full-transaction非主張、将来activation gateをレビューした。
+diff --git a/documents/jp/protocol/product/spec/CollateralVault.md b/documents/jp/protocol/product/spec/CollateralVault.md
+index 8a299540..915cd4a3 100644
+--- a/documents/jp/protocol/product/spec/CollateralVault.md
++++ b/documents/jp/protocol/product/spec/CollateralVault.md
+@@ -366,8 +366,10 @@ CollateralVault の設計は、**Liquity v2 コアを無改変のまま使う**
+ - **設計上のポイント**:
+   - **ホワイトリスト除去 ≠ Strategy 解除**: 既存 Strategy の資金回収（`Strategy.sendToVault`、[Strategy 要件定義](./strategies/Strategy.md)）・元本ゼロ化（`writeoffStrategyPrincipal`、[VAULT-FR-009](#vault-fr-009-updatestrategy--writeoffstrategyprincipal登録-strategy-の調整と元本毀損確定)）は `removeStrategy` の前処理として行う。解除前に回収不能分を writeoff して `principal` をゼロにし、さらに回収可能な残余資産・未回収 yield も live `estimatedTotalUnderlying() == 0` まで回収しておく必要がある。live valuation が読めない Strategy は誤除去を避けるため removal を fail-closed する。完了時に `StrategyRemoved` を発火する（救済用の失敗 removal リトライ機構は持たない＝引き出し失敗の救済は push 回収＋writeoff で行う）。
+   - **addStrategy の Underlying 不変条件（活性化前ガードの復元）**: push モデルでは Underlying の approve 方向が反転し（**Strategy が初期化時に Vault を approve**、[VAULT-FR-005](#vault-fr-005-receivefromstrategystrategy--vault-の-push-受入)）、`addStrategy` は Underlying に触れない。このため「placeholder Vault（`underlying == address(0)`）では `addStrategy` が `underlying.safeApprove` で revert する」という暗黙の活性化前ガードが失われる。これを **明示的な前提条件**（`underlying != address(0)` かつ `strategy.underlying() == vault.underlying()`）で復元する。効果は 2 つ: (1) **活性化順序**（`setUnderlying`（[VAULT-FR-011](#vault-fr-011-setunderlying後付け確定一度限り)）→ `addStrategy`）を強制、(2) Vault と Strategy の **担保資産一致**を登録時に保証（別資産の Strategy を誤登録し、活性化後に `allocate` が誤った Underlying を送り込む／`receiveFromStrategy` が別トークンを pull する事故を防ぐ）。
+-  - **Strategy 数の上限**: `MAX_STRATEGIES = 32` は、strategy 一覧を走査する処理（`allocate`、`getStrategyStatuses`、`removeStrategy`、登録済み判定）に対する明示的な gas / 運用性の上限である。これ以上の外部運用先を追加する場合は、既存 Strategy から資金を回収または writeoff して remove / replace し、registry を無制限に伸ばさない。
+-- **Verification**: unit（whitelist ガード・guardian remove・Underlying 不変条件・既登録・Strategy 数上限・weight 上限・`principal != 0` / live `estimatedTotalUnderlying != 0` / valuation failure の remove 拒否）, invariant=[VAULT-INV-007](#vault-inv-007) / [VAULT-INV-008](#vault-inv-008)。
++  - **Strategy 数の上限**: `MAX_STRATEGIES = 32` は、strategy 一覧を走査する処理（`totalUnderlying` / `backingRatio`、`allocate`、`getStrategyStatuses`、`removeStrategy`、登録済み判定）に対する明示的な gas / 運用性の上限である。これ以上の外部運用先を追加する場合は、既存 Strategy から資金を回収または writeoff して remove / replace し、registry を無制限に伸ばさない。
++  - **valuation gas の回帰境界**: `ExternalAuditGas01BackingRatioTest` は、実 `CollateralVault` に独立した実 `SkyUsdcSUsdsStrategy` proxy / implementation / sUSDS vault / converter を最大 32 件登録し、全件へ live position を配分する。baseline compiler 設定では `backingRatio()` が 32 件 cold で 1,332,387 gas、同一 transaction 内の warm 再評価で 261,884 gas、5 件 cold で 237,535 gas である。test は per-branch cold `< 2,000,000`、`CollateralRegistry` の protocol 上限10 branch が各32件を持つ `redeemCollateral` の cold + warm 2-pass valuation 部分 `< 20,000,000` を回帰上限とする（現行DF 8 branch 外挿は 12,754,168 gas、10 branch は 15,942,710 gas）。この外挿は PriceFeed / TroveManager の周辺処理と実際の Trove redemption loop を含む full transaction gas 上限ではない。新 Strategy 型の activation は、同じ最大件数 replay と target chain の block gas / `_maxIterationsPerCollateral` を含む gas estimate を再実行し、回帰上限を超える構成を承認しない。
++  - **block 内 cache を置かない理由**: `backingRatio()` は借入・償還・清算価格へ伝播する solvency read であり、同一 block 内でも先行 transaction の Strategy 損失、回収、writeoff、backstop 入金により変化し得る。gas 削減のための block cache は invalidation surface と stale-price window を増やすため採用しない。
++- **Verification**: unit（whitelist ガード・guardian remove・Underlying 不変条件・既登録・Strategy 数上限・weight 上限・`principal != 0` / live `estimatedTotalUnderlying != 0` / valuation failure の remove 拒否・最大32件の実 Sky valuation gas・最大10 branch 2-pass 外挿）, invariant=[VAULT-INV-007](#vault-inv-007) / [VAULT-INV-008](#vault-inv-008)。
+ 
+ ### VAULT-FR-009: updateStrategy / emergencyDisableStrategy / writeoffStrategyPrincipal（登録 Strategy の調整と元本毀損確定）
+ 

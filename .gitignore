@@ -1,0 +1,39 @@
+# Local credentials and generated environment files
+.env
+.env.*
+!.env.example
+*.local
+
+# Solidity build, cache, broadcast, and deploy outputs
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/deployment-manifest.json
+contracts/pil-activation-manifest.json
+source-snapshot/contracts/out/
+source-snapshot/contracts/cache/
+source-snapshot/contracts/broadcast/
+source-snapshot/contracts/deployment-manifest.json
+source-snapshot/contracts/pil-activation-manifest.json
+jpydf-v2-source/contracts/out/
+jpydf-v2-source/contracts/cache/
+jpydf-v2-source/contracts/broadcast/
+jpydf-v2-source/contracts/deployment-manifest.json
+jpydf-v2-source/contracts/pil-activation-manifest.json
+
+# Vendored dependencies and package manager output
+node_modules/
+jpydf-v2-source/
+contracts/lib/
+source-snapshot/contracts/lib/
+
+# Frontend / infra generated outputs
+.next/
+dist/
+build/
+cdk.out/
+
+# Temporary local evidence before redaction
+tmp/
+evidence/raw/
+evidence/private/

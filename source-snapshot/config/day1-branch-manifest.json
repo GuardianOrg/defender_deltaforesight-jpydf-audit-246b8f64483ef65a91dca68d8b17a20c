@@ -1,0 +1,126 @@
+{
+  "$schema": "./day1-branch-manifest.schema.json",
+  "schemaVersion": 2,
+  "decision": {
+    "record": "documents/jp/protocol/launch/decisions/Day1-Parameter-Decision.md",
+    "owner": "@yusuke-j0728",
+    "state": "Candidate",
+    "approval": null
+  },
+  "chainId": 1,
+  "totalBranches": 8,
+  "activeBranches": 2,
+  "branches": [
+    {
+      "index": 0,
+      "slot": "dwstETH",
+      "state": "active",
+      "underlying": {
+        "symbol": "wstETH",
+        "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
+      },
+      "priceFeed": "DFWstETHPriceFeed",
+      "collateralYieldZapper": true,
+      "nativeEthRoute": {
+        "expectedStEth": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+        "lidoReferral": "0x57af3a60314cD24032a4435b715f4dC8eb5967F0"
+      },
+      "strategyPolicy": {
+        "required": [],
+        "allowed": []
+      },
+      "risk": { "lltv": "81.18", "mcr": "123.18", "ccr": "141.67", "scr": "110.00", "bcr": "10.00", "spPenalty": "5.00", "redistributionPenalty": "10.00" },
+      "yieldLayer": { "mintCapJpy": "35000000", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 1,
+      "slot": "dUSDC",
+      "state": "active",
+      "underlying": {
+        "symbol": "USDC",
+        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+      },
+      "priceFeed": "DFUSDCPriceFeed",
+      "collateralYieldZapper": true,
+      "nativeEthRoute": null,
+      "strategyPolicy": {
+        "required": ["aave", "morpho-v2"],
+        "allowed": ["aave", "morpho-v2"]
+      },
+      "risk": { "lltv": "89.62", "mcr": "111.58", "ccr": "124.50", "scr": "105.00", "bcr": "10.00", "spPenalty": "5.00", "redistributionPenalty": "10.00" },
+      "yieldLayer": { "mintCapJpy": "100000000", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "100000000", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 2,
+      "slot": "dETH",
+      "state": "inert",
+      "underlying": null,
+      "priceFeed": "PriceFeedPlaceholder",
+      "collateralYieldZapper": false,
+      "nativeEthRoute": null,
+      "strategyPolicy": { "required": [], "allowed": [] },
+      "risk": { "lltv": "81.18", "mcr": "123.18", "ccr": "141.67", "scr": "110.00", "bcr": "10.00", "spPenalty": "5.00", "redistributionPenalty": "10.00" },
+      "yieldLayer": { "mintCapJpy": "0", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 3,
+      "slot": "dUSD-A",
+      "state": "inert",
+      "underlying": null,
+      "priceFeed": "PriceFeedPlaceholder",
+      "collateralYieldZapper": false,
+      "nativeEthRoute": null,
+      "strategyPolicy": { "required": [], "allowed": [] },
+      "risk": { "lltv": "83.33", "mcr": "120.00", "ccr": "137.65", "scr": "105.00", "bcr": "10.00", "spPenalty": "5.00", "redistributionPenalty": "10.00" },
+      "yieldLayer": { "mintCapJpy": "0", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 4,
+      "slot": "dBTC",
+      "state": "inert",
+      "underlying": null,
+      "priceFeed": "PriceFeedPlaceholder",
+      "collateralYieldZapper": false,
+      "nativeEthRoute": null,
+      "strategyPolicy": { "required": [], "allowed": [] },
+      "risk": { "lltv": "83.65", "mcr": "119.55", "ccr": "130.82", "scr": "110.00", "bcr": "10.00", "spPenalty": "5.00", "redistributionPenalty": "10.00" },
+      "yieldLayer": { "mintCapJpy": "0", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 5,
+      "slot": "dUSD-B",
+      "state": "inert",
+      "underlying": null,
+      "priceFeed": "PriceFeedPlaceholder",
+      "collateralYieldZapper": false,
+      "nativeEthRoute": null,
+      "strategyPolicy": { "required": [], "allowed": [] },
+      "risk": { "lltv": "83.33", "mcr": "120.00", "ccr": "137.65", "scr": "105.00", "bcr": "10.00", "spPenalty": "5.00", "redistributionPenalty": "10.00" },
+      "yieldLayer": { "mintCapJpy": "0", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 6,
+      "slot": "dJPY",
+      "state": "inert",
+      "underlying": null,
+      "priceFeed": "PriceFeedPlaceholder",
+      "collateralYieldZapper": false,
+      "nativeEthRoute": null,
+      "strategyPolicy": { "required": [], "allowed": [] },
+      "risk": { "lltv": "94.76", "mcr": "105.53", "ccr": "107.30", "scr": "103.30", "bcr": "5.00", "spPenalty": "5.00", "redistributionPenalty": "5.00" },
+      "yieldLayer": { "mintCapJpy": "0", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    },
+    {
+      "index": 7,
+      "slot": "dJGB",
+      "state": "inert",
+      "underlying": null,
+      "priceFeed": "PriceFeedPlaceholder",
+      "collateralYieldZapper": false,
+      "nativeEthRoute": null,
+      "strategyPolicy": { "required": [], "allowed": [] },
+      "risk": { "lltv": "94.76", "mcr": "105.53", "ccr": "107.30", "scr": "103.30", "bcr": "5.00", "spPenalty": "5.00", "redistributionPenalty": "5.00" },
+      "yieldLayer": { "mintCapJpy": "0", "allocatorCooldownSeconds": 1800, "allocateMaxMoveJpy": "0", "withdrawDelaySeconds": 259200, "bufferTargetBps": 333, "bufferFloor": "0" }
+    }
+  ]
+}

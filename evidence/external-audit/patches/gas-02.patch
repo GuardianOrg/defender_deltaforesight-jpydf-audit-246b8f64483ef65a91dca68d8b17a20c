@@ -1,0 +1,197 @@
+diff --git a/contracts/test/ExternalAuditGas02ShutdownAssert.t.sol b/contracts/test/ExternalAuditGas02ShutdownAssert.t.sol
+new file mode 100644
+index 00000000..1766e877
+--- /dev/null
++++ b/contracts/test/ExternalAuditGas02ShutdownAssert.t.sol
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.24;
++
++import {DevTestSetup} from "./TestContracts/DevTestSetup.sol";
++import {TroveChange} from "../src/Types/TroveChange.sol";
++import {console2} from "forge-std/console2.sol";
++
++// External audit Gas 02 evidence: moving the shutdown return ahead of the
++// upfront-fee assertion saves shutdown-path gas but changes malformed-input
++// behavior from Panic(0x01) to a successful zero return.
++contract ExternalAuditGas02ShutdownAssertTest is DevTestSetup {
++    function test_ShutdownZeroFeeReturnsZero() external {
++        _shutdownActivePool();
++
++        TroveChange memory change;
++        uint256 gasBefore = gasleft();
++        uint256 result = activePool.getNewApproxAvgInterestRateFromTroveChange(change);
++        uint256 gasUsed = gasBefore - gasleft();
++
++        console2.log("shutdown valid-call gas", gasUsed);
++        assertEq(result, 0, "shutdown result");
++    }
++
++    function test_ShutdownNonzeroUpfrontFeeStillPanics() external {
++        _shutdownActivePool();
++
++        TroveChange memory change;
++        change.upfrontFee = 1;
++
++        vm.expectRevert(abi.encodeWithSignature("Panic(uint256)", 0x01));
++        activePool.getNewApproxAvgInterestRateFromTroveChange(change);
++    }
++
++    function _shutdownActivePool() internal {
++        vm.prank(address(troveManager));
++        activePool.setShutdownFlag();
++        assertTrue(activePool.hasBeenShutDown(), "shutdown precondition");
++    }
++}
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Gas-02-Shutdown-Assert-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Gas-02-Shutdown-Assert-Differential-Review.md
+new file mode 100644
+index 00000000..927fa5c2
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Gas-02-Shutdown-Assert-Differential-Review.md
+@@ -0,0 +1,146 @@
++# External Audit Gas 02: shutdown `upfrontFee` assert 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/Liquity-v2-Core-Spec.md` の `CORE-AP-FR-005` / `CORE-AP-ERR-001`
++> を参照する。
++
++## Executive Summary
++
++外部監査 Gas 02「`getNewApproxAvgInterestRateFromTroveChange` Runs The `upfrontFee` Assert Even When The
++Branch Is Shut Down」の **機構的な主張は正しい**。現行 `ActivePool` は `_troveChange.upfrontFee == 0` を
++assert してから `shutdownTime != 0` の早期 return を評価するため、正規入力の shutdown path では assert 分の
++gas を消費する。
++
++ただし、提案された順序変更は完全な behavior-preserving optimization ではない。この関数は permissionless な
++external view であり、JP / EN core spec は `upfrontFee != 0` を `Panic(0x01)` と規定している。shutdown 後に
++早期 return を先行させると、同じ malformed input が revert せず `0` を返す。
++
++実 `ActivePool` に対する A/B では、正規 shutdown call の計測区間は 1,466 gas から 1,439 gas へ減り、削減は
++27 gas だった。監査 report の isolated mock が示す 149 gas より小さく、しかも branch shutdown 後だけの効果で
++ある。この利益のために external behavior、`CORE-AP-ERR-001`、upstream Core parity を変更する合理性はない。
++
++**判定**: Gas optimization rejected（production change なし）。現行順序を維持し、shutdown 後も malformed
++`upfrontFee` が Panic することと、正規入力は 0 を返すことを regression evidence に固定する。
++
++## Scope And Baseline
++
++- 外部指摘: Gas 02 — shutdown path の `upfrontFee` assert 順序
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/ActivePool.sol`
++  - `getNewApproxAvgInterestRateFromTroveChange(TroveChange)`
++- 規範:
++  - `CORE-AP-FR-005`: `upfrontFee == 0` の calling convention / assert
++  - `CORE-AP-ERR-001`: `upfrontFee != 0` は Panic 0x01
++- 追加 evidence: `contracts/test/ExternalAuditGas02ShutdownAssert.t.sol`
++- production diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| shutdown 正規入力では assert 結果が return 値に影響しない | True | zero fee は assert を通り、その後 0 を返す |
++| return を先行すれば gas を削減できる | True but smaller in actual fixture | 1,466 → 1,439 gas、27 gas減 |
++| legitimate internal producer は `upfrontFee == 0` を渡す | True | BorrowerOperations / HintHelpers の calling convention |
++| reorder は behavior preserving | False for the public function | shutdown + nonzero fee が Panic から 0 成功へ変わる |
++| 異常入力の差は無視してよい | Rejected | public view の規範化済み error behavior であり、変更には spec delta が必要 |
++
++## Current Behavior
++
++現行順序は次のとおりである。
++
++```solidity
++assert(_troveChange.upfrontFee == 0);
++if (shutdownTime != 0) return 0;
++```
++
++したがって入力と状態の組合せは次の結果になる。
++
++| State | `upfrontFee` | Result |
++| --- | ---: | --- |
++| live | 0 | 近似平均金利を計算 |
++| live | nonzero | Panic 0x01 |
++| shutdown | 0 | 0 |
++| shutdown | nonzero | Panic 0x01 |
++
++assert は単なる内部最適化 hint ではなく、外部関数の入力 precondition として全状態で一貫している。
++
++## Proposed Ordering
++
++監査提案を一時適用すると、shutdown 行だけが次のように変わる。
++
++| State | `upfrontFee` | Proposed result | Delta |
++| --- | ---: | --- | --- |
++| shutdown | 0 | 0 | 27 gas減（実測fixture） |
++| shutdown | nonzero | 0 | **Panic 0x01 が消える** |
++
++regression test `test_ShutdownNonzeroUpfrontFeeStillPanics` は proposed ordering で
++`next call did not revert as expected` と fail し、差が optimizer 上も observable であることを確認した。
++
++## A/B Measurement
++
++同じ `DevTestSetup`、同じ実 `ActivePool`、同じ shutdown transaction と zeroed `TroveChange` を使い、external
++view call の直前後を `gasleft()` で計測した。
++
++```text
++baseline (assert -> shutdown return): 1466 gas
++proposed (shutdown return -> assert): 1439 gas
++delta:                                  27 gas
++
++proposed ordering regression:
++  [FAIL: next call did not revert as expected]
++  test_ShutdownNonzeroUpfrontFeeStillPanics
++```
++
++この数値は Foundry test fixture の call 区間であり、あらゆる RPC / caller context の絶対値を表すものではない。
++採否に重要なのは、実コントラクトでの利益が数十 gas に限定される一方、異常入力の意味論差が確実に存在する点である。
++
++## Why Keep The Assert First
++
++- `CORE-AP-FR-005` は `upfrontFee == 0` を状態非依存の precondition としている。
++- `CORE-AP-ERR-001` は nonzero fee の Panic 0x01 を公開 error behavior としている。
++- branch shutdown 後は新規借入・通常調整が停止し、この view の gas 最適化価値は live path よりさらに低い。
++- `ActivePool.sol` は inherited Core surface であり、27 gas のための独自分岐は fork parity cost に見合わない。
++- reorder を採用するなら、単なる gas fix ではなく「shutdown が input validation より優先する」という明示的な
++  protocol decision として JP/EN spec・error table・tests を同時変更すべきである。
++
++## Remediation
++
++production `ActivePool.sol` は変更しない。代わりに専用 regression evidence を追加する。
++
++- `test_ShutdownZeroFeeReturnsZero`: shutdown + 正規入力が 0 を返すことを固定
++- `test_ShutdownNonzeroUpfrontFeeStillPanics`: shutdown + malformed fee が Panic 0x01 のままであることを固定
++- valid call の gas を log し、将来の再評価で同一fixtureを再利用可能にする
++
++## Verification
++
++```text
++forge fmt --check test/ExternalAuditGas02ShutdownAssert.t.sol
++
++forge test --match-contract ExternalAuditGas02ShutdownAssertTest -vv
++  2 passed; 0 failed
++  shutdown valid-call gas 1466
++
++forge test --match-contract ShutdownTest
++  47 passed; 0 failed
++
++forge test --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++  1414 passed; 0 failed; 0 skipped
++
++git diff --exit-code origin/develop -- contracts/src/ActivePool.sol
++git diff --check
++```
++
++## Residual Risk And Limitations
++
++- 27 gas は1つの Foundry context での差であり、cold/warm access や compiler setting で絶対値は変わり得る。
++- `assert` が全ての legitimate producer に対する security boundary ではないという監査指摘は認める。それでも
++  permissionless external function の documented precondition であり、削除可能性とは別問題である。
++- 将来 Core upstream が同じ reorder と specification change を採用した場合は、fork parity の観点から再評価できる。
++
++## Methodology
++
++- freeze artifact と current `origin/develop` の順序が同一であることを確認した。
++- JP / EN `CORE-AP-FR-005` と `CORE-AP-ERR-001` の externally observable behavior を確認した。
++- 実 `ActivePool` を shutdown し、zero / nonzero `upfrontFee` の2経路を実行した。
++- 提案 reorder を一時適用して同一 test を再実行し、gas差と regression failure を取得した。
++- `ActivePool.sol` を baseline に戻し、production diff ゼロと最終 test pass を確認した。

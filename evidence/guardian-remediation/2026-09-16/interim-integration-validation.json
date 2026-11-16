@@ -1,0 +1,34 @@
+{
+  "status": "interim integration; L-01, L-05 and separate Oracle work remain",
+  "testedCommit": "4276f0ce190fe3225421e44e57c155a768e83242",
+  "mergedMainCommit": "7b1caad375e67603d0e1d0d38650b8b9f6a3d52b",
+  "sourceSnapshotTree": "0268f6584a5e6201d5bcadbfdacd845f5690a484",
+  "compiler": {
+    "solc": "0.8.24",
+    "evm": "cancun",
+    "optimizer": true,
+    "optimizerRuns": 200,
+    "viaIR": false
+  },
+  "checks": [
+    {
+      "command": "forge test --use 0.8.24 --match-path 'test/{RiskParamsFinalization,DeployBranchRiskInvariants,DFBranchRiskParams}.t.sol' -vv",
+      "exitCode": 0,
+      "passed": 34
+    },
+    {
+      "command": "forge test --use 0.8.24 --threads 1 --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill' -q",
+      "exitCode": 0
+    },
+    {
+      "command": "bash utils/check-contract-sizes.sh --use 0.8.24",
+      "exitCode": 0,
+      "runtimeBytes": {
+        "TroveManager": 24568,
+        "BorrowerOperations": 24559
+      }
+    }
+  ],
+  "workingDirectory": "source-snapshot/contracts",
+  "reviewLimits": "Fable performed read-only code review; engineering executed local tests. This is not Guardian verification or final production identity."
+}

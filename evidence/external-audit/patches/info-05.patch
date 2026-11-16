@@ -1,0 +1,174 @@
+diff --git a/contracts/test/CollateralVaultStrategy.t.sol b/contracts/test/CollateralVaultStrategy.t.sol
+index 4f262426..557a8eb2 100644
+--- a/contracts/test/CollateralVaultStrategy.t.sol
++++ b/contracts/test/CollateralVaultStrategy.t.sol
+@@ -499,6 +499,26 @@ contract CollateralVaultStrategyTest is Test {
+         assertEq(stratB.principal(), 0, "stratB not funded");
+     }
+ 
++    function test_Allocate_ZeroTargetBpsUsesAbsoluteFloorAndConfigCorrectionRecovers() public {
++        uint256 amount = 10e8;
++        uint256 floor = 4e8;
++        vault.setBufferConfig(0, floor);
++        _deposit(alice, amount);
++
++        vm.expectEmit(false, false, false, true, address(vault));
++        emit Allocated(amount, floor, floor);
++        vault.allocate();
++
++        assertEq(vault.bufferBalance(), floor, "absolute floor is reserved independently of percentage");
++        assertEq(stratA.principal() + stratB.principal(), amount - floor, "only value above floor is allocated");
++
++        vault.setBufferConfig(0, 0);
++        vault.allocate();
++
++        assertEq(vault.bufferBalance(), 0, "corrected floor releases the remaining buffer");
++        assertEq(stratA.principal() + stratB.principal(), amount, "allocation resumes without migration");
++    }
++
+     function test_Allocate_IgnoresProtectedBackstopReserveForTarget() public {
+         uint256 amount = 10e8;
+         _deposit(alice, amount);
+diff --git a/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-05-Buffer-Floor-Semantics-Differential-Review.md b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-05-Buffer-Floor-Semantics-Differential-Review.md
+new file mode 100644
+index 00000000..536c5cd5
+--- /dev/null
++++ b/documents/jp/engineering/historical-reviews/2026-08-04-External-Audit-Info-05-Buffer-Floor-Semantics-Differential-Review.md
+@@ -0,0 +1,137 @@
++# External Audit Info 05: Buffer floor semantics 差分レビュー
++
++> Historical / Evidence snapshot (2026-08-04)。本書は現行仕様の正本ではない。現行要件は
++> `documents/jp/protocol/product/spec/CollateralVault.md` の VAULT-FR-004 / VAULT-FR-012 と
++> `documents/jp/Parameters.md` を参照する。
++
++## Executive Summary
++
++外部監査 Info 05「`setBufferConfig` Does Not Check Consistency Between `bufferFloor` And `bufferTargetBps`」の
++算式観測は正しいが、提案された2つの追加 validation は一般に成立しない。
++
++- `_floor > 0 && _targetBps == 0` rejection: fixed absolute liquidity reserve という正当な構成を禁止する
++- `_floor > 1_000_000e18` rejection: `bufferFloor` は各 Underlying の base unit であり、全 branch 共通18decではない
++
++`bufferTargetBps` と `bufferFloor` は矛盾する値ではなく、相対 target と絶対 minimum の独立した2軸である。
++算式は意図的に `max(managedAssets * targetBps / 10000, floor) + pendingWithdrawals` を使うため、floor が優勢になる
++こと自体は誤動作ではない。
++
++**判定**: Informational observation accepted; proposed consistency checks rejected。production semantics は維持し、
++実 `CollateralVault` test で 0% + absolute floor の配分と、GOV が floor を0へ戻した後の自動回復を固定する。
++
++## Scope And Baseline
++
++- 外部指摘: Info 05 — buffer percentage / floor 間の setter consistency check 不在
++- baseline: `origin/develop` at `4df6d902f270c4352ea3f80590aed89bdf4a425a` (2026-08-04)
++- 対象実装: `contracts/src/CollateralVault.sol`
++- 規範: JP / EN `CollateralVault.md` VAULT-FR-004 / VAULT-FR-012
++- 運用値: JP / EN `Parameters.md` dToken Layer
++- 回帰証拠: `contracts/test/CollateralVaultStrategy.t.sol`
++- production source / ABI / storage diff: 0
++
++## Claim Assessment
++
++| Audit claim | Assessment | Evidence / consequence |
++| --- | --- | --- |
++| floor が percentage target を上回り得る | True and specified | target は2値の `max` で定義される |
++| floor 優勢は percentage を無意味にする | Context-dependent | 小さい AUM では floor、大きい AUM では percentage が支配する |
++| 0% + nonzero floor は inconsistent | False | 固定量だけを liquid reserve にする明確な policy |
++| 過大 floor は allocation を止める | True | buffer が floor 以下なら outbound 0。値を下げれば同じ Vault で再開する |
++| 停止は永久 | False | 次の GOV config correction で migration なしに回復する |
++| `1_000_000e18` は汎用上限 | False | floor は Underlying decimals に従うため unit が branch ごとに異なる |
++
++## Two Independent Controls
++
++### Percentage target
++
++`bufferTargetBps` は AUM に比例する liquid inventory を指定する。AUM が増減すると target も追従する。
++code が強制できる普遍的な domain は BPS の `0 <= targetBps <= 10000` であり、現行 setter はこの上限を検証する。
++
++### Absolute floor
++
++`bufferFloor` は AUM が小さい時にも keeper gas、最低 redemption ticket、venue withdrawal granularity 等を満たす
++固定 liquidity を確保する。値は dToken 18dec ではなく Vault Underlying の base unit である。
++
++例:
++
++- WBTC-like 8dec Vault の `4e8` = 4 tokens
++- USDC-like 6dec Vault の `4e8` = 400 tokens
++- 18dec Vault の `4e8` = 0.0000000004 tokens
++
++同じ raw ceiling を全 collateral へ適用しても経済的意味は一致しない。まして `1_000_000e18` は6dec/8dec asset で
++意図した「1,000,000 tokens」にならない。
++
++## State Transition Evidence
++
++実 `CollateralVault`、8dec Underlying、2つの50/50 Strategy で次を replay する。
++
++| Step | target bps | floor | managed assets | buffer | Strategy principal total |
++| --- | ---: | ---: | ---: | ---: | ---: |
++| deposit | 0 | 4 | 10 | 10 | 0 |
++| first `allocate()` | 0 | 4 | 10 | 4 | 6 |
++| GOV `setBufferConfig(0, 0)` | 0 | 0 | 10 | 4 | 6 |
++| second `allocate()` | 0 | 0 | 10 | 0 | 10 |
++
++最初の allocation は percentage 0 でも absolute floor 4 を正しく残す。floor correction 後は残り4を配分し、
++Strategy migration、cache reset、cooldown recovery action を必要としない。
++
++## Why Floor Dominance Is Not A Defect
++
++`max(relativeTarget, absoluteFloor)` の目的は、AUM scale に応じて支配項を切り替えることである。
++
++- `M * bps / 10000 < floor`: minimum ticket / liquidity floor を優先
++- `M * bps / 10000 >= floor`: proportional liquidity policy を優先
++
++floor が一時的に target を支配することを禁止すると absolute floor の存在意義がなくなる。0% + floor は「AUM 比率を
++使わず固定 reserve だけを持つ」という簡潔な policy で、非同期 Strategy や小規模 branch の activation に利用可能である。
++
++## High-Floor Risk Boundary
++
++過大 floor が capital efficiency を下げる観測は正しい。`floor >= bufferBalance` では新規 allocation は0となり、
++`transferYieldToTreasury` も同じ `_requiredBuffer` を共有するため free buffer を送らない。これは資金流出や insolvency ではなく、
++liquidity を Vault に保守的に残す方向の misconfiguration である。
++
++一方、`type(uint256).max` と nonzero `pendingWithdrawals` の組合せは `_requiredBuffer` の加算を overflow させ、outbound call を
++revert させ得る。proposal simulation と parameter manifest で reject すべき operational risk だが、asset decimals と
++deployment scale を無視した universal raw ceiling は正しい remediation にならない。
++
++具体 floor は collateral decimals、Day-1 cap、expected AUM、redemption distribution、Strategy withdrawal SLA から算定し、
++versioned Parameters、handover readback、`BufferConfigUpdated` alert で管理する。
++
++## Verification
++
++```text
++forge test --match-contract CollateralVaultStrategyTest \
++  --match-test test_Allocate_ZeroTargetBpsUsesAbsoluteFloorAndConfigCorrectionRecovers -vv
++forge test --match-contract CollateralVaultStrategyTest
++forge test -q --summary --no-match-contract 'Mainnet|Invariant|Anchored|Initiative|LocalParityDrill'
++git diff --check
++git diff --exit-code origin/develop -- contracts/src
++```
++
++期待結果:
++
++- 0% + floor 4 で buffer 4、Strategy principal 6
++- floor を0へ戻すと buffer 0、Strategy principal 10
++- production source diff は 0
++
++`forge fmt --check test/CollateralVaultStrategy.t.sol` は `origin/develop` 既存の line 581–582 にある2行代入を
++1行へまとめる差分を報告する。監査差分外の baseline formatting は本 PR に混ぜず、追加 hunk と
++`git diff --check` の clean を確認する。
++
++## Residual Risk
++
++- 過大 floor は allocation と Treasury yield transfer を停止させ、利回り機会を失わせる。config event、buffer delta、
++  Strategy AUM、free-buffer telemetry を監視する。
++- 小さすぎる floor は redemption / claim liquidity を不足させ得る。pending withdrawals は別途常に加算されるが、
++  future redemption demand には buffer target / floor sizing が必要である。
++- absolute value は token migration や decimals assumption の変更時に再算定する。raw value の他 branch へのコピーを禁止する。
++- GOV correction は Timelock delay を受けるが、過大 floor は Vault に資金を留める安全側であり、user redemption と
++  Strategy-to-Vault recovery を直接停止しない。
++
++## Methodology
++
++- freeze finding の算式 / recommendation と current source-of-truth を比較した。
++- relative target と absolute floor の dimension / unit を分解した。
++- 0% + floor、floor dominance、later correction を同じ Vault / Strategy state で replay した。
++- Underlying decimals、pending withdrawals、Treasury reserve への side effect を確認した。

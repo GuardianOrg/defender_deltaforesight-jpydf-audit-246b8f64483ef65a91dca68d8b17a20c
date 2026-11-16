@@ -1,0 +1,22 @@
+{
+  "forge-std": {
+    "commit": "726a6ee5fc8427a0013d6f624e486c9130c0e336",
+    "trackedClean": true
+  },
+  "openzeppelin-contracts": {
+    "commit": "bd325d56b4c62c9c5c1aff048c37c6bb18ac0290",
+    "trackedClean": true
+  },
+  "openzeppelin-contracts-upgradeable": {
+    "commit": "2d081f24cac1a867f6f73d512f2022e1fa987854",
+    "trackedClean": true
+  },
+  "Solady": {
+    "commit": "362b2efd20f38aea7252b391e5e016633ff79641",
+    "trackedClean": true
+  },
+  "V2-gov": {
+    "commit": "b880481d701d2b07236f2e04842c79b4fe77e5fd",
+    "trackedClean": true
+  }
+}

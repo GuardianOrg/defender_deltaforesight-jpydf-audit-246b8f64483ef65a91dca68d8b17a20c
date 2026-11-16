@@ -1,0 +1,32 @@
+L-01 build artifact comparison: e95fa3350 (pre-fix parent) vs 18bedbf68 (L-01 merge)
+Production sources only (forge build --skip test --skip script), CBOR metadata stripped.
+
+contracts compared: 129; only-before: []; only-after: []
+
+## Runtime bytecode changed
+- src/CollateralVault.sol:CollateralVault: 23751 -> 23957 bytes
+- src/PriceFeeds/DFUSDCPriceFeed.sol:DFUSDCPriceFeed: 3171 -> 3345 bytes
+- src/PriceFeeds/DFWstETHPriceFeed.sol:DFWstETHPriceFeed: 4317 -> 4491 bytes
+- src/PriceFeeds/archive/DFUSDTPriceFeed.sol:DFUSDTPriceFeed: 3171 -> 3345 bytes
+- src/PriceFeeds/archive/DFWBTCPriceFeed.sol:DFWBTCPriceFeed: 3650 -> 3824 bytes
+- src/PriceFeeds/archive/DFXAUTPriceFeed.sol:DFXAUTPriceFeed: 3171 -> 3345 bytes
+- src/PriceFeeds/archive/sUSDSPriceFeed.sol:sUSDSPriceFeed: 3662 -> 3836 bytes
+
+## Storage layout
+contracts with any storage-layout difference: none
+- src/CollateralVault.sol:CollateralVault: 34 slots entries, identical=True
+- src/PriceFeeds/DFUSDCPriceFeed.sol:DFUSDCPriceFeed: 5 slots entries, identical=True
+- src/PriceFeeds/DFWstETHPriceFeed.sol:DFWstETHPriceFeed: 7 slots entries, identical=True
+- src/PriceFeeds/archive/DFUSDTPriceFeed.sol:DFUSDTPriceFeed: 5 slots entries, identical=True
+- src/PriceFeeds/archive/DFWBTCPriceFeed.sol:DFWBTCPriceFeed: 6 slots entries, identical=True
+- src/PriceFeeds/archive/DFXAUTPriceFeed.sol:DFXAUTPriceFeed: 5 slots entries, identical=True
+- src/PriceFeeds/archive/sUSDSPriceFeed.sol:sUSDSPriceFeed: 5 slots entries, identical=True
+
+## ABI
+- src/CollateralVault.sol:CollateralVault: added=[('error', 'InsufficientGasForExternalCall')] removed=[]
+- src/PriceFeeds/DFUSDCPriceFeed.sol:DFUSDCPriceFeed: added=[] removed=[]
+- src/PriceFeeds/DFWstETHPriceFeed.sol:DFWstETHPriceFeed: added=[] removed=[]
+- src/PriceFeeds/archive/DFUSDTPriceFeed.sol:DFUSDTPriceFeed: added=[] removed=[]
+- src/PriceFeeds/archive/DFWBTCPriceFeed.sol:DFWBTCPriceFeed: added=[] removed=[]
+- src/PriceFeeds/archive/DFXAUTPriceFeed.sol:DFXAUTPriceFeed: added=[] removed=[]
+- src/PriceFeeds/archive/sUSDSPriceFeed.sol:sUSDSPriceFeed: added=[] removed=[]
